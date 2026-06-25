@@ -1,0 +1,7 @@
+# 测试加法运算符：多个整数连续相加
+Contract OperatorAddChainTest:
+    def test_add_chain(a: int, b: int, c: int, d: int):
+        # 三个参数连续相加
+        # sum3: int = a + b + c
+        # 四个参数连续相加
+        sum4: int = a + b + c + d

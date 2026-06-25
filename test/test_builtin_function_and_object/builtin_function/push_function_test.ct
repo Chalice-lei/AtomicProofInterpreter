@@ -1,0 +1,12 @@
+# 测试Push函数的基本功能和各种场景
+Contract PushFunctionTest:
+    def test_push():
+        # 测试1: Push字面量
+        value = Push(42)
+        text = Push("hello")
+        data = Push(0x12345678)
+    
+        # 测试2: Push固定区变量
+        num1: int = 10
+        num2 = Push(num1)
+        

@@ -1,0 +1,18 @@
+# 测试无参数私有函数（操作内部状态）
+Contract PrivateFunctionNoParamsTest:
+    # 无参数私有函数：修改内部状态
+    def _increment_counter():
+        counter: int = 1
+        counter = counter + 1
+
+    # 无参数私有函数：返回内部计算结果（仅内部使用）
+    def _get_double_counter():
+        counter: int = 2
+        counter = counter * 2
+
+    # 公有函数（测试入口）：调用私有函数
+    def test_private_operations():
+        # 调用无参数私有函数
+        _increment_counter()
+
+        _get_double_counter()

@@ -1,0 +1,13 @@
+Contract TestArrayStruct:
+    Struct st:
+        a: int
+        b: int
+        c: int
+    
+    def test_array_struct():
+        # 结构体数组
+        arr1: st[2] = [{10, 20, 30}, {40, 50, 60}]
+        
+        # 访问结构体数组的字段
+        val1: int = arr1[0].a
+        # val2: int = arr1[1].b

@@ -1,0 +1,5 @@
+# 测试小于运算符：整数与固定值比较
+Contract OperatorLtWithLiteralTest:
+    def test_lt_literal(a: int, b: int, c: int, d: int):
+        # is_less_zero: bool = a < 0
+        is_less_ten: bool = d < 10

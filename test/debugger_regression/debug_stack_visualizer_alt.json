@@ -1,0 +1,46 @@
+{
+  "metadata": {
+    "compiler_name": "utxo_interpreter",
+    "compiler_version": "1.0.0",
+    "compiler_description": "AtomicProof Interpreter.",
+    "build_timestamp": 1782210654,
+    "source_file": "debug_stack_visualizer_alt",
+    "compiler_capabilities": {
+      "ast_validation": false,
+      "bytecode_optimization": false,
+      "script_verification": false
+    }
+  },
+  "abi": [
+    {
+      "type": "function",
+      "name": "test_alt_roundtrip",
+      "index": 0,
+      "params": [
+        {
+          "name": "input",
+          "type": "int"
+        }
+      ]
+    }
+  ],
+  "lock": {
+    "asm": "OP_10 OP_TOALTSTACK OP_FROMALTSTACK OP_ADD OP_RETURN OP_INVALIDOPCODE OP_INVALIDOPCODE OP_INVALIDOPCODE OP_INVALIDOPCODE OP_INVALIDOPCODE OP_INVALIDOPCODE OP_INVALIDOPCODE OP_INVALIDOPCODE OP_INVALIDOPCODE OP_INVALIDOPCODE OP_INVALIDOPCODE OP_INVALIDOPCODE OP_INVALIDOPCODE OP_INVALIDOPCODE OP_INVALIDOPCODE OP_INVALIDOPCODE OP_INVALIDOPCODE OP_INVALIDOPCODE OP_INVALIDOPCODE OP_INVALIDOPCODE OP_INVALIDOPCODE OP_INVALIDOPCODE OP_INVALIDOPCODE OP_INVALIDOPCODE OP_INVALIDOPCODE OP_INVALIDOPCODE OP_INVALIDOPCODE OP_INVALIDOPCODE OP_INVALIDOPCODE OP_INVALIDOPCODE OP_INVALIDOPCODE OP_INVALIDOPCODE OP_INVALIDOPCODE OP_INVALIDOPCODE OP_INVALIDOPCODE OP_INVALIDOPCODE OP_INVALIDOPCODE OP_INVALIDOPCODE OP_INVALIDOPCODE OP_INVALIDOPCODE OP_INVALIDOPCODE OP_INVALIDOPCODE OP_INVALIDOPCODE OP_INVALIDOPCODE OP_INVALIDOPCODE OP_INVALIDOPCODE OP_INVALIDOPCODE OP_INVALIDOPCODE OP_INVALIDOPCODE OP_INVALIDOPCODE OP_INVALIDOPCODE OP_INVALIDOPCODE OP_INVALIDOPCODE OP_INVALIDOPCODE OP_INVALIDOPCODE OP_INVALIDOPCODE OP_INVALIDOPCODE OP_INVALIDOPCODE OP_INVALIDOPCODE",
+    "hex": "5a6b6c936affffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+  },
+  "unlock": {
+    "test_alt_roundtrip": "<input>"
+  },
+  "functions": [
+    {
+      "name": "test_alt_roundtrip",
+      "type": "public",
+      "params": [
+        {
+          "name": "input",
+          "type": "int"
+        }
+      ]
+    }
+  ]
+}

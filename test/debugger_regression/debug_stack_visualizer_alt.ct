@@ -1,0 +1,8 @@
+# Debugger regression: stack trace visualizer should show main/alt movement.
+Contract DebugStackVisualizerAlt:
+    def test_alt_roundtrip(input: int):
+        temp = Push(10)
+        SetAlt(temp)
+        SetMain(temp)
+        result: int = temp + input
+        Return(result)

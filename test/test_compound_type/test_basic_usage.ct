@@ -1,0 +1,23 @@
+# 测试复合类型的基本用法
+# 复合类型变量必须先承接栈上变量，然后才能进行字段拆分
+
+Contract TestCompoundTypeUsage:
+    def test_correct_usage(data: hex):
+        # 正确用法：
+        # 1. 先声明复合类型变量（只创建元数据，不占栈空间）
+        list: {a:hex20, b:hex32, c:hex32}
+        
+        # 2. 将栈上的变量赋值给复合类型变量（承接数据）
+        list = Push(BVM.unlockingInput)
+        
+        # 3. 现在可以访问字段了
+        field_a = list.a  # 获取a字段（20字节）
+        field_b = list.b  # 获取b字段（32字节）
+        field_c = list.c  # 获取c字段（32字节）
+        
+    # def test_wrong_usage():
+    #     # 错误用法：声明后直接访问字段（会报错）
+    #     list = {a:hex20, b:hex32, c:hex32}
+    #     # 下面这行会报错：必须先赋值才能访问字段
+    #     # field_a = list.a  # ERROR!
+

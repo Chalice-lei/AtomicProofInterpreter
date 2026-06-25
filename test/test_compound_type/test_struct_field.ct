@@ -1,0 +1,31 @@
+# 测试复合类型作为结构体字段
+# 当复合类型是结构体的字段，且结构体作为函数参数时
+# 复合类型字段应该像普通字段一样被初始化到栈上
+
+Contract TestCompoundTypeInStruct:
+    # 定义包含复合类型字段的结构体
+    Struct Transaction:
+        version: hex4
+        data: {inputs:hex20, outputs:hex32, locktime:hex32}
+        checksum: hex32
+    
+    # 使用该结构体作为函数参数
+    def process_transaction(tx: Transaction):
+        # 结构体参数会被展开，所有字段（包括复合类型字段）都会初始化到栈上
+        # 展开后的栈状态：
+        # - tx.version (hex4)
+        # - tx.data (复合类型，已经在栈上并关联了复合类型信息)
+        # - tx.checksum (hex32)
+        
+        # 可以直接访问普通字段
+        ver = tx.version
+        
+        # 可以访问复合类型字段（因为它已经在栈上了）
+        # 然后可以进一步访问复合类型的子字段
+        tx_inputs = tx.data.inputs      # 20字节
+        tx_outputs = tx.data.outputs    # 32字节
+        tx_locktime = tx.data.locktime  # 32字节
+        
+        # 也可以访问其他普通字段
+        cs = tx.checksum
+

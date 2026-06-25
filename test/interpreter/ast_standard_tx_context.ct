@@ -1,0 +1,18 @@
+Contract ASTStandardTXContext:
+    Struct Script:
+        SuffixData: string
+        PartialHash: string
+        Size: hex4
+
+    Struct Output:
+        Value: hex4
+        LockingScript: Script
+
+    Struct CurrentTX:
+        Outputs: Output[1]
+
+    def main(ctx: CurrentTX):
+        EqualVerify(BVM.outputCount, 1)
+        EqualVerify(ctx.Outputs[0].LockingScript.Size, 0x03000000)
+        EqualVerify(BVM.outputsHash, 0xce0a6b9689be35737564d16876e9d3795b2eac384e52f7beeaa5c111cead070f)
+        Return(BinToNum(ctx.Outputs[0].Value))

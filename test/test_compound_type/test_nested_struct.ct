@@ -1,0 +1,31 @@
+# 测试嵌套结构体中的复合类型字段
+
+Contract TestNestedCompoundType:
+    # 定义内层结构体，包含复合类型字段
+    Struct BlockHeader:
+        hash: hex32
+        metadata: {timestamp:hex8, nonce:hex8, difficulty:hex8}
+    
+    # 定义外层结构体
+    Struct Block:
+        header: BlockHeader
+        txCount: hex4
+    
+    # 使用嵌套结构体作为函数参数
+    def process_block(block: Block):
+        # 参数展开后，所有嵌套字段都在栈上：
+        # - block.header.hash
+        # - block.header.metadata (复合类型)
+        # - block.txCount
+        
+        # 访问嵌套的普通字段
+        h = block.header.hash
+        
+        # 访问嵌套的复合类型字段的子字段
+        ts = block.header.metadata.timestamp   # 8字节
+        nc = block.header.metadata.nonce       # 8字节
+        df = block.header.metadata.difficulty  # 8字节
+        
+        # 访问外层字段
+        tc = block.txCount
+

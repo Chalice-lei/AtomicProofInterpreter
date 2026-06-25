@@ -1,0 +1,253 @@
+# EN: Bidding continues the auction state with a higher locked value and refunds the previous leader.
+# ZH: 出价分支会用更高锁定金额延续拍卖状态，并退款给上一位最高出价者。
+# EN: Closing consumes the pre-agreed ordinal input first, then pays the ordinal to the winner and the bid to the auctioneer.
+# ZH: 关闭分支要求第一输入花费预先约定的 ordinal，并把 ordinal 给赢家、出价金额给拍卖方。
+Contract OrdinalAuction:
+
+    Struct Script:
+        SuffixData: string
+        PartialHash: string
+        Size: number
+
+    Struct Output:
+        Value: number
+        LockingScript: Script
+
+    Struct Input:
+        Data: {txid: hex32, vout: hex4, sequence: hex4}
+
+    Struct PreTX:
+        VLIO: string
+        Inputs: Input[3]
+        UnlockingScriptHash: string
+        Outputs: Output[3]
+
+    Struct CurrentTX:
+        Outputs: Output[3]
+
+    # EN: `path == 1` bids; any other path closes after `self.auctionDeadline`.
+    # ZH: `path == 1` 表示出价；其他路径表示在 `self.auctionDeadline` 后关闭拍卖。
+    def main(sigAuctioneer: hex, newBidder: hex, bidAmount: number, ctx: CurrentTX, pretx: PreTX, prevouts: hex, path: number):
+        if path == 1:
+            Delete(sigAuctioneer)
+            Delete(prevouts)
+
+            # EN: Locate the contract UTXO being spent and read its current state.
+            # ZH: 定位当前正在花费的合约 UTXO，并读取其中的状态。
+            utxoData: {txid: hex32, vout: hex4, sequence: hex4}
+            utxoData = Push(BVM.unlockingInput)
+            vout = BinToNum(utxoData.vout)
+            vout_copy = vout.Clone()
+            Delete(utxoData.sequence)
+            Delete(utxoData.txid)
+
+            vout_copy = vout.Clone()
+            highest_bid = pretx.Outputs[vout_copy].Value.Clone()
+            SetAlt(highest_bid)
+
+            vout_copy = vout.Clone()
+            state_code_size = pretx.Outputs[vout_copy].LockingScript.Size.Clone()
+            SetAlt(state_code_size)
+            state_partialhash = pretx.Outputs[vout].LockingScript.PartialHash.Clone()
+            SetAlt(state_partialhash)
+
+            # EN: Rebuild the parent transaction so the old state and value cannot be forged.
+            # ZH: 重建父交易，防止调用方伪造旧状态或旧金额。
+            tx_data = Push(0)
+            SetAlt(tx_data)
+            for i in Range(2, -1, -1):
+                size_copy = pretx.Outputs[i].LockingScript.Size.Clone()
+                if size_copy != 0:
+                    tx_data_temp = PartialHash(pretx.Outputs[i].LockingScript.SuffixData, pretx.Outputs[i].LockingScript.PartialHash, pretx.Outputs[i].LockingScript.Size)
+                    tx_data_temp = Cat(pretx.Outputs[i].Value, tx_data_temp)
+                    SetMain(tx_data)
+                    tx_data = Cat(tx_data_temp, tx_data)
+                    SetAlt(tx_data)
+                    Keep(tx_data)
+                else:
+                    Delete(pretx.Outputs[i].LockingScript.Size)
+                    Delete(pretx.Outputs[i].LockingScript.PartialHash)
+                    Delete(pretx.Outputs[i].LockingScript.SuffixData)
+                    Delete(pretx.Outputs[i].Value)
+
+            SetMain(tx_data)
+            tx_data = Sha256(tx_data)
+            tx_data = Cat(pretx.UnlockingScriptHash, tx_data)
+            SetAlt(tx_data)
+            tx_input_data = Push(0)
+            for i in Range(2, -1, -1):
+                tx_input_data = Cat(pretx.Inputs[i].Data, tx_input_data)
+            tx_input_hash = Sha256(tx_input_data)
+            SetMain(tx_data)
+            tx_data = Cat(tx_input_hash, tx_data)
+            tx_data = Cat(pretx.VLIO, tx_data)
+            txid = Hash256(tx_data)
+            preTXID = BVM.unlockingInput.Slice(0, 32)
+            EqualVerify(txid, preTXID)
+
+            # EN: Output 0 must continue the same contract code with the new bidder state.
+            # ZH: 输出 0 必须延续同一份合约代码，并写入新的最高出价者状态。
+            out0_size = ctx.Outputs[0].LockingScript.Size.Clone()
+            SetMain(state_code_size)
+            EqualVerify(state_code_size, out0_size)
+            out0_partialhash = ctx.Outputs[0].LockingScript.PartialHash.Clone()
+            SetMain(state_partialhash)
+            EqualVerify(state_partialhash, out0_partialhash)
+
+            out0_suffix = ctx.Outputs[0].LockingScript.SuffixData.Clone()
+            out0_suffix_bidder = out0_suffix.Slice(1, 33)
+            EqualVerify(out0_suffix_bidder, newBidder)
+
+            out0_value_num = BinToNum(ctx.Outputs[0].Value.Clone())
+            NumEqualVerify(out0_value_num, bidAmount.Clone())
+            SetMain(highest_bid)
+            highest_bid_for_compare = highest_bid.Clone()
+            highest_bid_num = BinToNum(highest_bid_for_compare)
+            NumEqualVerify(GreaterThan(bidAmount, highest_bid_num), 1)
+
+            # EN: Output 1 refunds the previous highest bid to the previous highest bidder.
+            # ZH: 输出 1 必须把上一轮最高价退回给上一位最高出价者。
+            out1_suffix = ctx.Outputs[1].LockingScript.SuffixData.Clone()
+            { out1_prefix, out1_suffix } = Split(out1_suffix, 3)
+            EqualVerify(out1_prefix, 0x76a914)
+            { out1_pkh, out1_tail } = Split(out1_suffix, 20)
+            EqualVerify(out1_tail, 0x88ac)
+            EqualVerify(out1_pkh, Hash160(self.bidder))
+            out1_value = ctx.Outputs[1].Value.Clone()
+            EqualVerify(out1_value, highest_bid)
+
+            # EN: Bind every supplied current output, including optional change.
+            # ZH: 绑定所有传入的当前输出，包括可选找零输出。
+            bid_outputs_data = Push(0)
+            SetAlt(bid_outputs_data)
+            for i in Range(2, -1, -1):
+                size_copy = ctx.Outputs[i].LockingScript.Size.Clone()
+                if size_copy != 0:
+                    out_data_temp = PartialHash(ctx.Outputs[i].LockingScript.SuffixData, ctx.Outputs[i].LockingScript.PartialHash, ctx.Outputs[i].LockingScript.Size)
+                    out_data_temp = Cat(ctx.Outputs[i].Value, out_data_temp)
+                    SetMain(bid_outputs_data)
+                    bid_outputs_data = Cat(out_data_temp, bid_outputs_data)
+                    SetAlt(bid_outputs_data)
+                    Keep(bid_outputs_data)
+                else:
+                    Delete(ctx.Outputs[i].LockingScript.Size)
+                    Delete(ctx.Outputs[i].LockingScript.PartialHash)
+                    Delete(ctx.Outputs[i].LockingScript.SuffixData)
+                    Delete(ctx.Outputs[i].Value)
+            SetMain(bid_outputs_data)
+            bid_outputs_data = Sha256(bid_outputs_data)
+            EqualVerify(bid_outputs_data, BVM.outputsHash)
+
+        else:
+            Delete(newBidder)
+            Delete(bidAmount)
+
+            # EN: The auctioneer alone can close, but only after the configured deadline.
+            # EN: The current input must be non-final so the transaction locktime is enforced.
+            # ZH: 关闭拍卖只需要拍卖方签名，但必须已经到达截止时间。
+            # ZH: 当前输入必须是非 final sequence，交易 locktime 才会被共识执行。
+            NumEqualVerify(GreaterOrEqual(BVM.locktime, self.auctionDeadline), 1)
+            CheckSigVerify(sigAuctioneer, self.auctioneer)
+
+            # EN: The full current input data must match BVM.inputsHash; input 0 carries the ordinal.
+            # ZH: 当前完整输入数据必须匹配 BVM.inputsHash；第 0 个输入携带 ordinal。
+            prevouts_for_hash = prevouts.Clone()
+            EqualVerify(Sha256(prevouts_for_hash), BVM.inputsHash)
+            first_outpoint = prevouts.Slice(0, 36)
+            EqualVerify(first_outpoint, self.ordinalPrevout)
+
+            # EN: Read the winner and winning amount from the spent auction state.
+            # ZH: 从被花费的拍卖状态中读取赢家和中标金额。
+            closeUtxoData: {txid: hex32, vout: hex4, sequence: hex4}
+            closeUtxoData = Push(BVM.unlockingInput)
+            close_vout = BinToNum(closeUtxoData.vout)
+            close_vout_copy = close_vout.Clone()
+            NumEqualVerify(Equal(closeUtxoData.sequence, 0xffffffff), 0)
+            Delete(closeUtxoData.txid)
+
+            close_vout_copy = close_vout.Clone()
+            winning_bid = pretx.Outputs[close_vout_copy].Value.Clone()
+            SetAlt(winning_bid)
+
+            # EN: Rebuild the parent transaction for the contract UTXO being closed.
+            # ZH: 重建被关闭的合约 UTXO 的父交易。
+            close_tx_data = Push(0)
+            SetAlt(close_tx_data)
+            for i in Range(2, -1, -1):
+                close_size_copy = pretx.Outputs[i].LockingScript.Size.Clone()
+                if close_size_copy != 0:
+                    close_tx_data_temp = PartialHash(pretx.Outputs[i].LockingScript.SuffixData, pretx.Outputs[i].LockingScript.PartialHash, pretx.Outputs[i].LockingScript.Size)
+                    close_tx_data_temp = Cat(pretx.Outputs[i].Value, close_tx_data_temp)
+                    SetMain(close_tx_data)
+                    close_tx_data = Cat(close_tx_data_temp, close_tx_data)
+                    SetAlt(close_tx_data)
+                    Keep(close_tx_data)
+                else:
+                    Delete(pretx.Outputs[i].LockingScript.Size)
+                    Delete(pretx.Outputs[i].LockingScript.PartialHash)
+                    Delete(pretx.Outputs[i].LockingScript.SuffixData)
+                    Delete(pretx.Outputs[i].Value)
+
+            SetMain(close_tx_data)
+            close_tx_data = Sha256(close_tx_data)
+            close_tx_data = Cat(pretx.UnlockingScriptHash, close_tx_data)
+            SetAlt(close_tx_data)
+            close_tx_input_data = Push(0)
+            for i in Range(2, -1, -1):
+                close_tx_input_data = Cat(pretx.Inputs[i].Data, close_tx_input_data)
+            close_tx_input_hash = Sha256(close_tx_input_data)
+            SetMain(close_tx_data)
+            close_tx_data = Cat(close_tx_input_hash, close_tx_data)
+            close_tx_data = Cat(pretx.VLIO, close_tx_data)
+            close_txid = Hash256(close_tx_data)
+            close_preTXID = BVM.unlockingInput.Slice(0, 32)
+            EqualVerify(close_txid, close_preTXID)
+
+            # EN: Output 0 transfers the one-satoshi ordinal to the winner.
+            # ZH: 输出 0 把 1 聪 ordinal 转给赢家。
+            close_out0_suffix = ctx.Outputs[0].LockingScript.SuffixData.Clone()
+            { close_out0_prefix, close_out0_suffix } = Split(close_out0_suffix, 3)
+            EqualVerify(close_out0_prefix, 0x76a914)
+            { close_out0_pkh, close_out0_tail } = Split(close_out0_suffix, 20)
+            EqualVerify(close_out0_tail, 0x88ac)
+            EqualVerify(close_out0_pkh, Hash160(self.bidder))
+            close_out0_value_num = BinToNum(ctx.Outputs[0].Value.Clone())
+            NumEqualVerify(close_out0_value_num, 1)
+
+            # EN: Output 1 pays the locked winning bid to the auctioneer.
+            # ZH: 输出 1 把锁定的中标金额支付给拍卖方。
+            close_out1_suffix = ctx.Outputs[1].LockingScript.SuffixData.Clone()
+            { close_out1_prefix, close_out1_suffix } = Split(close_out1_suffix, 3)
+            EqualVerify(close_out1_prefix, 0x76a914)
+            { close_out1_pkh, close_out1_tail } = Split(close_out1_suffix, 20)
+            EqualVerify(close_out1_tail, 0x88ac)
+            EqualVerify(close_out1_pkh, Hash160(self.auctioneer))
+            close_out1_value = ctx.Outputs[1].Value.Clone()
+            SetMain(winning_bid)
+            EqualVerify(close_out1_value, winning_bid)
+
+            # EN: Bind the ordinal payout, auctioneer payout, and optional change output.
+            # ZH: 绑定 ordinal 支付、拍卖方收款以及可选找零输出。
+            close_outputs_data = Push(0)
+            SetAlt(close_outputs_data)
+            for i in Range(2, -1, -1):
+                close_size_copy = ctx.Outputs[i].LockingScript.Size.Clone()
+                if close_size_copy != 0:
+                    close_out_data_temp = PartialHash(ctx.Outputs[i].LockingScript.SuffixData, ctx.Outputs[i].LockingScript.PartialHash, ctx.Outputs[i].LockingScript.Size)
+                    close_out_data_temp = Cat(ctx.Outputs[i].Value, close_out_data_temp)
+                    SetMain(close_outputs_data)
+                    close_outputs_data = Cat(close_out_data_temp, close_outputs_data)
+                    SetAlt(close_outputs_data)
+                    Keep(close_outputs_data)
+                else:
+                    Delete(ctx.Outputs[i].LockingScript.Size)
+                    Delete(ctx.Outputs[i].LockingScript.PartialHash)
+                    Delete(ctx.Outputs[i].LockingScript.SuffixData)
+                    Delete(ctx.Outputs[i].Value)
+            SetMain(close_outputs_data)
+            close_outputs_data = Sha256(close_outputs_data)
+            EqualVerify(close_outputs_data, BVM.outputsHash)
+            Delete(close_vout)
+
+        Return 1
+        Push(self.bidder)

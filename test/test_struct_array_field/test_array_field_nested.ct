@@ -1,0 +1,28 @@
+Contract ArrayFieldNestedTest:
+    Struct Inner:
+        data: uint64[2]
+        flag: int
+        
+    Struct Outer:
+        inner: Inner
+        arr: uint64[3]
+        id: int
+        
+    def test_nested_array_fields(outer: Outer):
+        # 测试嵌套结构体中的数组字段
+        # 访问嵌套结构体的数组字段
+        inner_data_0 = outer.inner.data[0].clone()
+        inner_data_1: int = outer.inner.data[1]
+        
+        # 访问外层结构体的数组字段
+        arr_0: int = outer.arr[0]
+        arr_1: int = outer.arr[1]
+        arr_2: int = outer.arr[2]
+        
+        # 访问普通字段
+        flag_val: int = outer.inner.flag
+        id_val: int = outer.id
+        
+        # 测试重复访问
+        inner_data_0_again: int = outer.inner.data[0]
+        # arr_2_again: int = outer.arr[2]

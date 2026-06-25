@@ -1,0 +1,7 @@
+# 测试小于运算符：两个整数直接比较
+Contract OperatorLtTwoOperandsTest:
+    def test_lt_two(a: int, b: int, c: int, d: int):
+        # 比较前两个参数
+        # is_lt1: bool = a < b
+        # 比较后两个参数
+        is_lt2: bool = c < d

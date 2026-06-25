@@ -1,0 +1,11 @@
+# Basic form: from 0 to n-1
+for <variable_name> in Range(<end_value>):
+    <loop_body>
+
+# Specify start and end
+for <variable_name> in Range(<start_value>, <end_value>):
+    <loop_body>
+
+# Specify start, end and step size
+for <variable_name> in Range(<start_value>, <end_value>, <step_size>):
+    <loop_body>

@@ -1,0 +1,17 @@
+# 测试for循环遍历基本类型数组
+Contract ForLoopArrayTraversalTest:
+    def test_array_traversal():
+        # 定义测试数组
+        nums: int[5] = [3, 7, 2, 8, 1]
+        array_sum: int = 0
+        # array_sum = array_sum + nums[0]
+        # array_sum = array_sum + nums[1]
+        # array_sum = array_sum + nums[2]
+        # array_sum = array_sum + nums[3]
+        # array_sum = array_sum + nums[4]
+
+        
+        # 遍历数组所有元素（通过索引）
+        for i in range(5):
+            # 累加数组元素
+            array_sum = array_sum + nums[i]

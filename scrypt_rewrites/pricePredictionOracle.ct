@@ -1,0 +1,148 @@
+import std.schnorr
+
+# EN: A signed price report chooses the winner and directs the whole previous value to output 0.
+# ZH: 签名价格报告决定胜方，并要求输出 0 接收上一轮全部金额。
+# EN: The report binds asset id, timestamp, and price before payout checks run.
+# ZH: 报告会绑定资产 ID、时间戳和价格，再进入支付校验。
+Contract PricePrediction:
+
+    Struct Script:
+        SuffixData: string
+        PartialHash: string
+        Size: number
+
+    Struct Output:
+        Value: number
+        LockingScript: Script
+
+    Struct Input:
+        Data: {txid: hex32, vout: hex4, sequence: hex4}
+
+    Struct CurrentTX:
+        Outputs: Output[3]
+
+    Struct PreTX:
+        VLIO: string
+        Inputs: Input[3]
+        UnlockingScriptHash: string
+        Outputs: Output[3]
+
+    def settle(msg: hex, R: hex, s: hex, ctx: CurrentTX, pretx: PreTX):
+        # EN: The current input tells us which previous output value is at stake.
+        # ZH: 当前输入会指出哪一个上一轮输出金额参与结算。
+        utxoData: {txid: hex32, vout: hex4, sequence: hex4}
+        utxoData = Push(BVM.unlockingInput)
+        vout = BinToNum(utxoData.vout)
+        Delete(utxoData.sequence)
+        Delete(utxoData.txid)
+
+        # EN: Save that previous value so output 0 can be checked later.
+        # ZH: 先保存上一轮金额，稍后用于校验输出 0。
+        pre_value = pretx.Outputs[vout].Value.Clone()
+        SetAlt(pre_value)
+
+        # EN: Recompute the previous txid from the supplied transaction pieces.
+        # ZH: 根据传入的交易片段重新计算上一笔交易的 txid。
+        tx_data = Push(0)
+        SetAlt(tx_data)
+        for i in Range(2, -1, -1):
+            size_copy = pretx.Outputs[i].LockingScript.Size.Clone()
+            if size_copy != 0:
+                tx_data_temp = PartialHash(pretx.Outputs[i].LockingScript.SuffixData, pretx.Outputs[i].LockingScript.PartialHash, pretx.Outputs[i].LockingScript.Size)
+                tx_data_temp = Cat(pretx.Outputs[i].Value, tx_data_temp)
+                SetMain(tx_data)
+                tx_data = Cat(tx_data_temp, tx_data)
+                SetAlt(tx_data)
+                Keep(tx_data)
+            else:
+                Delete(pretx.Outputs[i].LockingScript.Size)
+                Delete(pretx.Outputs[i].LockingScript.PartialHash)
+                Delete(pretx.Outputs[i].LockingScript.SuffixData)
+                Delete(pretx.Outputs[i].Value)
+
+        SetMain(tx_data)
+        tx_data = Sha256(tx_data)
+        tx_data = Cat(pretx.UnlockingScriptHash, tx_data)
+        SetAlt(tx_data)
+
+        tx_input_data = Push(0)
+        for i in Range(2, -1, -1):
+            tx_input_data = Cat(pretx.Inputs[i].Data, tx_input_data)
+        tx_input_hash = Sha256(tx_input_data)
+
+        SetMain(tx_data)
+        tx_data = Cat(tx_input_hash, tx_data)
+        tx_data = Cat(pretx.VLIO, tx_data)
+        txid = Hash256(tx_data)
+        preTXID = BVM.unlockingInput.Slice(0, 32)
+        EqualVerify(txid, preTXID)
+
+        # EN: Clone the report bytes before Schnorr verification consumes the original.
+        # ZH: Schnorr 验签会消耗原始报告字节，因此先克隆一份。
+        msg_for_parse = msg.Clone()
+        SetAlt(msg_for_parse)
+        schnorrVerify(msg, R, s, self.oraclePubKey, self.generator, self.modulus)
+        SetMain(msg_for_parse)
+
+        # EN: Parse the report as assetId(32) | timestamp(8) | price(8).
+        # ZH: 按 assetId(32) | timestamp(8) | price(8) 解析报告。
+        {msg_assetId, r1}       = Split(msg_for_parse, 32)
+        {msg_ts_b, msg_price_b} = Split(r1, 8)
+
+        # EN: The report must refer to the configured asset id.
+        # ZH: 报告中的资产 ID 必须与配置值一致。
+        EqualVerify(msg_assetId, self.assetId)
+
+        # EN: Treat the timestamp as unsigned and require it to reach the settlement time.
+        # ZH: 时间戳按无符号数处理，并且必须达到结算时间。
+        msg_ts_num   = BinToNum(Cat(msg_ts_b, 0x00))
+        settle_clone = self.settleTime.Clone()
+        settle_num   = BinToNum(Cat(settle_clone, 0x00))
+        NumEqualVerify(GreaterOrEqual(msg_ts_num, settle_num), 1)
+
+        # EN: The threshold comparison selects Alice on success and Bob otherwise.
+        # ZH: 价格达到阈值则选择 Alice，否则选择 Bob。
+        price_num       = BinToNum(Cat(msg_price_b, 0x00))
+        threshold_clone = self.threshold.Clone()
+        threshold_num   = BinToNum(Cat(threshold_clone, 0x00))
+        winner_flag     = GreaterOrEqual(price_num, threshold_num)
+
+        # EN: Output 0 must be P2PKH and pay the selected winner's public-key hash.
+        # ZH: 输出 0 必须是 P2PKH，并支付给被选中胜方的公钥哈希。
+        out0_suffix = ctx.Outputs[0].LockingScript.SuffixData.Clone()
+        { out0_prefix, out0_suffix } = Split(out0_suffix, 3)
+        EqualVerify(out0_prefix, 0x76a914)
+        { out0_pkh, out0_tail } = Split(out0_suffix, 20)
+        EqualVerify(out0_tail, 0x88ac)
+        if winner_flag == 1:
+            EqualVerify(out0_pkh, self.alice)
+        else:
+            EqualVerify(out0_pkh, self.bob)
+
+        # EN: The winner receives the exact value that was previously locked.
+        # ZH: 胜方收到的金额必须等于上一轮锁定金额。
+        SetMain(pre_value)
+        out0_value = ctx.Outputs[0].Value.Clone()
+        EqualVerify(out0_value, pre_value)
+
+        # EN: Rebuild all declared outputs and bind them to the transaction output hash.
+        # ZH: 重建所有声明输出，并绑定到交易输出哈希。
+        outputs_data = Push(0)
+        SetAlt(outputs_data)
+        for i in Range(2, -1, -1):
+            size = ctx.Outputs[i].LockingScript.Size.Clone()
+            if size != 0:
+                output_temp = PartialHash(ctx.Outputs[i].LockingScript.SuffixData, ctx.Outputs[i].LockingScript.PartialHash, ctx.Outputs[i].LockingScript.Size)
+                output_temp = Cat(ctx.Outputs[i].Value, output_temp)
+                SetMain(outputs_data)
+                outputs_data = Cat(output_temp, outputs_data)
+                SetAlt(outputs_data)
+                Keep(outputs_data)
+            else:
+                Delete(ctx.Outputs[i].LockingScript.Size)
+                Delete(ctx.Outputs[i].LockingScript.PartialHash)
+                Delete(ctx.Outputs[i].LockingScript.SuffixData)
+                Delete(ctx.Outputs[i].Value)
+        SetMain(outputs_data)
+        outputs_data = Sha256(outputs_data)
+        EqualVerify(outputs_data, BVM.outputsHash)

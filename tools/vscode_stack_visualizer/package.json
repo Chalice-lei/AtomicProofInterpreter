@@ -1,0 +1,286 @@
+{
+	"name": "atomicproof-stack-visualizer",
+	"displayName": "AtomicProof Stack Visualizer",
+	"description": "Open AtomicProof stack_trace.json files in a VS Code Webview.",
+	"version": "0.1.0",
+	"publisher": "atomicproof",
+	"engines": {
+		"vscode": "^1.86.0"
+	},
+	"categories": [
+		"Visualization",
+		"Debuggers"
+	],
+	"activationEvents": [
+		"workspaceContains:**/*.ct",
+		"onCommand:atomicProofStackVisualizer.openTrace",
+		"onCommand:atomicProofStackVisualizer.openActiveTrace",
+		"onCommand:atomicProofStackVisualizer.generateTrace",
+		"onCommand:atomicProofStackVisualizer.openLastTrace",
+		"onCommand:atomicProofStackVisualizer.debugActiveTrace",
+		"onCommand:atomicProofStackVisualizer.debugLiveContract",
+		"onDebugResolve:atomicproof-trace",
+		"onDebugResolve:atomicproof-live"
+	],
+	"main": "./extension.js",
+	"scripts": {
+		"check": "node --check extension.js && node --check scripts/prepare_package.js && node --check scripts/package_vsix.js && node --check scripts/extension_smoke.js && node --check scripts/extension_smoke_runner.js && node --check scripts/live_debug_smoke.js && node --check scripts/browser_smoke.js && node scripts/check_visualizer.js",
+		"browser-smoke": "node scripts/browser_smoke.js",
+		"extension-smoke": "node scripts/extension_smoke.js",
+		"live-smoke": "node scripts/live_debug_smoke.js",
+		"prepare-package": "node scripts/prepare_package.js",
+		"package-vsix": "node scripts/package_vsix.js",
+		"package": "npm run prepare-package && npm run package-vsix"
+	},
+	"devDependencies": {
+		"@vscode/test-electron": "^3.0.0",
+		"jszip": "^3.10.1",
+		"playwright-core": "^1.57.0"
+	},
+	"contributes": {
+		"commands": [
+			{
+				"command": "atomicProofStackVisualizer.openTrace",
+				"title": "AtomicProof: Open Stack Trace Visualizer"
+			},
+			{
+				"command": "atomicProofStackVisualizer.openActiveTrace",
+				"title": "AtomicProof: Visualize Active Stack Trace"
+			},
+			{
+				"command": "atomicProofStackVisualizer.generateTrace",
+				"title": "AtomicProof: Generate Stack Trace and Visualize"
+			},
+			{
+				"command": "atomicProofStackVisualizer.openLastTrace",
+				"title": "AtomicProof: Open Last Generated Stack Trace"
+			},
+			{
+				"command": "atomicProofStackVisualizer.debugActiveTrace",
+				"title": "AtomicProof: Debug Active Stack Trace"
+			},
+			{
+				"command": "atomicProofStackVisualizer.debugLiveContract",
+				"title": "AtomicProof: Debug Live VM"
+			}
+		],
+		"debuggers": [
+			{
+				"type": "atomicproof-trace",
+				"label": "AtomicProof Trace",
+				"languages": [
+					"json"
+				],
+				"configurationAttributes": {
+					"launch": {
+						"type": "object",
+						"required": [
+							"tracePath"
+						],
+						"properties": {
+							"tracePath": {
+								"type": "string",
+								"description": "Path to an AtomicProof stack_trace.json file."
+							}
+						}
+					}
+				},
+				"initialConfigurations": [
+					{
+						"type": "atomicproof-trace",
+						"request": "launch",
+						"name": "Debug AtomicProof Stack Trace",
+						"tracePath": "${file}"
+					}
+				]
+			},
+			{
+				"type": "atomicproof-live",
+				"label": "AtomicProof Live VM",
+				"languages": [
+					"atomicproof-contract"
+				],
+				"configurationAttributes": {
+					"launch": {
+						"type": "object",
+						"required": [
+							"contractPath"
+						],
+						"properties": {
+							"contractPath": {
+								"type": "string",
+								"description": "Path to an AtomicProof .ct contract file."
+							},
+							"functionName": {
+								"type": "string",
+								"description": "Contract function to execute. Leave empty to use the first public function."
+							},
+							"arguments": {
+								"oneOf": [
+									{
+										"type": "array",
+										"items": {
+											"type": "string"
+										}
+									},
+									{
+										"type": "string"
+									}
+								],
+								"description": "Function arguments. Use an array for launch.json or a shell-like string for quick experiments."
+							},
+							"txFile": {
+								"type": "string",
+								"description": "Optional transaction context file."
+							},
+							"interpreterPath": {
+								"type": "string",
+								"description": "Path to utxo_interpreter. Defaults to the extension setting."
+							}
+						}
+					}
+				},
+				"initialConfigurations": [
+					{
+						"type": "atomicproof-live",
+						"request": "launch",
+						"name": "Live Debug AtomicProof Contract",
+						"contractPath": "${file}",
+						"functionName": "",
+						"arguments": []
+					}
+				]
+			}
+		],
+		"languages": [
+			{
+				"id": "atomicproof-contract",
+				"aliases": [
+					"AtomicProof Contract",
+					"ct"
+				],
+				"extensions": [
+					".ct"
+				],
+				"configuration": "./language-configuration.json"
+			}
+		],
+		"breakpoints": [
+			{
+				"language": "json"
+			},
+			{
+				"language": "atomicproof-contract"
+			}
+		],
+		"menus": {
+			"editor/title": [
+				{
+					"command": "atomicProofStackVisualizer.openActiveTrace",
+					"when": "resourceExtname == .json",
+					"group": "navigation"
+				},
+				{
+					"command": "atomicProofStackVisualizer.debugActiveTrace",
+					"when": "resourceExtname == .json",
+					"group": "navigation"
+				},
+				{
+					"command": "atomicProofStackVisualizer.generateTrace",
+					"when": "resourceExtname == .ct",
+					"group": "navigation"
+				},
+				{
+					"command": "atomicProofStackVisualizer.debugLiveContract",
+					"when": "resourceExtname == .ct",
+					"group": "navigation"
+				}
+			],
+			"explorer/context": [
+				{
+					"command": "atomicProofStackVisualizer.openActiveTrace",
+					"when": "resourceExtname == .json",
+					"group": "navigation"
+				},
+				{
+					"command": "atomicProofStackVisualizer.debugActiveTrace",
+					"when": "resourceExtname == .json",
+					"group": "navigation"
+				},
+				{
+					"command": "atomicProofStackVisualizer.generateTrace",
+					"when": "resourceExtname == .ct",
+					"group": "navigation"
+				},
+				{
+					"command": "atomicProofStackVisualizer.debugLiveContract",
+					"when": "resourceExtname == .ct",
+					"group": "navigation"
+				}
+			]
+		},
+		"jsonValidation": [
+			{
+				"fileMatch": [
+					"/stack_trace.json",
+					"/**/stack_trace.json",
+					"/**/*stack_trace*.json",
+					"/**/examples/stack_traces/*.json"
+				],
+				"url": "./schemas/apc-stack-trace.schema.json"
+			}
+		],
+		"configuration": {
+			"title": "AtomicProof Stack Visualizer",
+			"properties": {
+				"atomicProofStackVisualizer.interpreterPath": {
+					"type": "string",
+					"default": "",
+					"description": "Path to utxo_interpreter. Leave empty to use build/bin/utxo_interpreter inside the workspace. Supports ${workspaceFolder}, ${file}, ${fileDirname}, ${fileBasenameNoExtension}, and ${home}."
+				},
+				"atomicProofStackVisualizer.traceOutputPath": {
+					"type": "string",
+					"default": "${workspaceFolder}/stack_trace.json",
+					"description": "Default stack trace output path. Supports ${workspaceFolder}, ${file}, ${fileDirname}, ${fileBasenameNoExtension}, and ${home}."
+				},
+				"atomicProofStackVisualizer.defaultFunction": {
+					"type": "string",
+					"default": "",
+					"description": "Default contract function name when generating a stack trace."
+				},
+				"atomicProofStackVisualizer.defaultArguments": {
+					"type": "string",
+					"default": "",
+					"description": "Default function arguments when generating a stack trace."
+				},
+				"atomicProofStackVisualizer.autoOpenGeneratedTrace": {
+					"type": "boolean",
+					"default": true,
+					"description": "Open the visualizer automatically after generating a trace."
+				},
+				"atomicProofStackVisualizer.defaultViewMode": {
+					"type": "string",
+					"enum": [
+						"diff",
+						"before",
+						"after"
+					],
+					"default": "diff",
+					"description": "Initial stack view mode for the Webview."
+				},
+				"atomicProofStackVisualizer.playbackSpeed": {
+					"type": "number",
+					"default": 1,
+					"minimum": 0.25,
+					"maximum": 4,
+					"description": "Initial playback speed for the Webview."
+				},
+				"atomicProofStackVisualizer.openBeside": {
+					"type": "boolean",
+					"default": true,
+					"description": "Open stack traces beside the active editor."
+				}
+			}
+		}
+	}
+}

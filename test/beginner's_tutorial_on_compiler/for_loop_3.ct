@@ -1,0 +1,17 @@
+# 测试for循环遍历结构体数组
+Contract ForLoopStructArrayTest:
+    Struct Product:
+        price: int
+        quantity: int
+
+    def test_struct_array_traversal():
+        # 初始化结构体数组
+        products: Product[3] = [{100, 2}, {50, 5}, {30, 10}]
+        total_value: int = 0
+        item_value: int = 0
+        
+        # 遍历结构体数组
+        for i in Range(3):
+            # 计算每个产品的价值并累加
+            item_value = products[i].price * products[i].quantity
+            total_value = total_value + item_value

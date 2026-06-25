@@ -1,0 +1,51 @@
+# EN: The Schnorr parameters are stored on the instance: generator, modulus, and oracle public key.
+# ZH: Schnorr 参数保存在实例中：生成元、模数以及预言机公钥。
+# EN: The signed message is tied to the exact outpoint being spent.
+# ZH: 被签名消息会绑定到当前正在花费的 outpoint。
+
+import std.schnorr
+
+Contract OracleDemoBsv20:
+
+    def main(msg: hex, R: hex, s: hex):
+        # EN: Capture the outpoint bytes from the current unlocking input.
+        # ZH: 从当前解锁输入中取出 outpoint 字节。
+        outpoint = BVM.unlockingInput.Slice(0, 36)
+        SetAlt(outpoint)
+
+        # EN: Clone `msg` so it can be parsed after Schnorr verification consumes the original.
+        # ZH: 先克隆 `msg`，这样原始值被 Schnorr 验签消耗后仍可解析。
+        msg_for_parse = msg.Clone()
+        SetAlt(msg_for_parse)
+
+        schnorrVerify(msg, R, s, self.oraclePubKey, self.generator, self.modulus)
+        SetMain(msg_for_parse)
+
+        # EN: Parse the signed payload in the agreed byte order.
+        # ZH: 按约定的字节顺序解析签名载荷。
+        # EN: marker(1) | timestamp(4) | network(1) | outpoint(36) | flag(1) | amount(8) | id(rest)
+        # ZH: marker(1) | timestamp(4) | network(1) | outpoint(36) | flag(1) | amount(8) | id(剩余)
+
+        {marker_b, r1} = Split(msg_for_parse, 1)
+        NumEqualVerify(BinToNum(marker_b), 4)
+
+        {ts_b, r2} = Split(r1, 4)
+        Delete(ts_b)
+
+        {net_b, r3} = Split(r2, 1)
+        NumEqualVerify(BinToNum(net_b), 0)
+
+        {op_b, r4} = Split(r3, 36)
+        SetMain(outpoint)
+        EqualVerify(op_b, outpoint)
+
+        {fung_b, r5} = Split(r4, 1)
+        NumEqualVerify(BinToNum(fung_b), 1)
+
+        {amt_b, id_b} = Split(r5, 8)
+        # EN: Add a zero byte before numeric conversion so the amount is treated as unsigned.
+        # ZH: 转数字前补一个零字节，使金额按无符号数处理。
+        amt_chk = GreaterOrEqual(BinToNum(Cat(amt_b, 0x00)), self.amt)
+        NumEqualVerify(amt_chk, 1)
+
+        EqualVerify(id_b, self.inscriptionId)

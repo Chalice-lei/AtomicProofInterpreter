@@ -1,0 +1,5 @@
+# 测试大于等于运算符：整数与固定值比较
+Contract OperatorGeWithLiteralTest:
+    def test_ge_literal(a: int, b: int, c: int, d: int):
+        # is_ge_zero: bool = a >= 0
+        is_ge_ten: bool = d >= 10

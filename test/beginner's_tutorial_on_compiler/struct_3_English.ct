@@ -1,0 +1,11 @@
+Contract ProductManagement:
+    # Define struct
+    Struct Product:
+        price: int
+        quantity: int
+        name: string
+    
+    def process_products(products: Product[3]):   
+        # Access fields of struct array elements
+        first_price: int = products[0].price
+        second_name: string = products[1].name

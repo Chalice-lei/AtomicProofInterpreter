@@ -1,0 +1,31 @@
+Contract BitShiftFunctionsTest:
+    def test_all_shift_functions():
+        a: int = 3
+        b: int = -3
+        c: int = 0
+        d: int = 2
+
+        # 测试左移函数 ShiftLeft
+        # 正数左移
+        NumEqualVerify(Lshift(a, d), 12)  # 3 << 2 = 12 (二进制 11 << 2 = 1100)
+        
+        # 负数左移
+        NumEqualVerify(Lshift(b, d), 0)   # -3 << 2 = -12
+        
+        # 零左移
+        NumEqualVerify(Lshift(c, d), 0)   # 0 << 任何数都为0
+
+        # x: int = 12
+        # y: int = -12
+        # z: int = 0
+        # k: int = 2
+        
+        # 测试右移函数 ShiftRight
+        # 正数右移
+        # NumEqualVerify(Rshift(x, k), 3)   # 12 >> 2 = 3 (二进制 1100 >> 2 = 11)
+        
+        # 负数右移（保持符号位）
+        # NumEqualVerify(Rshift(y, k), -3)  # -12 >> 2 = -3
+        
+        # 零右移
+        # NumEqualVerify(Rshift(z, k), 0)   # 0 >> 任何数都为0

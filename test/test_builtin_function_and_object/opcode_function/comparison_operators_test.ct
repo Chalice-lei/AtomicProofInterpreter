@@ -1,0 +1,14 @@
+Contract ComparisonOperatorsTest:
+    def test_all_comparison_functions():
+        s1: string = "hello"
+        s2: string = "world"
+
+        # 测试Equal
+        # Equal(s1, "hello")
+        # Equal(s1, s2)
+
+        # 测试EqualVerify（成功案例）
+        EqualVerify(s1, "hello")  # 无异常
+
+        # 测试EqualVerify（失败案例）
+        EqualVerify(s1, s2)

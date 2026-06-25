@@ -1,0 +1,5 @@
+# 测试setAlt函数的基本功能
+Contract SetAltFunctionTest:
+    def test_setalt(a: int, b: int, c: int, d: int):
+        setAlt(c)
+    

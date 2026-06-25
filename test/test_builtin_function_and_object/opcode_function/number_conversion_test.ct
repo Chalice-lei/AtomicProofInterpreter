@@ -1,0 +1,21 @@
+Contract NumberConversionTest:
+    def test_conversion_functions():
+        # 测试NumToBin
+        # a: int = 10
+        # b: int = 2
+        # c: int = 5
+        # d: int = 4
+        # NumToBin(a, b)   # 2字节
+        # NumToBin(c, d)   # 补0
+
+        # 测试BinToNum
+        # h1: hex = 0x3456
+        # BinToNum(h1)
+
+        # 测试Size
+        s1: string = "hello"
+        h2: hex = 0x1234
+        Size(s1)
+        Size(h2)
+        # NumEqualVerify(Size(s1), 5)
+        # NumEqualVerify(Size(h2), 2)

@@ -1,0 +1,7 @@
+Contract TokenContract:
+    def get_value():
+        # self 成员可以多次使用，无需克隆
+        result1: int = self.value + 10
+        result2: int = self.value * 2
+        # 可以多次访问同一个成员变量
+        result3: int = self.value - 5

@@ -1,0 +1,69 @@
+Contract OrderBookSellContract:
+    Struct Input:
+        Data: string
+
+    Struct Script:
+        SuffixData: string
+        PartialHash: string
+        Size: number
+
+    Struct Output:
+        Value: number
+        LockingScript: Script
+
+    Struct PreTX:
+        VLIO: string
+        Inputs: Input[10]
+        UnlockingScriptHash: string
+        Outputs: Output[10]
+
+    Struct CurrentTX:
+        Outputs: Output[10]
+
+    def verifyPreTX(pretx: PreTX):
+        vout = BinToNum(BVM.unlockingInput.Slice(32, 4)) #获取code在父交易中输出的位置
+        vout_copy = vout.Clone()
+        #取到code_data
+        code_data = pretx.Outputs[vout_copy].LockingScript.SuffixData.Clone()
+        { hold_address, code_data } = Split(code_data, 20)
+        { sale_volume, code_data } = Split(code_data, 8)
+        Delete(sale_volume)
+        { token_partialhash, code_data } = Split(code_data, 32)
+        { fee_rate, code_data } = Split(code_data, 8)
+        { unit_price, code_data } = Split(code_data, 8)
+        Delete(code_data)
+        SetAlt(unit_price)
+        SetAlt(fee_rate)
+        SetAlt(token_partialhash)
+        SetAlt(hold_address)
+
+        #取到code_value，转换为数值
+        vout_copy = vout.Clone()
+        code_value = BinToNum(pretx.Outputs[vout_copy].Value.Clone())
+        SetAlt(code_value)
+
+        #取到code_partialhash和code_size
+        vout_copy = vout.Clone()
+        code_partialhash = pretx.Outputs[vout_copy].LockingScript.PartialHash.Clone()
+        SetAlt(code_partialhash)
+        code_size = pretx.Outputs[vout].LockingScript.Size.Clone()
+        SetAlt(code_size)
+
+        #验证父交易
+        #拼接输出
+        tx_data = Push(0)
+        SetAlt(tx_data)
+        for i in Range(9, -1, -1):
+            size_copy = pretx.Outputs[i].LockingScript.Size.Clone()
+            if size_copy != 0:
+                tx_data_temp = PartialHash(pretx.Outputs[i].LockingScript.SuffixData, pretx.Outputs[i].LockingScript.PartialHash, pretx.Outputs[i].LockingScript.Size)
+                tx_data_temp = Cat(pretx.Outputs[i].Value, tx_data_temp)
+                SetMain(tx_data)
+                tx_data = Cat(tx_data_temp, tx_data)
+                SetAlt(tx_data)
+                #Keep(tx_data)
+            else:
+                Delete(pretx.Outputs[i].LockingScript.Size)
+                Delete(pretx.Outputs[i].LockingScript.PartialHash)
+                Delete(pretx.Outputs[i].LockingScript.SuffixData)
+                Delete(pretx.Outputs[i].Value)

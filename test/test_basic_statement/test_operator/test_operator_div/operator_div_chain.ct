@@ -1,0 +1,7 @@
+# 测试除法运算符：多个整数连续相除
+Contract OperatorDivChainTest:
+    def test_div_chain(a: int, b: int, c: int, d: int):
+        # 三个参数连续相除
+        # quot3: int = a / b / c
+        # 四个参数连续相除
+        quot4: int = a / b / c / d

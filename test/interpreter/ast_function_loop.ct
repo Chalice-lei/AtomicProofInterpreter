@@ -1,0 +1,12 @@
+Contract ASTFunctionLoop:
+    def _double(x: int):
+        Return(x * 2)
+
+    def main():
+        total: int = 0
+        values: int[] = [1, 2, 3]
+
+        for i in Range(0, 3):
+            total = total + values[i]
+
+        Return(_double(total.Clone()))

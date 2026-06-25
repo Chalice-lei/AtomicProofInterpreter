@@ -1,0 +1,10 @@
+Contract MinMaxFunctionsTest:
+    def test_all_min_max_functions():
+        a: int = 3
+        b: int = 5
+
+        # 测试Min
+        # NumEqualVerify(Min(3, 5), 3)
+
+        # 测试Max
+        NumEqualVerify(Max(3, 5), 5)

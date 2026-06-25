@@ -1,0 +1,18 @@
+# 测试结构体数组中字段的修改
+Contract ArrayStructFieldModifyTest:
+    Struct Student:
+        score: int
+        name: string
+
+    def test_struct_array_modify():
+        # 声明并初始化结构体数组
+        students: Student[3] = [{80, "Tom"}, {75, "Jerry"}, {90, "Bob"}]
+
+        # 访问结构体数组的字段
+        # val: int = students[0].score
+
+        # 赋值结构体数组中的字段
+        students[0].score = 85  # 修改第一个元素的score
+        # students[0].score = students[0].score + 5  # 基于现有值修改
+        # students[1].name = "Jerry_update"  # 修改第二个元素的name
+        

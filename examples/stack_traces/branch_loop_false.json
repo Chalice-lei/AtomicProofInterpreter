@@ -1,0 +1,2371 @@
+{
+  "bytecode": [
+    "OP_0",
+    "OP_GREATERTHAN",
+    "OP_IF",
+    "OP_0",
+    "OP_1ADD",
+    "OP_DROP",
+    "OP_ELSE",
+    "OP_0",
+    "OP_2",
+    "OP_ADD",
+    "OP_DROP",
+    "OP_ENDIF",
+    "OP_0",
+    "OP_0",
+    "OP_ADD",
+    "OP_1",
+    "OP_ADD",
+    "OP_2",
+    "OP_ADD",
+    "OP_RETURN",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE"
+  ],
+  "debugInfo": {
+    "contractName": "DebugBranchLoopScope",
+    "functions": [
+      {
+        "endPC": 20,
+        "isPublic": true,
+        "location": {
+          "column": 9,
+          "endColumn": 9,
+          "endLine": 6,
+          "file": "test/debugger_regression/debug_branch_loop_scope.ct",
+          "line": 6
+        },
+        "name": "test_branch_loop",
+        "startPC": 0
+      }
+    ],
+    "lineToPC": {
+      "11": [
+        3,
+        4,
+        5,
+        6
+      ],
+      "14": [
+        7,
+        8,
+        9,
+        10,
+        11
+      ],
+      "17": [
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18
+      ],
+      "19": [
+        19
+      ],
+      "9": [
+        0,
+        1,
+        2
+      ]
+    },
+    "sourceFile": "test/debugger_regression/debug_branch_loop_scope.ct"
+  },
+  "format": "apc-stack-trace",
+  "lifecycle": {
+    "elements": [
+      {
+        "consumed": true,
+        "consumedAt": 1,
+        "elementId": "e1",
+        "events": [
+          {
+            "opcode": "OP_0",
+            "pc": 0,
+            "sourceFile": "test/debugger_regression/debug_branch_loop_scope.ct",
+            "sourceLine": 9,
+            "stack": "main",
+            "step": 0,
+            "type": "initial"
+          },
+          {
+            "opcode": "OP_GREATERTHAN",
+            "pc": 1,
+            "sourceFile": "test/debugger_regression/debug_branch_loop_scope.ct",
+            "sourceLine": 9,
+            "stack": "main",
+            "step": 1,
+            "type": "pop"
+          }
+        ],
+        "hex": "0x81",
+        "lastStack": "main",
+        "lastStep": 1,
+        "originStack": "main",
+        "originStep": 0
+      },
+      {
+        "consumed": true,
+        "consumedAt": 2,
+        "elementId": "e2",
+        "events": [
+          {
+            "opcode": "OP_0",
+            "pc": 0,
+            "sourceFile": "test/debugger_regression/debug_branch_loop_scope.ct",
+            "sourceLine": 9,
+            "stack": "main",
+            "step": 0,
+            "type": "push"
+          },
+          {
+            "opcode": "OP_IF",
+            "pc": 2,
+            "sourceFile": "test/debugger_regression/debug_branch_loop_scope.ct",
+            "sourceLine": 9,
+            "stack": "main",
+            "step": 2,
+            "type": "pop"
+          }
+        ],
+        "hex": "0x",
+        "lastStack": "main",
+        "lastStep": 2,
+        "originStack": "main",
+        "originStep": 0
+      },
+      {
+        "consumed": true,
+        "consumedAt": 9,
+        "elementId": "e3",
+        "events": [
+          {
+            "opcode": "OP_0",
+            "pc": 7,
+            "sourceFile": "test/debugger_regression/debug_branch_loop_scope.ct",
+            "sourceLine": 14,
+            "stack": "main",
+            "step": 7,
+            "type": "push"
+          },
+          {
+            "opcode": "OP_ADD",
+            "pc": 9,
+            "sourceFile": "test/debugger_regression/debug_branch_loop_scope.ct",
+            "sourceLine": 14,
+            "stack": "main",
+            "step": 9,
+            "type": "pop"
+          }
+        ],
+        "hex": "0x",
+        "lastStack": "main",
+        "lastStep": 9,
+        "originStack": "main",
+        "originStep": 7
+      },
+      {
+        "consumed": true,
+        "consumedAt": 10,
+        "elementId": "e4",
+        "events": [
+          {
+            "opcode": "OP_2",
+            "pc": 8,
+            "sourceFile": "test/debugger_regression/debug_branch_loop_scope.ct",
+            "sourceLine": 14,
+            "stack": "main",
+            "step": 8,
+            "type": "push"
+          },
+          {
+            "opcode": "OP_DROP",
+            "pc": 10,
+            "sourceFile": "test/debugger_regression/debug_branch_loop_scope.ct",
+            "sourceLine": 14,
+            "stack": "main",
+            "step": 10,
+            "type": "pop"
+          }
+        ],
+        "hex": "0x02",
+        "lastStack": "main",
+        "lastStep": 10,
+        "originStack": "main",
+        "originStep": 8
+      },
+      {
+        "consumed": true,
+        "consumedAt": 16,
+        "elementId": "e5",
+        "events": [
+          {
+            "opcode": "OP_0",
+            "pc": 12,
+            "sourceFile": "test/debugger_regression/debug_branch_loop_scope.ct",
+            "sourceLine": 17,
+            "stack": "main",
+            "step": 12,
+            "type": "push"
+          },
+          {
+            "opcode": "OP_ADD",
+            "pc": 16,
+            "sourceFile": "test/debugger_regression/debug_branch_loop_scope.ct",
+            "sourceLine": 17,
+            "stack": "main",
+            "step": 16,
+            "type": "pop"
+          }
+        ],
+        "hex": "0x",
+        "lastStack": "main",
+        "lastStep": 16,
+        "originStack": "main",
+        "originStep": 12
+      },
+      {
+        "consumed": true,
+        "consumedAt": 14,
+        "elementId": "e6",
+        "events": [
+          {
+            "opcode": "OP_0",
+            "pc": 13,
+            "sourceFile": "test/debugger_regression/debug_branch_loop_scope.ct",
+            "sourceLine": 17,
+            "stack": "main",
+            "step": 13,
+            "type": "push"
+          },
+          {
+            "opcode": "OP_ADD",
+            "pc": 14,
+            "sourceFile": "test/debugger_regression/debug_branch_loop_scope.ct",
+            "sourceLine": 17,
+            "stack": "main",
+            "step": 14,
+            "type": "pop"
+          }
+        ],
+        "hex": "0x",
+        "lastStack": "main",
+        "lastStep": 14,
+        "originStack": "main",
+        "originStep": 13
+      },
+      {
+        "consumed": true,
+        "consumedAt": 18,
+        "elementId": "e7",
+        "events": [
+          {
+            "opcode": "OP_1",
+            "pc": 15,
+            "sourceFile": "test/debugger_regression/debug_branch_loop_scope.ct",
+            "sourceLine": 17,
+            "stack": "main",
+            "step": 15,
+            "type": "push"
+          },
+          {
+            "opcode": "OP_ADD",
+            "pc": 18,
+            "sourceFile": "test/debugger_regression/debug_branch_loop_scope.ct",
+            "sourceLine": 17,
+            "stack": "main",
+            "step": 18,
+            "type": "pop"
+          }
+        ],
+        "hex": "0x01",
+        "lastStack": "main",
+        "lastStep": 18,
+        "originStack": "main",
+        "originStep": 15
+      },
+      {
+        "consumed": true,
+        "consumedAt": 18,
+        "elementId": "e8",
+        "events": [
+          {
+            "opcode": "OP_2",
+            "pc": 17,
+            "sourceFile": "test/debugger_regression/debug_branch_loop_scope.ct",
+            "sourceLine": 17,
+            "stack": "main",
+            "step": 17,
+            "type": "push"
+          },
+          {
+            "opcode": "OP_ADD",
+            "pc": 18,
+            "sourceFile": "test/debugger_regression/debug_branch_loop_scope.ct",
+            "sourceLine": 17,
+            "stack": "main",
+            "step": 18,
+            "type": "pop"
+          }
+        ],
+        "hex": "0x02",
+        "lastStack": "main",
+        "lastStep": 18,
+        "originStack": "main",
+        "originStep": 17
+      },
+      {
+        "consumed": false,
+        "elementId": "e9",
+        "events": [
+          {
+            "opcode": "OP_ADD",
+            "pc": 18,
+            "sourceFile": "test/debugger_regression/debug_branch_loop_scope.ct",
+            "sourceLine": 17,
+            "stack": "main",
+            "step": 18,
+            "type": "push"
+          }
+        ],
+        "hex": "0x03",
+        "lastStack": "main",
+        "lastStep": 19,
+        "originStack": "main",
+        "originStep": 18
+      }
+    ],
+    "idFormat": "e<number>",
+    "matching": "synthetic: prefer same stack/index, same stack/value, then cross-stack/value"
+  },
+  "source": {
+    "file": "test/debugger_regression/debug_branch_loop_scope.ct",
+    "lines": [
+      "# Debugger regression: source mapping and variable visibility across scopes.",
+      "# Suggested checks:",
+      "#   break on the if body, else body, loop body, and final Return.",
+      "#   locals/info variables should reflect current scope without losing outer vars.",
+      "Contract DebugBranchLoopScope:",
+      "    def test_branch_loop(flag: int):",
+      "        acc: int = 0",
+      "",
+      "        if flag > 0:",
+      "            branch_value: int = 1",
+      "            acc = acc + branch_value",
+      "        else:",
+      "            fallback: int = 2",
+      "            acc = acc + fallback",
+      "",
+      "        for i in Range(3):",
+      "            acc = acc + i",
+      "",
+      "        Return(acc)",
+      ""
+    ]
+  },
+  "stackOrder": "bottom-to-top",
+  "steps": [
+    {
+      "altStack": {
+        "after": [],
+        "before": []
+      },
+      "altStackAfter": [],
+      "altStackBefore": [],
+      "effects": {
+        "altStack": {
+          "popped": [],
+          "pushed": [],
+          "reordered": false,
+          "sizeAfter": 0,
+          "sizeBefore": 0
+        },
+        "mainStack": {
+          "popped": [],
+          "pushed": [
+            {
+              "byteLength": 0,
+              "depth": 0,
+              "elementId": "e2",
+              "hex": "0x",
+              "index": 0,
+              "int": 0,
+              "intString": "0",
+              "originStack": "main",
+              "originStep": 0
+            }
+          ],
+          "reordered": false,
+          "sizeAfter": 2,
+          "sizeBefore": 1
+        },
+        "moves": []
+      },
+      "functionName": "test_branch_loop",
+      "instruction": "OP_0",
+      "mainStack": {
+        "after": [
+          {
+            "byteLength": 1,
+            "depth": 1,
+            "elementId": "e1",
+            "hex": "0x81",
+            "index": 0,
+            "int": -1,
+            "intString": "-1",
+            "originStack": "main",
+            "originStep": 0
+          },
+          {
+            "byteLength": 0,
+            "depth": 0,
+            "elementId": "e2",
+            "hex": "0x",
+            "index": 1,
+            "int": 0,
+            "intString": "0",
+            "originStack": "main",
+            "originStep": 0
+          }
+        ],
+        "before": [
+          {
+            "byteLength": 1,
+            "depth": 0,
+            "elementId": "e1",
+            "hex": "0x81",
+            "index": 0,
+            "int": -1,
+            "intString": "-1",
+            "originStack": "main",
+            "originStep": 0
+          }
+        ]
+      },
+      "mainStackAfter": [
+        {
+          "byteLength": 1,
+          "depth": 1,
+          "elementId": "e1",
+          "hex": "0x81",
+          "index": 0,
+          "int": -1,
+          "intString": "-1",
+          "originStack": "main",
+          "originStep": 0
+        },
+        {
+          "byteLength": 0,
+          "depth": 0,
+          "elementId": "e2",
+          "hex": "0x",
+          "index": 1,
+          "int": 0,
+          "intString": "0",
+          "originStack": "main",
+          "originStep": 0
+        }
+      ],
+      "mainStackBefore": [
+        {
+          "byteLength": 1,
+          "depth": 0,
+          "elementId": "e1",
+          "hex": "0x81",
+          "index": 0,
+          "int": -1,
+          "intString": "-1",
+          "originStack": "main",
+          "originStep": 0
+        }
+      ],
+      "opcode": "OP_0",
+      "operand": "",
+      "pc": 0,
+      "source": {
+        "column": 19,
+        "endColumn": 19,
+        "endLine": 9,
+        "file": "test/debugger_regression/debug_branch_loop_scope.ct",
+        "line": 9
+      },
+      "sourceFile": "test/debugger_regression/debug_branch_loop_scope.ct",
+      "sourceLine": 9,
+      "step": 0
+    },
+    {
+      "altStack": {
+        "after": [],
+        "before": []
+      },
+      "altStackAfter": [],
+      "altStackBefore": [],
+      "effects": {
+        "altStack": {
+          "popped": [],
+          "pushed": [],
+          "reordered": false,
+          "sizeAfter": 0,
+          "sizeBefore": 0
+        },
+        "mainStack": {
+          "popped": [
+            {
+              "byteLength": 1,
+              "depth": 0,
+              "elementId": "e1",
+              "hex": "0x81",
+              "index": 0,
+              "int": -1,
+              "intString": "-1",
+              "originStack": "main",
+              "originStep": 0
+            }
+          ],
+          "pushed": [],
+          "reordered": false,
+          "sizeAfter": 1,
+          "sizeBefore": 2
+        },
+        "moves": []
+      },
+      "functionName": "test_branch_loop",
+      "instruction": "OP_GREATERTHAN",
+      "mainStack": {
+        "after": [
+          {
+            "byteLength": 0,
+            "depth": 0,
+            "elementId": "e2",
+            "hex": "0x",
+            "index": 0,
+            "int": 0,
+            "intString": "0",
+            "originStack": "main",
+            "originStep": 0
+          }
+        ],
+        "before": [
+          {
+            "byteLength": 1,
+            "depth": 1,
+            "elementId": "e1",
+            "hex": "0x81",
+            "index": 0,
+            "int": -1,
+            "intString": "-1",
+            "originStack": "main",
+            "originStep": 0
+          },
+          {
+            "byteLength": 0,
+            "depth": 0,
+            "elementId": "e2",
+            "hex": "0x",
+            "index": 1,
+            "int": 0,
+            "intString": "0",
+            "originStack": "main",
+            "originStep": 0
+          }
+        ]
+      },
+      "mainStackAfter": [
+        {
+          "byteLength": 0,
+          "depth": 0,
+          "elementId": "e2",
+          "hex": "0x",
+          "index": 0,
+          "int": 0,
+          "intString": "0",
+          "originStack": "main",
+          "originStep": 0
+        }
+      ],
+      "mainStackBefore": [
+        {
+          "byteLength": 1,
+          "depth": 1,
+          "elementId": "e1",
+          "hex": "0x81",
+          "index": 0,
+          "int": -1,
+          "intString": "-1",
+          "originStack": "main",
+          "originStep": 0
+        },
+        {
+          "byteLength": 0,
+          "depth": 0,
+          "elementId": "e2",
+          "hex": "0x",
+          "index": 1,
+          "int": 0,
+          "intString": "0",
+          "originStack": "main",
+          "originStep": 0
+        }
+      ],
+      "opcode": "OP_GREATERTHAN",
+      "operand": "",
+      "pc": 1,
+      "source": {
+        "column": 19,
+        "endColumn": 19,
+        "endLine": 9,
+        "file": "test/debugger_regression/debug_branch_loop_scope.ct",
+        "line": 9
+      },
+      "sourceFile": "test/debugger_regression/debug_branch_loop_scope.ct",
+      "sourceLine": 9,
+      "step": 1
+    },
+    {
+      "altStack": {
+        "after": [],
+        "before": []
+      },
+      "altStackAfter": [],
+      "altStackBefore": [],
+      "effects": {
+        "altStack": {
+          "popped": [],
+          "pushed": [],
+          "reordered": false,
+          "sizeAfter": 0,
+          "sizeBefore": 0
+        },
+        "mainStack": {
+          "popped": [
+            {
+              "byteLength": 0,
+              "depth": 0,
+              "elementId": "e2",
+              "hex": "0x",
+              "index": 0,
+              "int": 0,
+              "intString": "0",
+              "originStack": "main",
+              "originStep": 0
+            }
+          ],
+          "pushed": [],
+          "reordered": false,
+          "sizeAfter": 0,
+          "sizeBefore": 1
+        },
+        "moves": []
+      },
+      "functionName": "test_branch_loop",
+      "instruction": "OP_IF",
+      "mainStack": {
+        "after": [],
+        "before": [
+          {
+            "byteLength": 0,
+            "depth": 0,
+            "elementId": "e2",
+            "hex": "0x",
+            "index": 0,
+            "int": 0,
+            "intString": "0",
+            "originStack": "main",
+            "originStep": 0
+          }
+        ]
+      },
+      "mainStackAfter": [],
+      "mainStackBefore": [
+        {
+          "byteLength": 0,
+          "depth": 0,
+          "elementId": "e2",
+          "hex": "0x",
+          "index": 0,
+          "int": 0,
+          "intString": "0",
+          "originStack": "main",
+          "originStep": 0
+        }
+      ],
+      "opcode": "OP_IF",
+      "operand": "",
+      "pc": 2,
+      "source": {
+        "column": 19,
+        "endColumn": 19,
+        "endLine": 9,
+        "file": "test/debugger_regression/debug_branch_loop_scope.ct",
+        "line": 9
+      },
+      "sourceFile": "test/debugger_regression/debug_branch_loop_scope.ct",
+      "sourceLine": 9,
+      "step": 2
+    },
+    {
+      "altStack": {
+        "after": [],
+        "before": []
+      },
+      "altStackAfter": [],
+      "altStackBefore": [],
+      "effects": {
+        "altStack": {
+          "popped": [],
+          "pushed": [],
+          "reordered": false,
+          "sizeAfter": 0,
+          "sizeBefore": 0
+        },
+        "mainStack": {
+          "popped": [],
+          "pushed": [],
+          "reordered": false,
+          "sizeAfter": 0,
+          "sizeBefore": 0
+        },
+        "moves": []
+      },
+      "functionName": "test_branch_loop",
+      "instruction": "OP_0",
+      "mainStack": {
+        "after": [],
+        "before": []
+      },
+      "mainStackAfter": [],
+      "mainStackBefore": [],
+      "opcode": "OP_0",
+      "operand": "",
+      "pc": 3,
+      "source": {
+        "column": 19,
+        "endColumn": 19,
+        "endLine": 11,
+        "file": "test/debugger_regression/debug_branch_loop_scope.ct",
+        "line": 11
+      },
+      "sourceFile": "test/debugger_regression/debug_branch_loop_scope.ct",
+      "sourceLine": 11,
+      "step": 3
+    },
+    {
+      "altStack": {
+        "after": [],
+        "before": []
+      },
+      "altStackAfter": [],
+      "altStackBefore": [],
+      "effects": {
+        "altStack": {
+          "popped": [],
+          "pushed": [],
+          "reordered": false,
+          "sizeAfter": 0,
+          "sizeBefore": 0
+        },
+        "mainStack": {
+          "popped": [],
+          "pushed": [],
+          "reordered": false,
+          "sizeAfter": 0,
+          "sizeBefore": 0
+        },
+        "moves": []
+      },
+      "functionName": "test_branch_loop",
+      "instruction": "OP_1ADD",
+      "mainStack": {
+        "after": [],
+        "before": []
+      },
+      "mainStackAfter": [],
+      "mainStackBefore": [],
+      "opcode": "OP_1ADD",
+      "operand": "",
+      "pc": 4,
+      "source": {
+        "column": 19,
+        "endColumn": 19,
+        "endLine": 11,
+        "file": "test/debugger_regression/debug_branch_loop_scope.ct",
+        "line": 11
+      },
+      "sourceFile": "test/debugger_regression/debug_branch_loop_scope.ct",
+      "sourceLine": 11,
+      "step": 4
+    },
+    {
+      "altStack": {
+        "after": [],
+        "before": []
+      },
+      "altStackAfter": [],
+      "altStackBefore": [],
+      "effects": {
+        "altStack": {
+          "popped": [],
+          "pushed": [],
+          "reordered": false,
+          "sizeAfter": 0,
+          "sizeBefore": 0
+        },
+        "mainStack": {
+          "popped": [],
+          "pushed": [],
+          "reordered": false,
+          "sizeAfter": 0,
+          "sizeBefore": 0
+        },
+        "moves": []
+      },
+      "functionName": "test_branch_loop",
+      "instruction": "OP_DROP",
+      "mainStack": {
+        "after": [],
+        "before": []
+      },
+      "mainStackAfter": [],
+      "mainStackBefore": [],
+      "opcode": "OP_DROP",
+      "operand": "",
+      "pc": 5,
+      "source": {
+        "column": 13,
+        "endColumn": 13,
+        "endLine": 11,
+        "file": "test/debugger_regression/debug_branch_loop_scope.ct",
+        "line": 11
+      },
+      "sourceFile": "test/debugger_regression/debug_branch_loop_scope.ct",
+      "sourceLine": 11,
+      "step": 5
+    },
+    {
+      "altStack": {
+        "after": [],
+        "before": []
+      },
+      "altStackAfter": [],
+      "altStackBefore": [],
+      "effects": {
+        "altStack": {
+          "popped": [],
+          "pushed": [],
+          "reordered": false,
+          "sizeAfter": 0,
+          "sizeBefore": 0
+        },
+        "mainStack": {
+          "popped": [],
+          "pushed": [],
+          "reordered": false,
+          "sizeAfter": 0,
+          "sizeBefore": 0
+        },
+        "moves": []
+      },
+      "functionName": "test_branch_loop",
+      "instruction": "OP_ELSE",
+      "mainStack": {
+        "after": [],
+        "before": []
+      },
+      "mainStackAfter": [],
+      "mainStackBefore": [],
+      "opcode": "OP_ELSE",
+      "operand": "",
+      "pc": 6,
+      "source": {
+        "column": 13,
+        "endColumn": 13,
+        "endLine": 11,
+        "file": "test/debugger_regression/debug_branch_loop_scope.ct",
+        "line": 11
+      },
+      "sourceFile": "test/debugger_regression/debug_branch_loop_scope.ct",
+      "sourceLine": 11,
+      "step": 6
+    },
+    {
+      "altStack": {
+        "after": [],
+        "before": []
+      },
+      "altStackAfter": [],
+      "altStackBefore": [],
+      "effects": {
+        "altStack": {
+          "popped": [],
+          "pushed": [],
+          "reordered": false,
+          "sizeAfter": 0,
+          "sizeBefore": 0
+        },
+        "mainStack": {
+          "popped": [],
+          "pushed": [
+            {
+              "byteLength": 0,
+              "depth": 0,
+              "elementId": "e3",
+              "hex": "0x",
+              "index": 0,
+              "int": 0,
+              "intString": "0",
+              "originStack": "main",
+              "originStep": 7
+            }
+          ],
+          "reordered": false,
+          "sizeAfter": 1,
+          "sizeBefore": 0
+        },
+        "moves": []
+      },
+      "functionName": "test_branch_loop",
+      "instruction": "OP_0",
+      "mainStack": {
+        "after": [
+          {
+            "byteLength": 0,
+            "depth": 0,
+            "elementId": "e3",
+            "hex": "0x",
+            "index": 0,
+            "int": 0,
+            "intString": "0",
+            "originStack": "main",
+            "originStep": 7
+          }
+        ],
+        "before": []
+      },
+      "mainStackAfter": [
+        {
+          "byteLength": 0,
+          "depth": 0,
+          "elementId": "e3",
+          "hex": "0x",
+          "index": 0,
+          "int": 0,
+          "intString": "0",
+          "originStack": "main",
+          "originStep": 7
+        }
+      ],
+      "mainStackBefore": [],
+      "opcode": "OP_0",
+      "operand": "",
+      "pc": 7,
+      "source": {
+        "column": 19,
+        "endColumn": 19,
+        "endLine": 14,
+        "file": "test/debugger_regression/debug_branch_loop_scope.ct",
+        "line": 14
+      },
+      "sourceFile": "test/debugger_regression/debug_branch_loop_scope.ct",
+      "sourceLine": 14,
+      "step": 7
+    },
+    {
+      "altStack": {
+        "after": [],
+        "before": []
+      },
+      "altStackAfter": [],
+      "altStackBefore": [],
+      "effects": {
+        "altStack": {
+          "popped": [],
+          "pushed": [],
+          "reordered": false,
+          "sizeAfter": 0,
+          "sizeBefore": 0
+        },
+        "mainStack": {
+          "popped": [],
+          "pushed": [
+            {
+              "byteLength": 1,
+              "depth": 0,
+              "elementId": "e4",
+              "hex": "0x02",
+              "index": 0,
+              "int": 2,
+              "intString": "2",
+              "originStack": "main",
+              "originStep": 8
+            }
+          ],
+          "reordered": false,
+          "sizeAfter": 2,
+          "sizeBefore": 1
+        },
+        "moves": []
+      },
+      "functionName": "test_branch_loop",
+      "instruction": "OP_2",
+      "mainStack": {
+        "after": [
+          {
+            "byteLength": 0,
+            "depth": 1,
+            "elementId": "e3",
+            "hex": "0x",
+            "index": 0,
+            "int": 0,
+            "intString": "0",
+            "originStack": "main",
+            "originStep": 7
+          },
+          {
+            "byteLength": 1,
+            "depth": 0,
+            "elementId": "e4",
+            "hex": "0x02",
+            "index": 1,
+            "int": 2,
+            "intString": "2",
+            "originStack": "main",
+            "originStep": 8
+          }
+        ],
+        "before": [
+          {
+            "byteLength": 0,
+            "depth": 0,
+            "elementId": "e3",
+            "hex": "0x",
+            "index": 0,
+            "int": 0,
+            "intString": "0",
+            "originStack": "main",
+            "originStep": 7
+          }
+        ]
+      },
+      "mainStackAfter": [
+        {
+          "byteLength": 0,
+          "depth": 1,
+          "elementId": "e3",
+          "hex": "0x",
+          "index": 0,
+          "int": 0,
+          "intString": "0",
+          "originStack": "main",
+          "originStep": 7
+        },
+        {
+          "byteLength": 1,
+          "depth": 0,
+          "elementId": "e4",
+          "hex": "0x02",
+          "index": 1,
+          "int": 2,
+          "intString": "2",
+          "originStack": "main",
+          "originStep": 8
+        }
+      ],
+      "mainStackBefore": [
+        {
+          "byteLength": 0,
+          "depth": 0,
+          "elementId": "e3",
+          "hex": "0x",
+          "index": 0,
+          "int": 0,
+          "intString": "0",
+          "originStack": "main",
+          "originStep": 7
+        }
+      ],
+      "opcode": "OP_2",
+      "operand": "",
+      "pc": 8,
+      "source": {
+        "column": 25,
+        "endColumn": 0,
+        "endLine": 0,
+        "file": "test/debugger_regression/debug_branch_loop_scope.ct",
+        "line": 14
+      },
+      "sourceFile": "test/debugger_regression/debug_branch_loop_scope.ct",
+      "sourceLine": 14,
+      "step": 8
+    },
+    {
+      "altStack": {
+        "after": [],
+        "before": []
+      },
+      "altStackAfter": [],
+      "altStackBefore": [],
+      "effects": {
+        "altStack": {
+          "popped": [],
+          "pushed": [],
+          "reordered": false,
+          "sizeAfter": 0,
+          "sizeBefore": 0
+        },
+        "mainStack": {
+          "popped": [
+            {
+              "byteLength": 0,
+              "depth": 0,
+              "elementId": "e3",
+              "hex": "0x",
+              "index": 0,
+              "int": 0,
+              "intString": "0",
+              "originStack": "main",
+              "originStep": 7
+            }
+          ],
+          "pushed": [],
+          "reordered": false,
+          "sizeAfter": 1,
+          "sizeBefore": 2
+        },
+        "moves": []
+      },
+      "functionName": "test_branch_loop",
+      "instruction": "OP_ADD",
+      "mainStack": {
+        "after": [
+          {
+            "byteLength": 1,
+            "depth": 0,
+            "elementId": "e4",
+            "hex": "0x02",
+            "index": 0,
+            "int": 2,
+            "intString": "2",
+            "originStack": "main",
+            "originStep": 8
+          }
+        ],
+        "before": [
+          {
+            "byteLength": 0,
+            "depth": 1,
+            "elementId": "e3",
+            "hex": "0x",
+            "index": 0,
+            "int": 0,
+            "intString": "0",
+            "originStack": "main",
+            "originStep": 7
+          },
+          {
+            "byteLength": 1,
+            "depth": 0,
+            "elementId": "e4",
+            "hex": "0x02",
+            "index": 1,
+            "int": 2,
+            "intString": "2",
+            "originStack": "main",
+            "originStep": 8
+          }
+        ]
+      },
+      "mainStackAfter": [
+        {
+          "byteLength": 1,
+          "depth": 0,
+          "elementId": "e4",
+          "hex": "0x02",
+          "index": 0,
+          "int": 2,
+          "intString": "2",
+          "originStack": "main",
+          "originStep": 8
+        }
+      ],
+      "mainStackBefore": [
+        {
+          "byteLength": 0,
+          "depth": 1,
+          "elementId": "e3",
+          "hex": "0x",
+          "index": 0,
+          "int": 0,
+          "intString": "0",
+          "originStack": "main",
+          "originStep": 7
+        },
+        {
+          "byteLength": 1,
+          "depth": 0,
+          "elementId": "e4",
+          "hex": "0x02",
+          "index": 1,
+          "int": 2,
+          "intString": "2",
+          "originStack": "main",
+          "originStep": 8
+        }
+      ],
+      "opcode": "OP_ADD",
+      "operand": "",
+      "pc": 9,
+      "source": {
+        "column": 25,
+        "endColumn": 0,
+        "endLine": 0,
+        "file": "test/debugger_regression/debug_branch_loop_scope.ct",
+        "line": 14
+      },
+      "sourceFile": "test/debugger_regression/debug_branch_loop_scope.ct",
+      "sourceLine": 14,
+      "step": 9
+    },
+    {
+      "altStack": {
+        "after": [],
+        "before": []
+      },
+      "altStackAfter": [],
+      "altStackBefore": [],
+      "effects": {
+        "altStack": {
+          "popped": [],
+          "pushed": [],
+          "reordered": false,
+          "sizeAfter": 0,
+          "sizeBefore": 0
+        },
+        "mainStack": {
+          "popped": [
+            {
+              "byteLength": 1,
+              "depth": 0,
+              "elementId": "e4",
+              "hex": "0x02",
+              "index": 0,
+              "int": 2,
+              "intString": "2",
+              "originStack": "main",
+              "originStep": 8
+            }
+          ],
+          "pushed": [],
+          "reordered": false,
+          "sizeAfter": 0,
+          "sizeBefore": 1
+        },
+        "moves": []
+      },
+      "functionName": "test_branch_loop",
+      "instruction": "OP_DROP",
+      "mainStack": {
+        "after": [],
+        "before": [
+          {
+            "byteLength": 1,
+            "depth": 0,
+            "elementId": "e4",
+            "hex": "0x02",
+            "index": 0,
+            "int": 2,
+            "intString": "2",
+            "originStack": "main",
+            "originStep": 8
+          }
+        ]
+      },
+      "mainStackAfter": [],
+      "mainStackBefore": [
+        {
+          "byteLength": 1,
+          "depth": 0,
+          "elementId": "e4",
+          "hex": "0x02",
+          "index": 0,
+          "int": 2,
+          "intString": "2",
+          "originStack": "main",
+          "originStep": 8
+        }
+      ],
+      "opcode": "OP_DROP",
+      "operand": "",
+      "pc": 10,
+      "source": {
+        "column": 13,
+        "endColumn": 13,
+        "endLine": 14,
+        "file": "test/debugger_regression/debug_branch_loop_scope.ct",
+        "line": 14
+      },
+      "sourceFile": "test/debugger_regression/debug_branch_loop_scope.ct",
+      "sourceLine": 14,
+      "step": 10
+    },
+    {
+      "altStack": {
+        "after": [],
+        "before": []
+      },
+      "altStackAfter": [],
+      "altStackBefore": [],
+      "effects": {
+        "altStack": {
+          "popped": [],
+          "pushed": [],
+          "reordered": false,
+          "sizeAfter": 0,
+          "sizeBefore": 0
+        },
+        "mainStack": {
+          "popped": [],
+          "pushed": [],
+          "reordered": false,
+          "sizeAfter": 0,
+          "sizeBefore": 0
+        },
+        "moves": []
+      },
+      "functionName": "test_branch_loop",
+      "instruction": "OP_ENDIF",
+      "mainStack": {
+        "after": [],
+        "before": []
+      },
+      "mainStackAfter": [],
+      "mainStackBefore": [],
+      "opcode": "OP_ENDIF",
+      "operand": "",
+      "pc": 11,
+      "source": {
+        "column": 13,
+        "endColumn": 13,
+        "endLine": 14,
+        "file": "test/debugger_regression/debug_branch_loop_scope.ct",
+        "line": 14
+      },
+      "sourceFile": "test/debugger_regression/debug_branch_loop_scope.ct",
+      "sourceLine": 14,
+      "step": 11
+    },
+    {
+      "altStack": {
+        "after": [],
+        "before": []
+      },
+      "altStackAfter": [],
+      "altStackBefore": [],
+      "effects": {
+        "altStack": {
+          "popped": [],
+          "pushed": [],
+          "reordered": false,
+          "sizeAfter": 0,
+          "sizeBefore": 0
+        },
+        "mainStack": {
+          "popped": [],
+          "pushed": [
+            {
+              "byteLength": 0,
+              "depth": 0,
+              "elementId": "e5",
+              "hex": "0x",
+              "index": 0,
+              "int": 0,
+              "intString": "0",
+              "originStack": "main",
+              "originStep": 12
+            }
+          ],
+          "reordered": false,
+          "sizeAfter": 1,
+          "sizeBefore": 0
+        },
+        "moves": []
+      },
+      "functionName": "test_branch_loop",
+      "instruction": "OP_0",
+      "mainStack": {
+        "after": [
+          {
+            "byteLength": 0,
+            "depth": 0,
+            "elementId": "e5",
+            "hex": "0x",
+            "index": 0,
+            "int": 0,
+            "intString": "0",
+            "originStack": "main",
+            "originStep": 12
+          }
+        ],
+        "before": []
+      },
+      "mainStackAfter": [
+        {
+          "byteLength": 0,
+          "depth": 0,
+          "elementId": "e5",
+          "hex": "0x",
+          "index": 0,
+          "int": 0,
+          "intString": "0",
+          "originStack": "main",
+          "originStep": 12
+        }
+      ],
+      "mainStackBefore": [],
+      "opcode": "OP_0",
+      "operand": "",
+      "pc": 12,
+      "source": {
+        "column": 19,
+        "endColumn": 19,
+        "endLine": 17,
+        "file": "test/debugger_regression/debug_branch_loop_scope.ct",
+        "line": 17
+      },
+      "sourceFile": "test/debugger_regression/debug_branch_loop_scope.ct",
+      "sourceLine": 17,
+      "step": 12
+    },
+    {
+      "altStack": {
+        "after": [],
+        "before": []
+      },
+      "altStackAfter": [],
+      "altStackBefore": [],
+      "effects": {
+        "altStack": {
+          "popped": [],
+          "pushed": [],
+          "reordered": false,
+          "sizeAfter": 0,
+          "sizeBefore": 0
+        },
+        "mainStack": {
+          "popped": [],
+          "pushed": [
+            {
+              "byteLength": 0,
+              "depth": 0,
+              "elementId": "e6",
+              "hex": "0x",
+              "index": 0,
+              "int": 0,
+              "intString": "0",
+              "originStack": "main",
+              "originStep": 13
+            }
+          ],
+          "reordered": false,
+          "sizeAfter": 2,
+          "sizeBefore": 1
+        },
+        "moves": []
+      },
+      "functionName": "test_branch_loop",
+      "instruction": "OP_0",
+      "mainStack": {
+        "after": [
+          {
+            "byteLength": 0,
+            "depth": 1,
+            "elementId": "e5",
+            "hex": "0x",
+            "index": 0,
+            "int": 0,
+            "intString": "0",
+            "originStack": "main",
+            "originStep": 12
+          },
+          {
+            "byteLength": 0,
+            "depth": 0,
+            "elementId": "e6",
+            "hex": "0x",
+            "index": 1,
+            "int": 0,
+            "intString": "0",
+            "originStack": "main",
+            "originStep": 13
+          }
+        ],
+        "before": [
+          {
+            "byteLength": 0,
+            "depth": 0,
+            "elementId": "e5",
+            "hex": "0x",
+            "index": 0,
+            "int": 0,
+            "intString": "0",
+            "originStack": "main",
+            "originStep": 12
+          }
+        ]
+      },
+      "mainStackAfter": [
+        {
+          "byteLength": 0,
+          "depth": 1,
+          "elementId": "e5",
+          "hex": "0x",
+          "index": 0,
+          "int": 0,
+          "intString": "0",
+          "originStack": "main",
+          "originStep": 12
+        },
+        {
+          "byteLength": 0,
+          "depth": 0,
+          "elementId": "e6",
+          "hex": "0x",
+          "index": 1,
+          "int": 0,
+          "intString": "0",
+          "originStack": "main",
+          "originStep": 13
+        }
+      ],
+      "mainStackBefore": [
+        {
+          "byteLength": 0,
+          "depth": 0,
+          "elementId": "e5",
+          "hex": "0x",
+          "index": 0,
+          "int": 0,
+          "intString": "0",
+          "originStack": "main",
+          "originStep": 12
+        }
+      ],
+      "opcode": "OP_0",
+      "operand": "",
+      "pc": 13,
+      "source": {
+        "column": 25,
+        "endColumn": 25,
+        "endLine": 17,
+        "file": "test/debugger_regression/debug_branch_loop_scope.ct",
+        "line": 17
+      },
+      "sourceFile": "test/debugger_regression/debug_branch_loop_scope.ct",
+      "sourceLine": 17,
+      "step": 13
+    },
+    {
+      "altStack": {
+        "after": [],
+        "before": []
+      },
+      "altStackAfter": [],
+      "altStackBefore": [],
+      "effects": {
+        "altStack": {
+          "popped": [],
+          "pushed": [],
+          "reordered": false,
+          "sizeAfter": 0,
+          "sizeBefore": 0
+        },
+        "mainStack": {
+          "popped": [
+            {
+              "byteLength": 0,
+              "depth": 0,
+              "elementId": "e6",
+              "hex": "0x",
+              "index": 0,
+              "int": 0,
+              "intString": "0",
+              "originStack": "main",
+              "originStep": 13
+            }
+          ],
+          "pushed": [],
+          "reordered": false,
+          "sizeAfter": 1,
+          "sizeBefore": 2
+        },
+        "moves": []
+      },
+      "functionName": "test_branch_loop",
+      "instruction": "OP_ADD",
+      "mainStack": {
+        "after": [
+          {
+            "byteLength": 0,
+            "depth": 0,
+            "elementId": "e5",
+            "hex": "0x",
+            "index": 0,
+            "int": 0,
+            "intString": "0",
+            "originStack": "main",
+            "originStep": 12
+          }
+        ],
+        "before": [
+          {
+            "byteLength": 0,
+            "depth": 1,
+            "elementId": "e5",
+            "hex": "0x",
+            "index": 0,
+            "int": 0,
+            "intString": "0",
+            "originStack": "main",
+            "originStep": 12
+          },
+          {
+            "byteLength": 0,
+            "depth": 0,
+            "elementId": "e6",
+            "hex": "0x",
+            "index": 1,
+            "int": 0,
+            "intString": "0",
+            "originStack": "main",
+            "originStep": 13
+          }
+        ]
+      },
+      "mainStackAfter": [
+        {
+          "byteLength": 0,
+          "depth": 0,
+          "elementId": "e5",
+          "hex": "0x",
+          "index": 0,
+          "int": 0,
+          "intString": "0",
+          "originStack": "main",
+          "originStep": 12
+        }
+      ],
+      "mainStackBefore": [
+        {
+          "byteLength": 0,
+          "depth": 1,
+          "elementId": "e5",
+          "hex": "0x",
+          "index": 0,
+          "int": 0,
+          "intString": "0",
+          "originStack": "main",
+          "originStep": 12
+        },
+        {
+          "byteLength": 0,
+          "depth": 0,
+          "elementId": "e6",
+          "hex": "0x",
+          "index": 1,
+          "int": 0,
+          "intString": "0",
+          "originStack": "main",
+          "originStep": 13
+        }
+      ],
+      "opcode": "OP_ADD",
+      "operand": "",
+      "pc": 14,
+      "source": {
+        "column": 25,
+        "endColumn": 25,
+        "endLine": 17,
+        "file": "test/debugger_regression/debug_branch_loop_scope.ct",
+        "line": 17
+      },
+      "sourceFile": "test/debugger_regression/debug_branch_loop_scope.ct",
+      "sourceLine": 17,
+      "step": 14
+    },
+    {
+      "altStack": {
+        "after": [],
+        "before": []
+      },
+      "altStackAfter": [],
+      "altStackBefore": [],
+      "effects": {
+        "altStack": {
+          "popped": [],
+          "pushed": [],
+          "reordered": false,
+          "sizeAfter": 0,
+          "sizeBefore": 0
+        },
+        "mainStack": {
+          "popped": [],
+          "pushed": [
+            {
+              "byteLength": 1,
+              "depth": 0,
+              "elementId": "e7",
+              "hex": "0x01",
+              "index": 0,
+              "int": 1,
+              "intString": "1",
+              "originStack": "main",
+              "originStep": 15
+            }
+          ],
+          "reordered": false,
+          "sizeAfter": 2,
+          "sizeBefore": 1
+        },
+        "moves": []
+      },
+      "functionName": "test_branch_loop",
+      "instruction": "OP_1",
+      "mainStack": {
+        "after": [
+          {
+            "byteLength": 0,
+            "depth": 1,
+            "elementId": "e5",
+            "hex": "0x",
+            "index": 0,
+            "int": 0,
+            "intString": "0",
+            "originStack": "main",
+            "originStep": 12
+          },
+          {
+            "byteLength": 1,
+            "depth": 0,
+            "elementId": "e7",
+            "hex": "0x01",
+            "index": 1,
+            "int": 1,
+            "intString": "1",
+            "originStack": "main",
+            "originStep": 15
+          }
+        ],
+        "before": [
+          {
+            "byteLength": 0,
+            "depth": 0,
+            "elementId": "e5",
+            "hex": "0x",
+            "index": 0,
+            "int": 0,
+            "intString": "0",
+            "originStack": "main",
+            "originStep": 12
+          }
+        ]
+      },
+      "mainStackAfter": [
+        {
+          "byteLength": 0,
+          "depth": 1,
+          "elementId": "e5",
+          "hex": "0x",
+          "index": 0,
+          "int": 0,
+          "intString": "0",
+          "originStack": "main",
+          "originStep": 12
+        },
+        {
+          "byteLength": 1,
+          "depth": 0,
+          "elementId": "e7",
+          "hex": "0x01",
+          "index": 1,
+          "int": 1,
+          "intString": "1",
+          "originStack": "main",
+          "originStep": 15
+        }
+      ],
+      "mainStackBefore": [
+        {
+          "byteLength": 0,
+          "depth": 0,
+          "elementId": "e5",
+          "hex": "0x",
+          "index": 0,
+          "int": 0,
+          "intString": "0",
+          "originStack": "main",
+          "originStep": 12
+        }
+      ],
+      "opcode": "OP_1",
+      "operand": "",
+      "pc": 15,
+      "source": {
+        "column": 25,
+        "endColumn": 25,
+        "endLine": 17,
+        "file": "test/debugger_regression/debug_branch_loop_scope.ct",
+        "line": 17
+      },
+      "sourceFile": "test/debugger_regression/debug_branch_loop_scope.ct",
+      "sourceLine": 17,
+      "step": 15
+    },
+    {
+      "altStack": {
+        "after": [],
+        "before": []
+      },
+      "altStackAfter": [],
+      "altStackBefore": [],
+      "effects": {
+        "altStack": {
+          "popped": [],
+          "pushed": [],
+          "reordered": false,
+          "sizeAfter": 0,
+          "sizeBefore": 0
+        },
+        "mainStack": {
+          "popped": [
+            {
+              "byteLength": 0,
+              "depth": 0,
+              "elementId": "e5",
+              "hex": "0x",
+              "index": 0,
+              "int": 0,
+              "intString": "0",
+              "originStack": "main",
+              "originStep": 12
+            }
+          ],
+          "pushed": [],
+          "reordered": false,
+          "sizeAfter": 1,
+          "sizeBefore": 2
+        },
+        "moves": []
+      },
+      "functionName": "test_branch_loop",
+      "instruction": "OP_ADD",
+      "mainStack": {
+        "after": [
+          {
+            "byteLength": 1,
+            "depth": 0,
+            "elementId": "e7",
+            "hex": "0x01",
+            "index": 0,
+            "int": 1,
+            "intString": "1",
+            "originStack": "main",
+            "originStep": 15
+          }
+        ],
+        "before": [
+          {
+            "byteLength": 0,
+            "depth": 1,
+            "elementId": "e5",
+            "hex": "0x",
+            "index": 0,
+            "int": 0,
+            "intString": "0",
+            "originStack": "main",
+            "originStep": 12
+          },
+          {
+            "byteLength": 1,
+            "depth": 0,
+            "elementId": "e7",
+            "hex": "0x01",
+            "index": 1,
+            "int": 1,
+            "intString": "1",
+            "originStack": "main",
+            "originStep": 15
+          }
+        ]
+      },
+      "mainStackAfter": [
+        {
+          "byteLength": 1,
+          "depth": 0,
+          "elementId": "e7",
+          "hex": "0x01",
+          "index": 0,
+          "int": 1,
+          "intString": "1",
+          "originStack": "main",
+          "originStep": 15
+        }
+      ],
+      "mainStackBefore": [
+        {
+          "byteLength": 0,
+          "depth": 1,
+          "elementId": "e5",
+          "hex": "0x",
+          "index": 0,
+          "int": 0,
+          "intString": "0",
+          "originStack": "main",
+          "originStep": 12
+        },
+        {
+          "byteLength": 1,
+          "depth": 0,
+          "elementId": "e7",
+          "hex": "0x01",
+          "index": 1,
+          "int": 1,
+          "intString": "1",
+          "originStack": "main",
+          "originStep": 15
+        }
+      ],
+      "opcode": "OP_ADD",
+      "operand": "",
+      "pc": 16,
+      "source": {
+        "column": 25,
+        "endColumn": 25,
+        "endLine": 17,
+        "file": "test/debugger_regression/debug_branch_loop_scope.ct",
+        "line": 17
+      },
+      "sourceFile": "test/debugger_regression/debug_branch_loop_scope.ct",
+      "sourceLine": 17,
+      "step": 16
+    },
+    {
+      "altStack": {
+        "after": [],
+        "before": []
+      },
+      "altStackAfter": [],
+      "altStackBefore": [],
+      "effects": {
+        "altStack": {
+          "popped": [],
+          "pushed": [],
+          "reordered": false,
+          "sizeAfter": 0,
+          "sizeBefore": 0
+        },
+        "mainStack": {
+          "popped": [],
+          "pushed": [
+            {
+              "byteLength": 1,
+              "depth": 0,
+              "elementId": "e8",
+              "hex": "0x02",
+              "index": 0,
+              "int": 2,
+              "intString": "2",
+              "originStack": "main",
+              "originStep": 17
+            }
+          ],
+          "reordered": false,
+          "sizeAfter": 2,
+          "sizeBefore": 1
+        },
+        "moves": []
+      },
+      "functionName": "test_branch_loop",
+      "instruction": "OP_2",
+      "mainStack": {
+        "after": [
+          {
+            "byteLength": 1,
+            "depth": 1,
+            "elementId": "e7",
+            "hex": "0x01",
+            "index": 0,
+            "int": 1,
+            "intString": "1",
+            "originStack": "main",
+            "originStep": 15
+          },
+          {
+            "byteLength": 1,
+            "depth": 0,
+            "elementId": "e8",
+            "hex": "0x02",
+            "index": 1,
+            "int": 2,
+            "intString": "2",
+            "originStack": "main",
+            "originStep": 17
+          }
+        ],
+        "before": [
+          {
+            "byteLength": 1,
+            "depth": 0,
+            "elementId": "e7",
+            "hex": "0x01",
+            "index": 0,
+            "int": 1,
+            "intString": "1",
+            "originStack": "main",
+            "originStep": 15
+          }
+        ]
+      },
+      "mainStackAfter": [
+        {
+          "byteLength": 1,
+          "depth": 1,
+          "elementId": "e7",
+          "hex": "0x01",
+          "index": 0,
+          "int": 1,
+          "intString": "1",
+          "originStack": "main",
+          "originStep": 15
+        },
+        {
+          "byteLength": 1,
+          "depth": 0,
+          "elementId": "e8",
+          "hex": "0x02",
+          "index": 1,
+          "int": 2,
+          "intString": "2",
+          "originStack": "main",
+          "originStep": 17
+        }
+      ],
+      "mainStackBefore": [
+        {
+          "byteLength": 1,
+          "depth": 0,
+          "elementId": "e7",
+          "hex": "0x01",
+          "index": 0,
+          "int": 1,
+          "intString": "1",
+          "originStack": "main",
+          "originStep": 15
+        }
+      ],
+      "opcode": "OP_2",
+      "operand": "",
+      "pc": 17,
+      "source": {
+        "column": 25,
+        "endColumn": 25,
+        "endLine": 17,
+        "file": "test/debugger_regression/debug_branch_loop_scope.ct",
+        "line": 17
+      },
+      "sourceFile": "test/debugger_regression/debug_branch_loop_scope.ct",
+      "sourceLine": 17,
+      "step": 17
+    },
+    {
+      "altStack": {
+        "after": [],
+        "before": []
+      },
+      "altStackAfter": [],
+      "altStackBefore": [],
+      "effects": {
+        "altStack": {
+          "popped": [],
+          "pushed": [],
+          "reordered": false,
+          "sizeAfter": 0,
+          "sizeBefore": 0
+        },
+        "mainStack": {
+          "popped": [
+            {
+              "byteLength": 1,
+              "depth": 1,
+              "elementId": "e7",
+              "hex": "0x01",
+              "index": 0,
+              "int": 1,
+              "intString": "1",
+              "originStack": "main",
+              "originStep": 15
+            },
+            {
+              "byteLength": 1,
+              "depth": 0,
+              "elementId": "e8",
+              "hex": "0x02",
+              "index": 1,
+              "int": 2,
+              "intString": "2",
+              "originStack": "main",
+              "originStep": 17
+            }
+          ],
+          "pushed": [
+            {
+              "byteLength": 1,
+              "depth": 0,
+              "elementId": "e9",
+              "hex": "0x03",
+              "index": 0,
+              "int": 3,
+              "intString": "3",
+              "originStack": "main",
+              "originStep": 18
+            }
+          ],
+          "reordered": false,
+          "sizeAfter": 1,
+          "sizeBefore": 2
+        },
+        "moves": []
+      },
+      "functionName": "test_branch_loop",
+      "instruction": "OP_ADD",
+      "mainStack": {
+        "after": [
+          {
+            "byteLength": 1,
+            "depth": 0,
+            "elementId": "e9",
+            "hex": "0x03",
+            "index": 0,
+            "int": 3,
+            "intString": "3",
+            "originStack": "main",
+            "originStep": 18
+          }
+        ],
+        "before": [
+          {
+            "byteLength": 1,
+            "depth": 1,
+            "elementId": "e7",
+            "hex": "0x01",
+            "index": 0,
+            "int": 1,
+            "intString": "1",
+            "originStack": "main",
+            "originStep": 15
+          },
+          {
+            "byteLength": 1,
+            "depth": 0,
+            "elementId": "e8",
+            "hex": "0x02",
+            "index": 1,
+            "int": 2,
+            "intString": "2",
+            "originStack": "main",
+            "originStep": 17
+          }
+        ]
+      },
+      "mainStackAfter": [
+        {
+          "byteLength": 1,
+          "depth": 0,
+          "elementId": "e9",
+          "hex": "0x03",
+          "index": 0,
+          "int": 3,
+          "intString": "3",
+          "originStack": "main",
+          "originStep": 18
+        }
+      ],
+      "mainStackBefore": [
+        {
+          "byteLength": 1,
+          "depth": 1,
+          "elementId": "e7",
+          "hex": "0x01",
+          "index": 0,
+          "int": 1,
+          "intString": "1",
+          "originStack": "main",
+          "originStep": 15
+        },
+        {
+          "byteLength": 1,
+          "depth": 0,
+          "elementId": "e8",
+          "hex": "0x02",
+          "index": 1,
+          "int": 2,
+          "intString": "2",
+          "originStack": "main",
+          "originStep": 17
+        }
+      ],
+      "opcode": "OP_ADD",
+      "operand": "",
+      "pc": 18,
+      "source": {
+        "column": 25,
+        "endColumn": 25,
+        "endLine": 17,
+        "file": "test/debugger_regression/debug_branch_loop_scope.ct",
+        "line": 17
+      },
+      "sourceFile": "test/debugger_regression/debug_branch_loop_scope.ct",
+      "sourceLine": 17,
+      "step": 18
+    },
+    {
+      "altStack": {
+        "after": [],
+        "before": []
+      },
+      "altStackAfter": [],
+      "altStackBefore": [],
+      "effects": {
+        "altStack": {
+          "popped": [],
+          "pushed": [],
+          "reordered": false,
+          "sizeAfter": 0,
+          "sizeBefore": 0
+        },
+        "mainStack": {
+          "popped": [],
+          "pushed": [],
+          "reordered": false,
+          "sizeAfter": 1,
+          "sizeBefore": 1
+        },
+        "moves": []
+      },
+      "functionName": "test_branch_loop",
+      "instruction": "OP_RETURN",
+      "mainStack": {
+        "after": [
+          {
+            "byteLength": 1,
+            "depth": 0,
+            "elementId": "e9",
+            "hex": "0x03",
+            "index": 0,
+            "int": 3,
+            "intString": "3",
+            "originStack": "main",
+            "originStep": 18
+          }
+        ],
+        "before": [
+          {
+            "byteLength": 1,
+            "depth": 0,
+            "elementId": "e9",
+            "hex": "0x03",
+            "index": 0,
+            "int": 3,
+            "intString": "3",
+            "originStack": "main",
+            "originStep": 18
+          }
+        ]
+      },
+      "mainStackAfter": [
+        {
+          "byteLength": 1,
+          "depth": 0,
+          "elementId": "e9",
+          "hex": "0x03",
+          "index": 0,
+          "int": 3,
+          "intString": "3",
+          "originStack": "main",
+          "originStep": 18
+        }
+      ],
+      "mainStackBefore": [
+        {
+          "byteLength": 1,
+          "depth": 0,
+          "elementId": "e9",
+          "hex": "0x03",
+          "index": 0,
+          "int": 3,
+          "intString": "3",
+          "originStack": "main",
+          "originStep": 18
+        }
+      ],
+      "opcode": "OP_RETURN",
+      "operand": "",
+      "pc": 19,
+      "source": {
+        "column": 9,
+        "endColumn": 9,
+        "endLine": 19,
+        "file": "test/debugger_regression/debug_branch_loop_scope.ct",
+        "line": 19
+      },
+      "sourceFile": "test/debugger_regression/debug_branch_loop_scope.ct",
+      "sourceLine": 19,
+      "step": 19
+    }
+  ],
+  "top": "last element in each stack array",
+  "version": "1.0"
+}

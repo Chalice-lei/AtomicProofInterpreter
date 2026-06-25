@@ -1,0 +1,17 @@
+# Test for loop traversing struct array
+Contract ForLoopStructArrayTest:
+    Struct Product:
+        price: int
+        quantity: int
+
+    def test_struct_array_traversal():
+        # Initialize struct array
+        products: Product[3] = [{100, 2}, {50, 5}, {30, 10}]
+        total_value: int = 0
+        item_value: int = 0
+        
+        # Traverse struct array
+        for i in Range(3):
+            # Calculate value of each product and accumulate
+            item_value = products[i].price * products[i].quantity
+            total_value = total_value + item_value

@@ -1,0 +1,7 @@
+Contract UserManagement:
+    # Define struct
+    Struct UserInfo:
+        name: string
+        age: int
+        pubkey: hex
+        active: bool

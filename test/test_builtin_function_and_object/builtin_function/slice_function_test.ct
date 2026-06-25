@@ -1,0 +1,14 @@
+# 测试slice函数的三种切片模式
+Contract SliceFunctionTest:
+    def test_slice():
+        # 测试1: 从开头截取（start=-1, end=正数）
+        data1 = Push(0x12345678)
+        result1 = data1.slice(-1, 2)
+    
+        # 测试2: 截取到末尾（start=正数, end=-1）
+        data2 = Push(0xaabbccdd)
+        result2 = data2.slice(1, -1)
+    
+        # 测试3: 指定长度截取（start=正数, end=正数）
+        data3 = Push(0x11223344)
+        result3 = data3.slice(1, 2)

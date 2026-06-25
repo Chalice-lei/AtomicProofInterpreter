@@ -1,0 +1,19 @@
+Contract P2PKH:
+    # Pay-to-Public-Key-Hash verification contract
+    # Verify if transaction signature matches public key hash
+
+    # Public function: contract entry point
+    def verify(sig: hex, pubKey: hex):
+        # Verification function: check signature and public key
+        # Parameters: sig: transaction signature  pubKey: public key
+        pubKey_copy = pubKey.Clone()
+        
+        # Calculate hash value of public key
+        pubKeyHash = Hash160(pubKey_copy)
+        
+        # Verify if public key hash matches
+        # Use member variable self.pubKeyHash
+        EqualVerify(pubKeyHash, self.pubKeyHash)
+        
+        # Verify signature
+        result = CheckSig(sig, pubKey)

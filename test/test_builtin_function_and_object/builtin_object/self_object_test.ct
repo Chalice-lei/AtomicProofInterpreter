@@ -1,0 +1,6 @@
+# 测试Self对象的属性访问与使用
+Contract SelfObjectTest:
+    def test_self_properties():
+        # 访问Self对象属性
+        owner: string = self.owner
+        balance: int = self.balance

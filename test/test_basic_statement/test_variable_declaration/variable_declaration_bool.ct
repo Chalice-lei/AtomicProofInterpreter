@@ -1,0 +1,5 @@
+# 测试bool类型的变量声明，验证初始化语法
+Contract VariableDeclarationBoolTest:
+    def test_bool():
+        # 声明并初始化bool类型变量
+        bool_val: bool = 1

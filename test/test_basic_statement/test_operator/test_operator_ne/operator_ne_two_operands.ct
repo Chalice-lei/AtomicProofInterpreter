@@ -1,0 +1,7 @@
+# 测试不等于运算符：两个整数直接比较
+Contract OperatorNeTwoOperandsTest:
+    def test_ne_two(a: int, b: int, c: int, d: int):
+        # 比较前两个参数
+        # is_ne1: bool = a != b
+        # 比较后两个参数
+        is_ne2: bool = c != d

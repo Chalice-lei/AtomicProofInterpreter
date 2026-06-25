@@ -1,0 +1,7 @@
+# 测试使用内置函数返回值进行赋值
+Contract AssignmentFunctionReturnTest:
+    def test_function_assignment():
+        # 用内置函数返回值赋值
+        num: int = 5
+        result: int 
+        result = Inc(num)

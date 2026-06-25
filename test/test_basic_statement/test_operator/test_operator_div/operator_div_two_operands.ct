@@ -1,0 +1,7 @@
+# 测试除法运算符：两个整数相除
+Contract OperatorDivTwoOperandsTest:
+    def test_div_two(a: int, b: int, c: int, d: int):
+        # 前两个参数相除
+        # quot1: int = a / b
+        # 后两个参数相除
+        quot2: int = c / d

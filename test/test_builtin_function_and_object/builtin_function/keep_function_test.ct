@@ -1,0 +1,17 @@
+# 测试Keep函数的基本功能和各种场景
+Contract KeepFunctionTest:
+    # 测试1: Keep单个变量
+    def _test_keep_single_variable():
+        x = Push(100)
+        Keep(x)
+        
+    # 测试2: Keep多个变量
+    def _test_keep_multiple_variables():
+        num = Push(42)
+        text = Push("text")
+        Keep(num, text)
+    
+    def test_keep():
+        _test_keep_single_variable()
+        _test_keep_multiple_variables()
+        

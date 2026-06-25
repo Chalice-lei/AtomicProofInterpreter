@@ -1,0 +1,7 @@
+# 测试大于运算符：两个整数直接比较
+Contract OperatorGtTwoOperandsTest:
+    def test_gt_two(a: int, b: int, c: int, d: int):
+        # 比较前两个参数
+        # is_gt1: bool = a > b
+        # 比较后两个参数
+        is_gt2: bool = c > d

@@ -1,0 +1,25 @@
+Contract ASTUnlockingInputContext:
+    Struct Script:
+        SuffixData: hex
+
+    Struct Output:
+        Value: hex4
+        LockingScript: Script
+
+    Struct Input:
+        Data: hex
+
+    Struct PreTX:
+        VLIO: hex
+        Inputs: Input[1]
+        UnlockingScriptHash: hex
+        Outputs: Output[1]
+        TXID: hex
+
+    def main(pretx: PreTX):
+        utxoData: {txid: hex32, vout: hex4, sequence: hex4}
+        utxoData = Push(BVM.unlockingInput)
+
+        EqualVerify(utxoData.txid, pretx.TXID)
+        EqualVerify(utxoData.sequence, 0xffffffff)
+        Return(BinToNum(utxoData.vout))

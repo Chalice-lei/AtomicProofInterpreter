@@ -1,0 +1,19 @@
+Contract P2PKH:
+    # Pay-to-Public-Key-Hash 验证合约
+    # 验证交易签名是否与公钥哈希匹配
+
+    # 公有函数：合约入口
+    def verify(sig: hex, pubKey: hex):
+        # 验证函数：检查签名和公钥
+        # 参数: sig: 交易签名  pubKey: 公钥
+        pubKey_copy = pubKey.Clone()
+        
+        # 计算公钥的哈希值
+        pubKeyHash = Hash160(pubKey_copy)
+        
+        # 验证公钥哈希是否匹配
+        # 使用成员变量 self.pubKeyHash
+        EqualVerify(pubKeyHash, 0x2158ccfe3dc673b74e67c1ffd77842fd8bc4361c)
+        
+        # 验证签名
+        result = CheckSig(sig, pubKey)

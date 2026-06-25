@@ -1,0 +1,12 @@
+# Debugger regression: peephole optimization must not desynchronize DebugInfo PCs.
+# This contract intentionally creates short-lived constants and drops.
+# Suggested checks:
+#   1. Generate debug info with -d and inspect pcToSource/lineToPC.
+#   2. In --debug, run "bytecode" and compare visible PCs to mapped source lines.
+#   3. Breakpoints on the marked lines should stop on the matching statements.
+Contract DebugPeepholePcDrift:
+    def test_peephole_drift(a: int, b: int):
+        temp_one = Push(1)          # may become push_const + drop if unused
+        temp_two = Push(2)          # may become another removable temporary
+        live: int = a + b           # break here: must still map after peephole
+        Return(live)

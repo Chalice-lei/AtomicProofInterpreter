@@ -1,0 +1,7 @@
+# 测试赋值给bool类型变量
+Contract AssignmentBoolTest:
+    def test_assignment_bool():
+        # 赋值给bool类型变量
+        flag_1: bool = 1
+        flag_2: bool 
+        flag_2 = flag_1

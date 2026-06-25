@@ -1,0 +1,4 @@
+Contract Example:
+    def verify(sig: hex, pubKey: hex):
+        # Function body of public function
+        result = CheckSig(sig, pubKey)

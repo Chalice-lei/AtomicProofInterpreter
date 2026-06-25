@@ -1,0 +1,22 @@
+Contract UserManagement:
+    Struct UserInfo:
+        name: string
+        age: int
+        pubkey: hex
+    
+    Struct Address:
+        street: string
+        city: string
+    
+    Struct Person:
+        name: string
+        address: Address  # Nested struct
+    
+    def process_user(user: UserInfo, person: Person):
+        # Access struct fields
+        user_name: string = user.name
+        user_age: int = user.age
+        user_key: hex = user.pubkey
+        
+        # Nested struct field access
+        city: string = person.address.city

@@ -1,0 +1,12 @@
+Contract ASTDataBuiltins:
+    def main():
+        data = 0x01020304
+        part = data.Slice(1, 2)
+        EqualVerify(part, 0x0203)
+
+        combined = Cat(part, 0x04)
+        number = BinToNum(0x2a00)
+        fixed = NumToBin(number, 2)
+        EqualVerify(fixed, 0x2a00)
+
+        Return(Size(combined))

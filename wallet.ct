@@ -1,0 +1,52 @@
+# =============================================================================
+# wallet.ct — 一个完整的 P2PKH 用户合约 (sCrypt 风格示例)
+# =============================================================================
+#
+# 在 sCrypt 中, 固定收款人 P2PKH 的典型写法:
+# -----------------------------------------------------------------------------
+#   import { SmartContract, method, prop,
+#            PubKeyHash, Sig, PubKey, hash160, assert } from 'scrypt-ts'
+#
+#   export class MyWallet extends SmartContract {
+#       @prop() readonly addr: PubKeyHash
+#
+#       constructor(addr: PubKeyHash) {
+#           super(...arguments)
+#           this.addr = addr
+#       }
+#
+#       @method()
+#       public unlock(sig: Sig, pubkey: PubKey) {
+#           assert(hash160(pubkey) == this.addr, 'pubkey mismatch')
+#           assert(this.checkSig(sig, pubkey),    'sig check failed')
+#       }
+#   }
+# -----------------------------------------------------------------------------
+#
+# .ct 中的模板调用写法 (本文件):
+#   通过 `import std.p2pkh` 拉入 std.p2pkh 库, 库内导出
+#   verifyP2PKH(signature, pubKey, pubKeyHash) 自由函数, 返回 CheckSig 的布尔结果.
+#   调用方显式把合约成员变量 self.pubKeyHash 作为参数传入模板函数.
+#   - self.pubKeyHash : 合约成员变量, 由部署方替换占位符时绑定
+#   - main(signature, pubKey) : 解锁入口
+#
+# 部署流程:
+#   1) 编译:
+#        APC_STDLIB_PATH=$(pwd)/stdlib ./build/bin/utxo_interpreter wallet.ct
+#      产出 wallet.json
+#
+#   2) 计算收款人 pubKey 的 Hash160 (示例):
+#        echo -n <pubkey-hex> | xxd -r -p | openssl dgst -sha256 -binary \
+#                                          | openssl dgst -rmd160 -binary | xxd -p
+#
+#   3) 用真实 PKH 替换 wallet.json 中 lock.hex 的 <self.pubKeyHash> 占位符;
+#      调用合约时在 unlocking script 中按 ABI 顺序传入:
+#        <signature><pubKey>
+# =============================================================================
+
+import std.p2pkh
+
+Contract MyWallet:
+
+    def main(signature: hex, pubKey: hex):
+        ok = verifyP2PKH(signature, pubKey, self.pubKeyHash)

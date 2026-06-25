@@ -1,0 +1,312 @@
+Contract CollateralLending:
+    # ================================================================
+    # 链上抵押借贷合约
+    #
+    # 设计概述：
+    #   借款人将抵押物（TBC）锁定在本合约 UTXO 中。
+    #   合约通过四个顺序执行的函数（两条执行路径）完成借贷逻辑：
+    #
+    #   还款路径（借款人调用）：
+    #     1. verifyRepayInput   — 验证借款人身份与父交易，将状态压入副栈
+    #     2. verifyRepayOutput  — 从副栈读取状态，验证还款输出正确
+    #
+    #   清算路径（贷款人在到期后调用）：
+    #     1. verifyLiquidateInput  — 验证贷款人身份与父交易，将状态压入副栈
+    #     2. verifyLiquidateOutput — 从副栈读取状态，验证清算输出正确
+    #
+    # SuffixData 布局（65 字节含标记）：
+    #   [1  byte ] push 标记字节（0x40）
+    #   [20 bytes] borrower_hash  借款人公钥哈希（P2PKH）
+    #   [20 bytes] lender_hash    贷款人公钥哈希（P2PKH）
+    #   [8  bytes] loan_amount    贷款金额（聪，uint64 小端序）
+    #   [8  bytes] repay_amount   还款总额（本金 + 利息，uint64 小端序）
+    #   [8  bytes] due_height     还款截止区块高度（uint64 小端序）
+    #
+    # self.borrowerKeyHash（20 字节）：借款人公钥哈希（固定于字节码）
+    # self.lenderKeyHash  （20 字节）：贷款人公钥哈希（固定于字节码）
+    #
+    # 合约 UTXO 的 value = 抵押物金额（聪）
+    #
+    # P2PKH 标准锁定脚本格式（25 字节）：
+    #   76 a9 14 <20 bytes hash> 88 ac
+    #
+    # 编译：apc --asa collateral_lending.ct
+    # ================================================================
+
+    Struct Script:
+        SuffixData: string
+        PartialHash: string
+        Size: number
+
+    Struct Output:
+        Value: number
+        LockingScript: Script
+
+    Struct Input:
+        Data: {txid: hex32, vout: hex4, sequence: hex4}
+
+    Struct PreTX:
+        VLIO: string
+        Inputs: Input[3]
+        UnlockingScriptHash: string
+        Outputs: Output[3]
+
+    # P2PKH 输出：完整锁定脚本（25 字节字节串）
+    Struct P2PKHOutput:
+        Value: number
+        LockingScript: string
+
+    # 还款交易：两个 P2PKH 输出
+    Struct RepayCurrentTX:
+        ToLender: P2PKHOutput
+        ToBorrower: P2PKHOutput
+
+    # 清算交易：一个 P2PKH 输出
+    Struct LiquidateCurrentTX:
+        ToLender: P2PKHOutput
+
+    # ----------------------------------------------------------------
+    # 函数 1/4：还款路径 — 验证借款人身份与父交易
+    #
+    # 执行后副栈（从底到顶）：
+    #   lender_hash | repay_amount | collateral_value
+    # ----------------------------------------------------------------
+    def verifyRepayInput(sig: hex, pubKey: hex, pretx: PreTX):
+        # 步骤 1：验证调用者为授权借款人
+        pubKey_copy = pubKey.Clone()
+        pubKeyHash = Hash160(pubKey_copy)
+        EqualVerify(pubKeyHash, self.borrowerKeyHash)
+
+        # 步骤 2：验证借款人签名
+        CheckSigVerify(sig, pubKey)
+
+        # 步骤 3：定位合约 UTXO 在父交易中的输出位置
+        utxoData: {txid: hex32, vout: hex4, sequence: hex4}
+        utxoData = Push(BVM.unlockingInput)
+        vout = BinToNum(utxoData.vout)
+        vout_copy = vout.Clone()
+        Delete(utxoData.sequence)
+        Delete(utxoData.txid)
+
+        # 步骤 4：解析 SuffixData，取出 lender_hash 和 repay_amount
+        code_data = pretx.Outputs[vout_copy].LockingScript.SuffixData.Clone()
+        { _marker, code_data } = Split(code_data, 1)
+        Delete(_marker)
+        { _borrower_hash, code_data } = Split(code_data, 20)
+        Delete(_borrower_hash)
+        { lender_hash, code_data } = Split(code_data, 20)
+        { _loan_bytes, code_data } = Split(code_data, 8)
+        Delete(_loan_bytes)
+        { repay_amount_bytes, code_data } = Split(code_data, 8)
+        Delete(code_data)
+
+        repay_amount = BinToNum(repay_amount_bytes)
+
+        SetAlt(lender_hash)
+        SetAlt(repay_amount)
+
+        # 步骤 5：读取抵押物金额（合约 UTXO 的 value）
+        vout_copy = vout.Clone()
+        collateral_value = BinToNum(pretx.Outputs[vout_copy].Value.Clone())
+        SetAlt(collateral_value)
+
+        # 步骤 6：验证父交易 txid，防止伪造 pretx 参数
+        tx_data = Push(0)
+        SetAlt(tx_data)
+        for i in Range(2, -1, -1):
+            size_copy = pretx.Outputs[i].LockingScript.Size.Clone()
+            if size_copy != 0:
+                tx_data_temp = PartialHash(pretx.Outputs[i].LockingScript.SuffixData, pretx.Outputs[i].LockingScript.PartialHash, pretx.Outputs[i].LockingScript.Size)
+                tx_data_temp = Cat(pretx.Outputs[i].Value, tx_data_temp)
+                SetMain(tx_data)
+                tx_data = Cat(tx_data_temp, tx_data)
+                SetAlt(tx_data)
+            else:
+                Delete(pretx.Outputs[i].LockingScript.Size)
+                Delete(pretx.Outputs[i].LockingScript.PartialHash)
+                Delete(pretx.Outputs[i].LockingScript.SuffixData)
+                Delete(pretx.Outputs[i].Value)
+
+        SetMain(tx_data)
+        tx_data = Sha256(tx_data)
+        tx_data = Cat(pretx.UnlockingScriptHash, tx_data)
+        SetAlt(tx_data)
+        tx_input_data = Push(0)
+        for i in Range(2, -1, -1):
+            tx_input_data = Cat(pretx.Inputs[i].Data, tx_input_data)
+        tx_input_hash = Sha256(tx_input_data)
+        SetMain(tx_data)
+        tx_data = Cat(tx_input_hash, tx_data)
+        tx_data = Cat(pretx.VLIO, tx_data)
+        txid = Hash256(tx_data)
+        preTXID = BVM.unlockingInput.Slice(0, 32)
+        EqualVerify(txid, preTXID)
+
+        # 函数结束；副栈（从底到顶）：lender_hash | repay_amount | collateral_value
+
+    # ----------------------------------------------------------------
+    # 函数 2/4：还款路径 — 验证当前交易输出
+    #
+    # 前提副栈（从底到顶）：lender_hash | repay_amount | collateral_value
+    #
+    # 当前交易输出约束：
+    #   ToLender  （输出 0）：value == repay_amount，地址 == lender_hash
+    #   ToBorrower（输出 1）：value == collateral_value，地址 == borrowerKeyHash
+    # ----------------------------------------------------------------
+    def verifyRepayOutput(currenttx: RepayCurrentTX):
+        # 步骤 1：从副栈恢复状态
+        SetMain(collateral_value)
+        SetMain(repay_amount)
+        SetMain(lender_hash)
+
+        # 步骤 2：验证贷款人收到约定还款金额
+        lender_value = BinToNum(currenttx.ToLender.Value.Clone())
+        EqualVerify(lender_value, repay_amount)
+        Delete(repay_amount)
+
+        # 步骤 3：验证贷款人收款地址
+        # P2PKH 格式：跳过首 3 字节（76 a9 14），读取 20 字节公钥哈希
+        lender_script_check = currenttx.ToLender.LockingScript.Clone()
+        { _lp, lender_script_check } = Split(lender_script_check, 3)
+        Delete(_lp)
+        { lender_hash_check, lender_script_check } = Split(lender_script_check, 20)
+        Delete(lender_script_check)
+        EqualVerify(lender_hash_check, lender_hash)
+
+        # 步骤 4：验证借款人收到全额抵押物
+        borrower_value = BinToNum(currenttx.ToBorrower.Value.Clone())
+        EqualVerify(borrower_value, collateral_value)
+        Delete(collateral_value)
+
+        # 步骤 5：验证借款人收款地址（与合约内置 borrowerKeyHash 一致）
+        borrower_script_check = currenttx.ToBorrower.LockingScript.Clone()
+        { _bp, borrower_script_check } = Split(borrower_script_check, 3)
+        Delete(_bp)
+        { borrower_hash_check, borrower_script_check } = Split(borrower_script_check, 20)
+        Delete(borrower_script_check)
+        EqualVerify(borrower_hash_check, self.borrowerKeyHash)
+
+        # 步骤 6：验证当前交易所有输出的哈希
+        # 格式：ToLender_Value | Sha256(ToLender_Script) | ToBorrower_Value | Sha256(ToBorrower_Script) | 0
+        outputs_data = Push(0)
+        borrower_script_hash = Sha256(currenttx.ToBorrower.LockingScript)
+        outputs_data_temp = Cat(currenttx.ToBorrower.Value, borrower_script_hash)
+        outputs_data = Cat(outputs_data_temp, outputs_data)
+        lender_script_hash = Sha256(currenttx.ToLender.LockingScript)
+        outputs_data_temp = Cat(currenttx.ToLender.Value, lender_script_hash)
+        outputs_data = Cat(outputs_data_temp, outputs_data)
+        outputs_data = Sha256(outputs_data)
+        EqualVerify(outputs_data, BVM.outputsHash)
+        Return (1 == 1)
+        Push(self.borrowerKeyHash)
+
+    # ----------------------------------------------------------------
+    # 函数 3/4：清算路径 — 验证贷款人身份与父交易
+    #
+    # 执行后副栈（从底到顶）：
+    #   lender_hash | collateral_value
+    #
+    # 时间约束：交易的 nLockTime 须 >= due_height，由共识层强制执行
+    # ----------------------------------------------------------------
+    def verifyLiquidateInput(sig: hex, pubKey: hex, pretx: PreTX):
+        # 步骤 1：验证调用者为授权贷款人
+        pubKey_copy = pubKey.Clone()
+        pubKeyHash = Hash160(pubKey_copy)
+        EqualVerify(pubKeyHash, self.lenderKeyHash)
+
+        # 步骤 2：验证贷款人签名
+        CheckSigVerify(sig, pubKey)
+
+        # 步骤 3：定位合约 UTXO 位置
+        utxoData: {txid: hex32, vout: hex4, sequence: hex4}
+        utxoData = Push(BVM.unlockingInput)
+        vout = BinToNum(utxoData.vout)
+        vout_copy = vout.Clone()
+        Delete(utxoData.sequence)
+        Delete(utxoData.txid)
+
+        # 步骤 4：解析 SuffixData，仅取出 lender_hash
+        code_data = pretx.Outputs[vout_copy].LockingScript.SuffixData.Clone()
+        { _marker, code_data } = Split(code_data, 1)
+        Delete(_marker)
+        { _borrower_hash, code_data } = Split(code_data, 20)
+        Delete(_borrower_hash)
+        { lender_hash, code_data } = Split(code_data, 20)
+        Delete(code_data)
+
+        SetAlt(lender_hash)
+
+        # 步骤 5：读取抵押物金额
+        vout_copy = vout.Clone()
+        collateral_value = BinToNum(pretx.Outputs[vout_copy].Value.Clone())
+        SetAlt(collateral_value)
+
+        # 步骤 6：验证父交易 txid
+        tx_data = Push(0)
+        SetAlt(tx_data)
+        for i in Range(2, -1, -1):
+            size_copy = pretx.Outputs[i].LockingScript.Size.Clone()
+            if size_copy != 0:
+                tx_data_temp = PartialHash(pretx.Outputs[i].LockingScript.SuffixData, pretx.Outputs[i].LockingScript.PartialHash, pretx.Outputs[i].LockingScript.Size)
+                tx_data_temp = Cat(pretx.Outputs[i].Value, tx_data_temp)
+                SetMain(tx_data)
+                tx_data = Cat(tx_data_temp, tx_data)
+                SetAlt(tx_data)
+            else:
+                Delete(pretx.Outputs[i].LockingScript.Size)
+                Delete(pretx.Outputs[i].LockingScript.PartialHash)
+                Delete(pretx.Outputs[i].LockingScript.SuffixData)
+                Delete(pretx.Outputs[i].Value)
+
+        SetMain(tx_data)
+        tx_data = Sha256(tx_data)
+        tx_data = Cat(pretx.UnlockingScriptHash, tx_data)
+        SetAlt(tx_data)
+        tx_input_data = Push(0)
+        for i in Range(2, -1, -1):
+            tx_input_data = Cat(pretx.Inputs[i].Data, tx_input_data)
+        tx_input_hash = Sha256(tx_input_data)
+        SetMain(tx_data)
+        tx_data = Cat(tx_input_hash, tx_data)
+        tx_data = Cat(pretx.VLIO, tx_data)
+        txid = Hash256(tx_data)
+        preTXID = BVM.unlockingInput.Slice(0, 32)
+        EqualVerify(txid, preTXID)
+
+        # 函数结束；副栈（从底到顶）：lender_hash | collateral_value
+
+    # ----------------------------------------------------------------
+    # 函数 4/4：清算路径 — 验证当前交易输出
+    #
+    # 前提副栈（从底到顶）：lender_hash | collateral_value
+    #
+    # 当前交易输出约束：
+    #   ToLender（输出 0）：value == collateral_value，地址 == lender_hash
+    # ----------------------------------------------------------------
+    def verifyLiquidateOutput(currenttx: LiquidateCurrentTX):
+        # 步骤 1：从副栈恢复状态
+        SetMain(collateral_value)
+        SetMain(lender_hash)
+
+        # 步骤 2：验证贷款人收到全部抵押物
+        lender_value = BinToNum(currenttx.ToLender.Value.Clone())
+        EqualVerify(lender_value, collateral_value)
+        Delete(collateral_value)
+
+        # 步骤 3：验证贷款人收款地址
+        lender_script_check = currenttx.ToLender.LockingScript.Clone()
+        { _lp, lender_script_check } = Split(lender_script_check, 3)
+        Delete(_lp)
+        { lender_hash_check, lender_script_check } = Split(lender_script_check, 20)
+        Delete(lender_script_check)
+        EqualVerify(lender_hash_check, lender_hash)
+
+        # 步骤 4：验证当前交易输出哈希（仅一个输出）
+        outputs_data = Push(0)
+        lender_script_hash = Sha256(currenttx.ToLender.LockingScript)
+        outputs_data_temp = Cat(currenttx.ToLender.Value, lender_script_hash)
+        outputs_data = Cat(outputs_data_temp, outputs_data)
+        outputs_data = Sha256(outputs_data)
+        EqualVerify(outputs_data, BVM.outputsHash)
+        Return (1 == 1)
+        Push(self.lenderKeyHash)

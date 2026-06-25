@@ -1,0 +1,15 @@
+Contract ASTPreTXInputContext:
+    Struct Input:
+        Data: hex
+
+    Struct PreTX:
+        VLIO: hex
+        Inputs: Input[1]
+        UnlockingScriptHash: hex
+
+    def main(pretx: PreTX):
+        EqualVerify(BVM.inputCount, 1)
+        EqualVerify(BVM.inputsHash, 0x5a8e619fbefff500f7972cbcbf3484d5c2cea7b6358e7cf8355acab331772305)
+        EqualVerify(pretx.UnlockingScriptHash, 0x4f377ce906c6f4713d968ff2d8b7b9b5ffd0833751c8030e8f6368fd322a4de9)
+        EqualVerify(pretx.VLIO, 0x0100000000000000)
+        Return(Size(BVM.inputsHash))

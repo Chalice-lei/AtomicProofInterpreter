@@ -1,0 +1,15 @@
+# 测试无参数构造函数的基础初始化逻辑
+Contract ConstructorNoParamsTest:
+    # 无参数构造函数
+    def __init__():
+        # 初始化状态变量
+        self.count = 0
+        self.name = "default"
+        self.is_active = 1
+
+    # 用于验证初始化结果的公有函数（测试辅助）
+    def check_initialization():
+        # 访问构造函数初始化的变量
+        current_count: int = self.count
+        current_name: string = self.name
+        current_status: bool = self.is_active

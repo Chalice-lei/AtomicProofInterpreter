@@ -1,0 +1,29 @@
+# 测试签名验证类内置函数
+Contract SignatureFunctionsTest:
+    def test_all_signature_functions():
+        valid_pubkey = 0x02a1633cafcc01ebfb6d78e39f68
+        valid_sig = 0x3045022100f35a02206ef8  # 有效签名示例
+        invalid_sig = 0x3045022100a1b20220c3d4  # 无效签名示例
+
+        # 测试CheckSig
+        # CheckSig(valid_sig, valid_pubkey)
+        # CheckSig(invalid_sig, valid_pubkey)
+
+        # 测试CheckSigVerify（成功案例）
+        # CheckSigVerify(valid_sig, valid_pubkey)  # 无异常
+
+        # 测试CheckSigVerify（失败案例，应终止）
+        # CheckSigVerify(invalid_sig, valid_pubkey)
+
+        # 测试MultiSig
+        valid_pubkeys = Cat(valid_pubkey, valid_pubkey)  # 序列化公钥集合
+        valid_pubkeys_for_fail = Cat(valid_pubkey, valid_pubkey)  # 失败案例公钥集合
+        valid_sigs = Cat(valid_sig, valid_sig)  # 序列化签名集合
+        # MultiSig(valid_sigs, valid_pubkeys)
+        # MultiSig(invalid_sig, valid_pubkeys_for_fail)
+
+        # 测试MultiSigVerify（成功案例）
+        MultiSigVerify(valid_sigs, valid_pubkeys)  # 无异常
+
+        # 测试MultiSigVerify（失败案例）
+        MultiSigVerify(invalid_sig, valid_pubkeys_for_fail)

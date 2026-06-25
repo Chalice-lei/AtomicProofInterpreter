@@ -1,0 +1,7 @@
+# 测试加法运算符：两个整数相加
+Contract OperatorAddTwoOperandsTest:
+    def test_add_two(a: int, b: int, c: int, d: int):
+        # 仅使用前两个参数相加
+        # sum1: int = a + b
+        # 使用后两个参数相加
+        sum2: int = c + d

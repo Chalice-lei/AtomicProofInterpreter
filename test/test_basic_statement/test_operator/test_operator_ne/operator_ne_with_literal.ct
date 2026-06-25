@@ -1,0 +1,5 @@
+# 测试不等于运算符：整数与固定值比较
+Contract OperatorNeWithLiteralTest:
+    def test_ne_literal(a: int, b: int, c: int, d: int):
+        # is_not_zero: bool = a != 0
+        is_not_ten: bool = d != 10

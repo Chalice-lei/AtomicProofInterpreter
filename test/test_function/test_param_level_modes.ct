@@ -1,0 +1,16 @@
+Contract TestParamLevelModes:
+    # 混合使用move和copy模式的参数
+    # move x: 消耗x
+    # copy y: 保留y
+    def _processData(move x: int, y: int):
+        z: int =  x + y
+        Keep(z)
+    
+    def test():
+        a = Push(5)
+        b = Push(3)
+        
+        # 调用函数
+        # x会被消耗（move模式）
+        # y会被保留（copy模式）
+        result: int = _processData(a, b)

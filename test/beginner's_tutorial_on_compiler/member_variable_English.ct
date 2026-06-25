@@ -1,0 +1,7 @@
+Contract TokenContract:
+    def get_value():
+        # self member can be used multiple times without cloning
+        result1: int = self.value + 10
+        result2: int = self.value * 2
+        # Can access the same member variable multiple times
+        result3: int = self.value - 5

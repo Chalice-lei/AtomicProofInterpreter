@@ -1,0 +1,15 @@
+Contract Example:
+    def process_data():
+        # Public functions can access member variables
+        owner: hex = self.owner
+        
+        # Public functions preserve variables in the alt stack
+        # This means variables in the alt stack can continue to be used in subsequent public functions
+        temp = Push(10)
+        SetAlt(temp)
+        Keep(temp)
+
+    def main(input: int):
+        SetMain(temp)
+        result1 = temp.Clone() + input.Clone()
+        result2 = temp - input

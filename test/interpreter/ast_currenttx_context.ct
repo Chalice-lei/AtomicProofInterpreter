@@ -1,0 +1,14 @@
+Contract ASTCurrentTXContext:
+    Struct Script:
+        Size: hex4
+
+    Struct Output:
+        Value: hex4
+        LockingScript: Script
+
+    Struct CurrentTX:
+        Outputs: Output[2]
+
+    def main(ctx: CurrentTX):
+        EqualVerify(ctx.Outputs[1].LockingScript.Size, 0x03000000)
+        Return(BinToNum(ctx.Outputs[1].Value))

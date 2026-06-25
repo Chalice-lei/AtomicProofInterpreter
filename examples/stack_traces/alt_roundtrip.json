@@ -1,0 +1,917 @@
+{
+  "bytecode": [
+    "OP_10",
+    "OP_TOALTSTACK",
+    "OP_FROMALTSTACK",
+    "OP_ADD",
+    "OP_RETURN",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE"
+  ],
+  "debugInfo": {
+    "contractName": "DebugStackVisualizerAlt",
+    "functions": [
+      {
+        "endPC": 5,
+        "isPublic": true,
+        "location": {
+          "column": 9,
+          "endColumn": 9,
+          "endLine": 3,
+          "file": "test/debugger_regression/debug_stack_visualizer_alt.ct",
+          "line": 3
+        },
+        "name": "test_alt_roundtrip",
+        "startPC": 0
+      }
+    ],
+    "lineToPC": {
+      "4": [
+        0
+      ],
+      "5": [
+        1
+      ],
+      "6": [
+        2
+      ],
+      "7": [
+        3
+      ],
+      "8": [
+        4
+      ]
+    },
+    "sourceFile": "test/debugger_regression/debug_stack_visualizer_alt.ct"
+  },
+  "format": "apc-stack-trace",
+  "lifecycle": {
+    "elements": [
+      {
+        "consumed": true,
+        "consumedAt": 3,
+        "elementId": "e1",
+        "events": [
+          {
+            "opcode": "OP_10",
+            "pc": 0,
+            "sourceFile": "test/debugger_regression/debug_stack_visualizer_alt.ct",
+            "sourceLine": 4,
+            "stack": "main",
+            "step": 0,
+            "type": "initial"
+          },
+          {
+            "opcode": "OP_ADD",
+            "pc": 3,
+            "sourceFile": "test/debugger_regression/debug_stack_visualizer_alt.ct",
+            "sourceLine": 7,
+            "stack": "main",
+            "step": 3,
+            "type": "pop"
+          }
+        ],
+        "hex": "0x05",
+        "lastStack": "main",
+        "lastStep": 3,
+        "originStack": "main",
+        "originStep": 0
+      },
+      {
+        "consumed": true,
+        "consumedAt": 3,
+        "elementId": "e2",
+        "events": [
+          {
+            "opcode": "OP_10",
+            "pc": 0,
+            "sourceFile": "test/debugger_regression/debug_stack_visualizer_alt.ct",
+            "sourceLine": 4,
+            "stack": "main",
+            "step": 0,
+            "type": "push"
+          },
+          {
+            "from": "main",
+            "opcode": "OP_TOALTSTACK",
+            "pc": 1,
+            "sourceFile": "test/debugger_regression/debug_stack_visualizer_alt.ct",
+            "sourceLine": 5,
+            "step": 1,
+            "to": "alt",
+            "type": "move"
+          },
+          {
+            "from": "alt",
+            "opcode": "OP_FROMALTSTACK",
+            "pc": 2,
+            "sourceFile": "test/debugger_regression/debug_stack_visualizer_alt.ct",
+            "sourceLine": 6,
+            "step": 2,
+            "to": "main",
+            "type": "move"
+          },
+          {
+            "opcode": "OP_ADD",
+            "pc": 3,
+            "sourceFile": "test/debugger_regression/debug_stack_visualizer_alt.ct",
+            "sourceLine": 7,
+            "stack": "main",
+            "step": 3,
+            "type": "pop"
+          }
+        ],
+        "hex": "0x0a",
+        "lastStack": "main",
+        "lastStep": 3,
+        "originStack": "main",
+        "originStep": 0
+      },
+      {
+        "consumed": false,
+        "elementId": "e3",
+        "events": [
+          {
+            "opcode": "OP_ADD",
+            "pc": 3,
+            "sourceFile": "test/debugger_regression/debug_stack_visualizer_alt.ct",
+            "sourceLine": 7,
+            "stack": "main",
+            "step": 3,
+            "type": "push"
+          }
+        ],
+        "hex": "0x0f",
+        "lastStack": "main",
+        "lastStep": 4,
+        "originStack": "main",
+        "originStep": 3
+      }
+    ],
+    "idFormat": "e<number>",
+    "matching": "synthetic: prefer same stack/index, same stack/value, then cross-stack/value"
+  },
+  "source": {
+    "file": "test/debugger_regression/debug_stack_visualizer_alt.ct",
+    "lines": [
+      "# Debugger regression: stack trace visualizer should show main/alt movement.",
+      "Contract DebugStackVisualizerAlt:",
+      "    def test_alt_roundtrip(input: int):",
+      "        temp = Push(10)",
+      "        SetAlt(temp)",
+      "        SetMain(temp)",
+      "        result: int = temp + input",
+      "        Return(result)",
+      ""
+    ]
+  },
+  "stackOrder": "bottom-to-top",
+  "steps": [
+    {
+      "altStack": {
+        "after": [],
+        "before": []
+      },
+      "altStackAfter": [],
+      "altStackBefore": [],
+      "effects": {
+        "altStack": {
+          "popped": [],
+          "pushed": [],
+          "reordered": false,
+          "sizeAfter": 0,
+          "sizeBefore": 0
+        },
+        "mainStack": {
+          "popped": [],
+          "pushed": [
+            {
+              "byteLength": 1,
+              "depth": 0,
+              "elementId": "e2",
+              "hex": "0x0a",
+              "index": 0,
+              "int": 10,
+              "intString": "10",
+              "originStack": "main",
+              "originStep": 0
+            }
+          ],
+          "reordered": false,
+          "sizeAfter": 2,
+          "sizeBefore": 1
+        },
+        "moves": []
+      },
+      "functionName": "test_alt_roundtrip",
+      "instruction": "OP_10",
+      "mainStack": {
+        "after": [
+          {
+            "byteLength": 1,
+            "depth": 1,
+            "elementId": "e1",
+            "hex": "0x05",
+            "index": 0,
+            "int": 5,
+            "intString": "5",
+            "originStack": "main",
+            "originStep": 0
+          },
+          {
+            "byteLength": 1,
+            "depth": 0,
+            "elementId": "e2",
+            "hex": "0x0a",
+            "index": 1,
+            "int": 10,
+            "intString": "10",
+            "originStack": "main",
+            "originStep": 0
+          }
+        ],
+        "before": [
+          {
+            "byteLength": 1,
+            "depth": 0,
+            "elementId": "e1",
+            "hex": "0x05",
+            "index": 0,
+            "int": 5,
+            "intString": "5",
+            "originStack": "main",
+            "originStep": 0
+          }
+        ]
+      },
+      "mainStackAfter": [
+        {
+          "byteLength": 1,
+          "depth": 1,
+          "elementId": "e1",
+          "hex": "0x05",
+          "index": 0,
+          "int": 5,
+          "intString": "5",
+          "originStack": "main",
+          "originStep": 0
+        },
+        {
+          "byteLength": 1,
+          "depth": 0,
+          "elementId": "e2",
+          "hex": "0x0a",
+          "index": 1,
+          "int": 10,
+          "intString": "10",
+          "originStack": "main",
+          "originStep": 0
+        }
+      ],
+      "mainStackBefore": [
+        {
+          "byteLength": 1,
+          "depth": 0,
+          "elementId": "e1",
+          "hex": "0x05",
+          "index": 0,
+          "int": 5,
+          "intString": "5",
+          "originStack": "main",
+          "originStep": 0
+        }
+      ],
+      "opcode": "OP_10",
+      "operand": "",
+      "pc": 0,
+      "source": {
+        "column": 21,
+        "endColumn": 21,
+        "endLine": 4,
+        "file": "test/debugger_regression/debug_stack_visualizer_alt.ct",
+        "line": 4
+      },
+      "sourceFile": "test/debugger_regression/debug_stack_visualizer_alt.ct",
+      "sourceLine": 4,
+      "step": 0
+    },
+    {
+      "altStack": {
+        "after": [
+          {
+            "byteLength": 1,
+            "depth": 0,
+            "elementId": "e2",
+            "hex": "0x0a",
+            "index": 0,
+            "int": 10,
+            "intString": "10",
+            "originStack": "main",
+            "originStep": 0
+          }
+        ],
+        "before": []
+      },
+      "altStackAfter": [
+        {
+          "byteLength": 1,
+          "depth": 0,
+          "elementId": "e2",
+          "hex": "0x0a",
+          "index": 0,
+          "int": 10,
+          "intString": "10",
+          "originStack": "main",
+          "originStep": 0
+        }
+      ],
+      "altStackBefore": [],
+      "effects": {
+        "altStack": {
+          "popped": [],
+          "pushed": [],
+          "reordered": false,
+          "sizeAfter": 1,
+          "sizeBefore": 0
+        },
+        "mainStack": {
+          "popped": [],
+          "pushed": [],
+          "reordered": false,
+          "sizeAfter": 1,
+          "sizeBefore": 2
+        },
+        "moves": [
+          {
+            "element": {
+              "byteLength": 1,
+              "depth": 0,
+              "elementId": "e2",
+              "hex": "0x0a",
+              "index": 0,
+              "int": 10,
+              "intString": "10",
+              "originStack": "main",
+              "originStep": 0
+            },
+            "elementId": "e2",
+            "from": "main",
+            "to": "alt"
+          }
+        ]
+      },
+      "functionName": "test_alt_roundtrip",
+      "instruction": "OP_TOALTSTACK",
+      "mainStack": {
+        "after": [
+          {
+            "byteLength": 1,
+            "depth": 0,
+            "elementId": "e1",
+            "hex": "0x05",
+            "index": 0,
+            "int": 5,
+            "intString": "5",
+            "originStack": "main",
+            "originStep": 0
+          }
+        ],
+        "before": [
+          {
+            "byteLength": 1,
+            "depth": 1,
+            "elementId": "e1",
+            "hex": "0x05",
+            "index": 0,
+            "int": 5,
+            "intString": "5",
+            "originStack": "main",
+            "originStep": 0
+          },
+          {
+            "byteLength": 1,
+            "depth": 0,
+            "elementId": "e2",
+            "hex": "0x0a",
+            "index": 1,
+            "int": 10,
+            "intString": "10",
+            "originStack": "main",
+            "originStep": 0
+          }
+        ]
+      },
+      "mainStackAfter": [
+        {
+          "byteLength": 1,
+          "depth": 0,
+          "elementId": "e1",
+          "hex": "0x05",
+          "index": 0,
+          "int": 5,
+          "intString": "5",
+          "originStack": "main",
+          "originStep": 0
+        }
+      ],
+      "mainStackBefore": [
+        {
+          "byteLength": 1,
+          "depth": 1,
+          "elementId": "e1",
+          "hex": "0x05",
+          "index": 0,
+          "int": 5,
+          "intString": "5",
+          "originStack": "main",
+          "originStep": 0
+        },
+        {
+          "byteLength": 1,
+          "depth": 0,
+          "elementId": "e2",
+          "hex": "0x0a",
+          "index": 1,
+          "int": 10,
+          "intString": "10",
+          "originStack": "main",
+          "originStep": 0
+        }
+      ],
+      "opcode": "OP_TOALTSTACK",
+      "operand": "",
+      "pc": 1,
+      "source": {
+        "column": 16,
+        "endColumn": 16,
+        "endLine": 5,
+        "file": "test/debugger_regression/debug_stack_visualizer_alt.ct",
+        "line": 5
+      },
+      "sourceFile": "test/debugger_regression/debug_stack_visualizer_alt.ct",
+      "sourceLine": 5,
+      "step": 1
+    },
+    {
+      "altStack": {
+        "after": [],
+        "before": [
+          {
+            "byteLength": 1,
+            "depth": 0,
+            "elementId": "e2",
+            "hex": "0x0a",
+            "index": 0,
+            "int": 10,
+            "intString": "10",
+            "originStack": "main",
+            "originStep": 0
+          }
+        ]
+      },
+      "altStackAfter": [],
+      "altStackBefore": [
+        {
+          "byteLength": 1,
+          "depth": 0,
+          "elementId": "e2",
+          "hex": "0x0a",
+          "index": 0,
+          "int": 10,
+          "intString": "10",
+          "originStack": "main",
+          "originStep": 0
+        }
+      ],
+      "effects": {
+        "altStack": {
+          "popped": [],
+          "pushed": [],
+          "reordered": false,
+          "sizeAfter": 0,
+          "sizeBefore": 1
+        },
+        "mainStack": {
+          "popped": [],
+          "pushed": [],
+          "reordered": false,
+          "sizeAfter": 2,
+          "sizeBefore": 1
+        },
+        "moves": [
+          {
+            "element": {
+              "byteLength": 1,
+              "depth": 0,
+              "elementId": "e2",
+              "hex": "0x0a",
+              "index": 0,
+              "int": 10,
+              "intString": "10",
+              "originStack": "main",
+              "originStep": 0
+            },
+            "elementId": "e2",
+            "from": "alt",
+            "to": "main"
+          }
+        ]
+      },
+      "functionName": "test_alt_roundtrip",
+      "instruction": "OP_FROMALTSTACK",
+      "mainStack": {
+        "after": [
+          {
+            "byteLength": 1,
+            "depth": 1,
+            "elementId": "e1",
+            "hex": "0x05",
+            "index": 0,
+            "int": 5,
+            "intString": "5",
+            "originStack": "main",
+            "originStep": 0
+          },
+          {
+            "byteLength": 1,
+            "depth": 0,
+            "elementId": "e2",
+            "hex": "0x0a",
+            "index": 1,
+            "int": 10,
+            "intString": "10",
+            "originStack": "main",
+            "originStep": 0
+          }
+        ],
+        "before": [
+          {
+            "byteLength": 1,
+            "depth": 0,
+            "elementId": "e1",
+            "hex": "0x05",
+            "index": 0,
+            "int": 5,
+            "intString": "5",
+            "originStack": "main",
+            "originStep": 0
+          }
+        ]
+      },
+      "mainStackAfter": [
+        {
+          "byteLength": 1,
+          "depth": 1,
+          "elementId": "e1",
+          "hex": "0x05",
+          "index": 0,
+          "int": 5,
+          "intString": "5",
+          "originStack": "main",
+          "originStep": 0
+        },
+        {
+          "byteLength": 1,
+          "depth": 0,
+          "elementId": "e2",
+          "hex": "0x0a",
+          "index": 1,
+          "int": 10,
+          "intString": "10",
+          "originStack": "main",
+          "originStep": 0
+        }
+      ],
+      "mainStackBefore": [
+        {
+          "byteLength": 1,
+          "depth": 0,
+          "elementId": "e1",
+          "hex": "0x05",
+          "index": 0,
+          "int": 5,
+          "intString": "5",
+          "originStack": "main",
+          "originStep": 0
+        }
+      ],
+      "opcode": "OP_FROMALTSTACK",
+      "operand": "",
+      "pc": 2,
+      "source": {
+        "column": 17,
+        "endColumn": 17,
+        "endLine": 6,
+        "file": "test/debugger_regression/debug_stack_visualizer_alt.ct",
+        "line": 6
+      },
+      "sourceFile": "test/debugger_regression/debug_stack_visualizer_alt.ct",
+      "sourceLine": 6,
+      "step": 2
+    },
+    {
+      "altStack": {
+        "after": [],
+        "before": []
+      },
+      "altStackAfter": [],
+      "altStackBefore": [],
+      "effects": {
+        "altStack": {
+          "popped": [],
+          "pushed": [],
+          "reordered": false,
+          "sizeAfter": 0,
+          "sizeBefore": 0
+        },
+        "mainStack": {
+          "popped": [
+            {
+              "byteLength": 1,
+              "depth": 1,
+              "elementId": "e1",
+              "hex": "0x05",
+              "index": 0,
+              "int": 5,
+              "intString": "5",
+              "originStack": "main",
+              "originStep": 0
+            },
+            {
+              "byteLength": 1,
+              "depth": 0,
+              "elementId": "e2",
+              "hex": "0x0a",
+              "index": 1,
+              "int": 10,
+              "intString": "10",
+              "originStack": "main",
+              "originStep": 0
+            }
+          ],
+          "pushed": [
+            {
+              "byteLength": 1,
+              "depth": 0,
+              "elementId": "e3",
+              "hex": "0x0f",
+              "index": 0,
+              "int": 15,
+              "intString": "15",
+              "originStack": "main",
+              "originStep": 3
+            }
+          ],
+          "reordered": false,
+          "sizeAfter": 1,
+          "sizeBefore": 2
+        },
+        "moves": []
+      },
+      "functionName": "test_alt_roundtrip",
+      "instruction": "OP_ADD",
+      "mainStack": {
+        "after": [
+          {
+            "byteLength": 1,
+            "depth": 0,
+            "elementId": "e3",
+            "hex": "0x0f",
+            "index": 0,
+            "int": 15,
+            "intString": "15",
+            "originStack": "main",
+            "originStep": 3
+          }
+        ],
+        "before": [
+          {
+            "byteLength": 1,
+            "depth": 1,
+            "elementId": "e1",
+            "hex": "0x05",
+            "index": 0,
+            "int": 5,
+            "intString": "5",
+            "originStack": "main",
+            "originStep": 0
+          },
+          {
+            "byteLength": 1,
+            "depth": 0,
+            "elementId": "e2",
+            "hex": "0x0a",
+            "index": 1,
+            "int": 10,
+            "intString": "10",
+            "originStack": "main",
+            "originStep": 0
+          }
+        ]
+      },
+      "mainStackAfter": [
+        {
+          "byteLength": 1,
+          "depth": 0,
+          "elementId": "e3",
+          "hex": "0x0f",
+          "index": 0,
+          "int": 15,
+          "intString": "15",
+          "originStack": "main",
+          "originStep": 3
+        }
+      ],
+      "mainStackBefore": [
+        {
+          "byteLength": 1,
+          "depth": 1,
+          "elementId": "e1",
+          "hex": "0x05",
+          "index": 0,
+          "int": 5,
+          "intString": "5",
+          "originStack": "main",
+          "originStep": 0
+        },
+        {
+          "byteLength": 1,
+          "depth": 0,
+          "elementId": "e2",
+          "hex": "0x0a",
+          "index": 1,
+          "int": 10,
+          "intString": "10",
+          "originStack": "main",
+          "originStep": 0
+        }
+      ],
+      "opcode": "OP_ADD",
+      "operand": "",
+      "pc": 3,
+      "source": {
+        "column": 9,
+        "endColumn": 9,
+        "endLine": 7,
+        "file": "test/debugger_regression/debug_stack_visualizer_alt.ct",
+        "line": 7
+      },
+      "sourceFile": "test/debugger_regression/debug_stack_visualizer_alt.ct",
+      "sourceLine": 7,
+      "step": 3
+    },
+    {
+      "altStack": {
+        "after": [],
+        "before": []
+      },
+      "altStackAfter": [],
+      "altStackBefore": [],
+      "effects": {
+        "altStack": {
+          "popped": [],
+          "pushed": [],
+          "reordered": false,
+          "sizeAfter": 0,
+          "sizeBefore": 0
+        },
+        "mainStack": {
+          "popped": [],
+          "pushed": [],
+          "reordered": false,
+          "sizeAfter": 1,
+          "sizeBefore": 1
+        },
+        "moves": []
+      },
+      "functionName": "test_alt_roundtrip",
+      "instruction": "OP_RETURN",
+      "mainStack": {
+        "after": [
+          {
+            "byteLength": 1,
+            "depth": 0,
+            "elementId": "e3",
+            "hex": "0x0f",
+            "index": 0,
+            "int": 15,
+            "intString": "15",
+            "originStack": "main",
+            "originStep": 3
+          }
+        ],
+        "before": [
+          {
+            "byteLength": 1,
+            "depth": 0,
+            "elementId": "e3",
+            "hex": "0x0f",
+            "index": 0,
+            "int": 15,
+            "intString": "15",
+            "originStack": "main",
+            "originStep": 3
+          }
+        ]
+      },
+      "mainStackAfter": [
+        {
+          "byteLength": 1,
+          "depth": 0,
+          "elementId": "e3",
+          "hex": "0x0f",
+          "index": 0,
+          "int": 15,
+          "intString": "15",
+          "originStack": "main",
+          "originStep": 3
+        }
+      ],
+      "mainStackBefore": [
+        {
+          "byteLength": 1,
+          "depth": 0,
+          "elementId": "e3",
+          "hex": "0x0f",
+          "index": 0,
+          "int": 15,
+          "intString": "15",
+          "originStack": "main",
+          "originStep": 3
+        }
+      ],
+      "opcode": "OP_RETURN",
+      "operand": "",
+      "pc": 4,
+      "source": {
+        "column": 9,
+        "endColumn": 9,
+        "endLine": 8,
+        "file": "test/debugger_regression/debug_stack_visualizer_alt.ct",
+        "line": 8
+      },
+      "sourceFile": "test/debugger_regression/debug_stack_visualizer_alt.ct",
+      "sourceLine": 8,
+      "step": 4
+    }
+  ],
+  "top": "last element in each stack array",
+  "version": "1.0"
+}

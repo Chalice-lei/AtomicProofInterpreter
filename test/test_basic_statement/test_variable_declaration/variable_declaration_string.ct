@@ -1,0 +1,6 @@
+# 测试string类型的变量声明，验证初始化语法
+Contract VariableDeclarationStringTest:
+    def test_string():
+        # 声明并初始化string类型变量
+        str_val: string = "test"
+        # str_val2 = Push(1000)

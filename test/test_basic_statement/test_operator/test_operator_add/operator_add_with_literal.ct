@@ -1,0 +1,6 @@
+# 测试加法运算符：变量与整数相加
+Contract OperatorAddWithLiteralTest:
+    def test_add_literal(a: int, b: int, c: int, d: int):
+        # 参数 + 整数
+        sum_var1: int = a + 100
+        # sum_var2: int = d + 100

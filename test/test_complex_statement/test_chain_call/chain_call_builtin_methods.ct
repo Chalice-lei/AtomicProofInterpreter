@@ -1,0 +1,8 @@
+# 未实现
+Contract ChainTest:
+    def process_data():
+        # 初始化数据
+        packet = Push(0x12345678)
+
+        # 内置方法链式调用：
+        x = packet.clone().slice(-1, 2)  # 合法链式调用

@@ -1,0 +1,14 @@
+# Test nested for loops
+Contract ForLoopNestedTest:
+    def test_nested_loop():
+        # Define arrays
+        matrix_1: int[2] = [1, 2]
+        matrix_2: int[2] = [3, 4]
+        matrix_sum: int = 0
+        # Outer loop
+        for i in Range(2):
+            # Inner loop
+            for j in Range(2):
+                a = matrix_1[i].clone()
+                b = matrix_2[j].clone()
+                matrix_sum = matrix_sum + a * b

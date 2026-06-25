@@ -1,0 +1,22 @@
+# 测试结构体字段的赋值操作
+Contract StructFieldAssignmentTest:
+    Struct Data:
+        x: int
+        y: string
+
+    def test_struct_field_assignment(data: Data):
+    #def test_struct_field_assignment():
+        # data_cloned = data.clone()
+
+        # { }整体赋值
+        # a: int = 0
+        # b: string = "hello"
+        # data = {a, b}
+        data = {0, "hello"}
+
+        # 字段赋值
+        # data.x = 1000             # 为x字段赋值
+        # data.y = "updated field"  # 为y字段赋值
+
+        # data.x = data.x + 2000
+    

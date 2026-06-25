@@ -1,0 +1,20 @@
+Contract Test:
+    # 定义嵌套结构体
+    Struct City:
+        zip_code: int  # 邮政编码
+
+    Struct Address:
+        city: City     # 嵌套City类型字段
+        street: string # 街道名称
+
+    Struct Person:
+        address: Address[2]  # 嵌套Address类型字段
+        name: string
+
+    def get_address(person: Person): 
+        # 结构体字段链式访问：Person -> Address -> City -> zip_code
+        # my_code: int = person.address.city.zip_code  # 合法链式字段访问
+        my_name = person.name
+
+        # 结构体字段链式访问：Person -> Address -> street
+        # my_street: string = person.address.street # 合法链式字段访问

@@ -1,0 +1,774 @@
+{
+  "bytecode": [
+    "012a",
+    "0568656c6c6f",
+    "0412345678",
+    "OP_10"
+  ],
+  "debugInfo": {
+    "contractName": "PushFunctionTest",
+    "functions": [
+      {
+        "endPC": 4,
+        "isPublic": true,
+        "location": {
+          "column": 9,
+          "endColumn": 9,
+          "endLine": 3,
+          "file": "test/test_builtin_function_and_object/builtin_function/push_function_test.ct",
+          "line": 3
+        },
+        "name": "test_push",
+        "startPC": 0
+      }
+    ],
+    "lineToPC": {
+      "11": [
+        3
+      ],
+      "5": [
+        0
+      ],
+      "6": [
+        1
+      ],
+      "7": [
+        2
+      ]
+    },
+    "sourceFile": "test/test_builtin_function_and_object/builtin_function/push_function_test.ct"
+  },
+  "format": "apc-stack-trace",
+  "lifecycle": {
+    "elements": [
+      {
+        "consumed": false,
+        "elementId": "e1",
+        "events": [
+          {
+            "opcode": "01",
+            "pc": 0,
+            "sourceFile": "test/test_builtin_function_and_object/builtin_function/push_function_test.ct",
+            "sourceLine": 5,
+            "stack": "main",
+            "step": 0,
+            "type": "push"
+          }
+        ],
+        "hex": "0x2a",
+        "lastStack": "main",
+        "lastStep": 3,
+        "originStack": "main",
+        "originStep": 0
+      },
+      {
+        "consumed": false,
+        "elementId": "e2",
+        "events": [
+          {
+            "opcode": "05",
+            "pc": 1,
+            "sourceFile": "test/test_builtin_function_and_object/builtin_function/push_function_test.ct",
+            "sourceLine": 6,
+            "stack": "main",
+            "step": 1,
+            "type": "push"
+          }
+        ],
+        "hex": "0x68656c6c6f",
+        "lastStack": "main",
+        "lastStep": 3,
+        "originStack": "main",
+        "originStep": 1
+      },
+      {
+        "consumed": false,
+        "elementId": "e3",
+        "events": [
+          {
+            "opcode": "04",
+            "pc": 2,
+            "sourceFile": "test/test_builtin_function_and_object/builtin_function/push_function_test.ct",
+            "sourceLine": 7,
+            "stack": "main",
+            "step": 2,
+            "type": "push"
+          }
+        ],
+        "hex": "0x12345678",
+        "lastStack": "main",
+        "lastStep": 3,
+        "originStack": "main",
+        "originStep": 2
+      },
+      {
+        "consumed": false,
+        "elementId": "e4",
+        "events": [
+          {
+            "opcode": "OP_10",
+            "pc": 3,
+            "sourceFile": "test/test_builtin_function_and_object/builtin_function/push_function_test.ct",
+            "sourceLine": 11,
+            "stack": "main",
+            "step": 3,
+            "type": "push"
+          }
+        ],
+        "hex": "0x0a",
+        "lastStack": "main",
+        "lastStep": 3,
+        "originStack": "main",
+        "originStep": 3
+      }
+    ],
+    "idFormat": "e<number>",
+    "matching": "synthetic: prefer same stack/index, same stack/value, then cross-stack/value"
+  },
+  "source": {
+    "file": "test/test_builtin_function_and_object/builtin_function/push_function_test.ct",
+    "lines": [
+      "# 测试Push函数的基本功能和各种场景",
+      "Contract PushFunctionTest:",
+      "    def test_push():",
+      "        # 测试1: Push字面量",
+      "        value = Push(42)",
+      "        text = Push(\"hello\")",
+      "        data = Push(0x12345678)",
+      "    ",
+      "        # 测试2: Push固定区变量",
+      "        num1: int = 10",
+      "        num2 = Push(num1)",
+      "        "
+    ]
+  },
+  "stackOrder": "bottom-to-top",
+  "steps": [
+    {
+      "altStack": {
+        "after": [],
+        "before": []
+      },
+      "altStackAfter": [],
+      "altStackBefore": [],
+      "effects": {
+        "altStack": {
+          "popped": [],
+          "pushed": [],
+          "reordered": false,
+          "sizeAfter": 0,
+          "sizeBefore": 0
+        },
+        "mainStack": {
+          "popped": [],
+          "pushed": [
+            {
+              "ascii": "*",
+              "byteLength": 1,
+              "depth": 0,
+              "elementId": "e1",
+              "hex": "0x2a",
+              "index": 0,
+              "int": 42,
+              "intString": "42",
+              "originStack": "main",
+              "originStep": 0
+            }
+          ],
+          "reordered": false,
+          "sizeAfter": 1,
+          "sizeBefore": 0
+        },
+        "moves": []
+      },
+      "functionName": "test_push",
+      "instruction": "012a",
+      "mainStack": {
+        "after": [
+          {
+            "ascii": "*",
+            "byteLength": 1,
+            "depth": 0,
+            "elementId": "e1",
+            "hex": "0x2a",
+            "index": 0,
+            "int": 42,
+            "intString": "42",
+            "originStack": "main",
+            "originStep": 0
+          }
+        ],
+        "before": []
+      },
+      "mainStackAfter": [
+        {
+          "ascii": "*",
+          "byteLength": 1,
+          "depth": 0,
+          "elementId": "e1",
+          "hex": "0x2a",
+          "index": 0,
+          "int": 42,
+          "intString": "42",
+          "originStack": "main",
+          "originStep": 0
+        }
+      ],
+      "mainStackBefore": [],
+      "opcode": "01",
+      "operand": "2a",
+      "pc": 0,
+      "source": {
+        "column": 22,
+        "endColumn": 22,
+        "endLine": 5,
+        "file": "test/test_builtin_function_and_object/builtin_function/push_function_test.ct",
+        "line": 5
+      },
+      "sourceFile": "test/test_builtin_function_and_object/builtin_function/push_function_test.ct",
+      "sourceLine": 5,
+      "step": 0
+    },
+    {
+      "altStack": {
+        "after": [],
+        "before": []
+      },
+      "altStackAfter": [],
+      "altStackBefore": [],
+      "effects": {
+        "altStack": {
+          "popped": [],
+          "pushed": [],
+          "reordered": false,
+          "sizeAfter": 0,
+          "sizeBefore": 0
+        },
+        "mainStack": {
+          "popped": [],
+          "pushed": [
+            {
+              "ascii": "hello",
+              "byteLength": 5,
+              "depth": 0,
+              "elementId": "e2",
+              "hex": "0x68656c6c6f",
+              "index": 0,
+              "int": 478560413032,
+              "intString": "478560413032",
+              "originStack": "main",
+              "originStep": 1
+            }
+          ],
+          "reordered": false,
+          "sizeAfter": 2,
+          "sizeBefore": 1
+        },
+        "moves": []
+      },
+      "functionName": "test_push",
+      "instruction": "0568656c6c6f",
+      "mainStack": {
+        "after": [
+          {
+            "ascii": "*",
+            "byteLength": 1,
+            "depth": 1,
+            "elementId": "e1",
+            "hex": "0x2a",
+            "index": 0,
+            "int": 42,
+            "intString": "42",
+            "originStack": "main",
+            "originStep": 0
+          },
+          {
+            "ascii": "hello",
+            "byteLength": 5,
+            "depth": 0,
+            "elementId": "e2",
+            "hex": "0x68656c6c6f",
+            "index": 1,
+            "int": 478560413032,
+            "intString": "478560413032",
+            "originStack": "main",
+            "originStep": 1
+          }
+        ],
+        "before": [
+          {
+            "ascii": "*",
+            "byteLength": 1,
+            "depth": 0,
+            "elementId": "e1",
+            "hex": "0x2a",
+            "index": 0,
+            "int": 42,
+            "intString": "42",
+            "originStack": "main",
+            "originStep": 0
+          }
+        ]
+      },
+      "mainStackAfter": [
+        {
+          "ascii": "*",
+          "byteLength": 1,
+          "depth": 1,
+          "elementId": "e1",
+          "hex": "0x2a",
+          "index": 0,
+          "int": 42,
+          "intString": "42",
+          "originStack": "main",
+          "originStep": 0
+        },
+        {
+          "ascii": "hello",
+          "byteLength": 5,
+          "depth": 0,
+          "elementId": "e2",
+          "hex": "0x68656c6c6f",
+          "index": 1,
+          "int": 478560413032,
+          "intString": "478560413032",
+          "originStack": "main",
+          "originStep": 1
+        }
+      ],
+      "mainStackBefore": [
+        {
+          "ascii": "*",
+          "byteLength": 1,
+          "depth": 0,
+          "elementId": "e1",
+          "hex": "0x2a",
+          "index": 0,
+          "int": 42,
+          "intString": "42",
+          "originStack": "main",
+          "originStep": 0
+        }
+      ],
+      "opcode": "05",
+      "operand": "68656c6c6f",
+      "pc": 1,
+      "source": {
+        "column": 23,
+        "endColumn": 23,
+        "endLine": 6,
+        "file": "test/test_builtin_function_and_object/builtin_function/push_function_test.ct",
+        "line": 6
+      },
+      "sourceFile": "test/test_builtin_function_and_object/builtin_function/push_function_test.ct",
+      "sourceLine": 6,
+      "step": 1
+    },
+    {
+      "altStack": {
+        "after": [],
+        "before": []
+      },
+      "altStackAfter": [],
+      "altStackBefore": [],
+      "effects": {
+        "altStack": {
+          "popped": [],
+          "pushed": [],
+          "reordered": false,
+          "sizeAfter": 0,
+          "sizeBefore": 0
+        },
+        "mainStack": {
+          "popped": [],
+          "pushed": [
+            {
+              "byteLength": 4,
+              "depth": 0,
+              "elementId": "e3",
+              "hex": "0x12345678",
+              "index": 0,
+              "int": 2018915346,
+              "intString": "2018915346",
+              "originStack": "main",
+              "originStep": 2
+            }
+          ],
+          "reordered": false,
+          "sizeAfter": 3,
+          "sizeBefore": 2
+        },
+        "moves": []
+      },
+      "functionName": "test_push",
+      "instruction": "0412345678",
+      "mainStack": {
+        "after": [
+          {
+            "ascii": "*",
+            "byteLength": 1,
+            "depth": 2,
+            "elementId": "e1",
+            "hex": "0x2a",
+            "index": 0,
+            "int": 42,
+            "intString": "42",
+            "originStack": "main",
+            "originStep": 0
+          },
+          {
+            "ascii": "hello",
+            "byteLength": 5,
+            "depth": 1,
+            "elementId": "e2",
+            "hex": "0x68656c6c6f",
+            "index": 1,
+            "int": 478560413032,
+            "intString": "478560413032",
+            "originStack": "main",
+            "originStep": 1
+          },
+          {
+            "byteLength": 4,
+            "depth": 0,
+            "elementId": "e3",
+            "hex": "0x12345678",
+            "index": 2,
+            "int": 2018915346,
+            "intString": "2018915346",
+            "originStack": "main",
+            "originStep": 2
+          }
+        ],
+        "before": [
+          {
+            "ascii": "*",
+            "byteLength": 1,
+            "depth": 1,
+            "elementId": "e1",
+            "hex": "0x2a",
+            "index": 0,
+            "int": 42,
+            "intString": "42",
+            "originStack": "main",
+            "originStep": 0
+          },
+          {
+            "ascii": "hello",
+            "byteLength": 5,
+            "depth": 0,
+            "elementId": "e2",
+            "hex": "0x68656c6c6f",
+            "index": 1,
+            "int": 478560413032,
+            "intString": "478560413032",
+            "originStack": "main",
+            "originStep": 1
+          }
+        ]
+      },
+      "mainStackAfter": [
+        {
+          "ascii": "*",
+          "byteLength": 1,
+          "depth": 2,
+          "elementId": "e1",
+          "hex": "0x2a",
+          "index": 0,
+          "int": 42,
+          "intString": "42",
+          "originStack": "main",
+          "originStep": 0
+        },
+        {
+          "ascii": "hello",
+          "byteLength": 5,
+          "depth": 1,
+          "elementId": "e2",
+          "hex": "0x68656c6c6f",
+          "index": 1,
+          "int": 478560413032,
+          "intString": "478560413032",
+          "originStack": "main",
+          "originStep": 1
+        },
+        {
+          "byteLength": 4,
+          "depth": 0,
+          "elementId": "e3",
+          "hex": "0x12345678",
+          "index": 2,
+          "int": 2018915346,
+          "intString": "2018915346",
+          "originStack": "main",
+          "originStep": 2
+        }
+      ],
+      "mainStackBefore": [
+        {
+          "ascii": "*",
+          "byteLength": 1,
+          "depth": 1,
+          "elementId": "e1",
+          "hex": "0x2a",
+          "index": 0,
+          "int": 42,
+          "intString": "42",
+          "originStack": "main",
+          "originStep": 0
+        },
+        {
+          "ascii": "hello",
+          "byteLength": 5,
+          "depth": 0,
+          "elementId": "e2",
+          "hex": "0x68656c6c6f",
+          "index": 1,
+          "int": 478560413032,
+          "intString": "478560413032",
+          "originStack": "main",
+          "originStep": 1
+        }
+      ],
+      "opcode": "04",
+      "operand": "12345678",
+      "pc": 2,
+      "source": {
+        "column": 21,
+        "endColumn": 21,
+        "endLine": 7,
+        "file": "test/test_builtin_function_and_object/builtin_function/push_function_test.ct",
+        "line": 7
+      },
+      "sourceFile": "test/test_builtin_function_and_object/builtin_function/push_function_test.ct",
+      "sourceLine": 7,
+      "step": 2
+    },
+    {
+      "altStack": {
+        "after": [],
+        "before": []
+      },
+      "altStackAfter": [],
+      "altStackBefore": [],
+      "effects": {
+        "altStack": {
+          "popped": [],
+          "pushed": [],
+          "reordered": false,
+          "sizeAfter": 0,
+          "sizeBefore": 0
+        },
+        "mainStack": {
+          "popped": [],
+          "pushed": [
+            {
+              "byteLength": 1,
+              "depth": 0,
+              "elementId": "e4",
+              "hex": "0x0a",
+              "index": 0,
+              "int": 10,
+              "intString": "10",
+              "originStack": "main",
+              "originStep": 3
+            }
+          ],
+          "reordered": false,
+          "sizeAfter": 4,
+          "sizeBefore": 3
+        },
+        "moves": []
+      },
+      "functionName": "test_push",
+      "instruction": "OP_10",
+      "mainStack": {
+        "after": [
+          {
+            "ascii": "*",
+            "byteLength": 1,
+            "depth": 3,
+            "elementId": "e1",
+            "hex": "0x2a",
+            "index": 0,
+            "int": 42,
+            "intString": "42",
+            "originStack": "main",
+            "originStep": 0
+          },
+          {
+            "ascii": "hello",
+            "byteLength": 5,
+            "depth": 2,
+            "elementId": "e2",
+            "hex": "0x68656c6c6f",
+            "index": 1,
+            "int": 478560413032,
+            "intString": "478560413032",
+            "originStack": "main",
+            "originStep": 1
+          },
+          {
+            "byteLength": 4,
+            "depth": 1,
+            "elementId": "e3",
+            "hex": "0x12345678",
+            "index": 2,
+            "int": 2018915346,
+            "intString": "2018915346",
+            "originStack": "main",
+            "originStep": 2
+          },
+          {
+            "byteLength": 1,
+            "depth": 0,
+            "elementId": "e4",
+            "hex": "0x0a",
+            "index": 3,
+            "int": 10,
+            "intString": "10",
+            "originStack": "main",
+            "originStep": 3
+          }
+        ],
+        "before": [
+          {
+            "ascii": "*",
+            "byteLength": 1,
+            "depth": 2,
+            "elementId": "e1",
+            "hex": "0x2a",
+            "index": 0,
+            "int": 42,
+            "intString": "42",
+            "originStack": "main",
+            "originStep": 0
+          },
+          {
+            "ascii": "hello",
+            "byteLength": 5,
+            "depth": 1,
+            "elementId": "e2",
+            "hex": "0x68656c6c6f",
+            "index": 1,
+            "int": 478560413032,
+            "intString": "478560413032",
+            "originStack": "main",
+            "originStep": 1
+          },
+          {
+            "byteLength": 4,
+            "depth": 0,
+            "elementId": "e3",
+            "hex": "0x12345678",
+            "index": 2,
+            "int": 2018915346,
+            "intString": "2018915346",
+            "originStack": "main",
+            "originStep": 2
+          }
+        ]
+      },
+      "mainStackAfter": [
+        {
+          "ascii": "*",
+          "byteLength": 1,
+          "depth": 3,
+          "elementId": "e1",
+          "hex": "0x2a",
+          "index": 0,
+          "int": 42,
+          "intString": "42",
+          "originStack": "main",
+          "originStep": 0
+        },
+        {
+          "ascii": "hello",
+          "byteLength": 5,
+          "depth": 2,
+          "elementId": "e2",
+          "hex": "0x68656c6c6f",
+          "index": 1,
+          "int": 478560413032,
+          "intString": "478560413032",
+          "originStack": "main",
+          "originStep": 1
+        },
+        {
+          "byteLength": 4,
+          "depth": 1,
+          "elementId": "e3",
+          "hex": "0x12345678",
+          "index": 2,
+          "int": 2018915346,
+          "intString": "2018915346",
+          "originStack": "main",
+          "originStep": 2
+        },
+        {
+          "byteLength": 1,
+          "depth": 0,
+          "elementId": "e4",
+          "hex": "0x0a",
+          "index": 3,
+          "int": 10,
+          "intString": "10",
+          "originStack": "main",
+          "originStep": 3
+        }
+      ],
+      "mainStackBefore": [
+        {
+          "ascii": "*",
+          "byteLength": 1,
+          "depth": 2,
+          "elementId": "e1",
+          "hex": "0x2a",
+          "index": 0,
+          "int": 42,
+          "intString": "42",
+          "originStack": "main",
+          "originStep": 0
+        },
+        {
+          "ascii": "hello",
+          "byteLength": 5,
+          "depth": 1,
+          "elementId": "e2",
+          "hex": "0x68656c6c6f",
+          "index": 1,
+          "int": 478560413032,
+          "intString": "478560413032",
+          "originStack": "main",
+          "originStep": 1
+        },
+        {
+          "byteLength": 4,
+          "depth": 0,
+          "elementId": "e3",
+          "hex": "0x12345678",
+          "index": 2,
+          "int": 2018915346,
+          "intString": "2018915346",
+          "originStack": "main",
+          "originStep": 2
+        }
+      ],
+      "opcode": "OP_10",
+      "operand": "",
+      "pc": 3,
+      "source": {
+        "column": 21,
+        "endColumn": 0,
+        "endLine": 0,
+        "file": "test/test_builtin_function_and_object/builtin_function/push_function_test.ct",
+        "line": 11
+      },
+      "sourceFile": "test/test_builtin_function_and_object/builtin_function/push_function_test.ct",
+      "sourceLine": 11,
+      "step": 3
+    }
+  ],
+  "top": "last element in each stack array",
+  "version": "1.0"
+}

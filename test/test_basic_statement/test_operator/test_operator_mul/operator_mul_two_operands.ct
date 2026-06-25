@@ -1,0 +1,7 @@
+# 测试乘法运算符：两个整数相乘
+Contract OperatorMulTwoOperandsTest:
+    def test_mul_two(a: int, b: int, c: int, d: int):
+        # 前两个参数相乘
+        # prod1: int = a * b
+        # 后两个参数相乘
+        prod2: int = c * d

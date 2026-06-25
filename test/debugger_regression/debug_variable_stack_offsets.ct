@@ -1,0 +1,13 @@
+# Debugger regression: variable inspector must read values by stack-top offset.
+# Suggested checks in --debug mode after stepping through each assignment:
+#   print left
+#   print right
+#   print top_value
+# The values should match the source-level variable names, not reversed stack slots.
+Contract DebugVariableStackOffsets:
+    def test_stack_offsets(a: int, b: int, c: int):
+        left: int = a + 10
+        right: int = b + 20
+        top_value: int = c + 30
+        combined: int = left + right
+        Return(combined + top_value)

@@ -1,0 +1,9 @@
+# 验证：把“整个结构体变量”赋给普通变量后访问字段
+Contract WholeStructAssignToScalarTest:
+    Struct Pair:
+        x: int
+        y: int
+
+    def test_whole_struct_assign(data: Pair):
+        any_struct = data
+        x1 = any_struct.x

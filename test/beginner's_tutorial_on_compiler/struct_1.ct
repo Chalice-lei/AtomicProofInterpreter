@@ -1,0 +1,7 @@
+Contract UserManagement:
+    # 定义结构体
+    Struct UserInfo:
+        name: string
+        age: int
+        pubkey: hex
+        active: bool

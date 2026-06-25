@@ -1,0 +1,13 @@
+Contract TestParamLevelStruct:
+    Struct Person:
+        name: string
+        age: int
+    
+    # 第一个参数move，第二个参数copy
+    def _compare(move p1: Person, copy p2: Person):
+        age_sum =  p1.age + p2.age
+        Keep(age_sum)
+    
+    def test(alice: Person, bob: Person):
+        # p1会被move（消耗），p2会被copy（保留）
+        result1: int = _compare(alice, bob)

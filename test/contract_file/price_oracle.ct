@@ -1,0 +1,182 @@
+Contract PriceOracle:
+    # ================================================================
+    # 链上 BTC/USD 价格预言机合约
+    #
+    # 架构（完全仿照 Counter 合约双函数模式）：
+    #   两个公开函数顺序执行，通过副栈（alt stack）共享状态：
+    #     1. verifyOracleInput  - 验证操作员权限与签名，读取并验证父交易，
+    #                             将 new_price / pre_code_partialhash /
+    #                             pre_code_size 压入副栈
+    #     2. verifyOracleOutput - 从副栈读取数据，验证当前交易输出包含
+    #                             正确更新后的价格，验证输出哈希
+    #
+    # SuffixData 布局（可变状态，9 字节）：
+    #   [1  byte ] push 标记字节 (0x08)
+    #   [8  bytes] BTC/USD 价格（uint64 小端序，以"分×10000"为单位）
+    #              例：$65,432.10 → 654321000
+    #
+    # self.oracleKeyHash（20 字节）：
+    #   预言机操作员公钥哈希，固定编码在合约字节码中
+    #
+    # 编译：apc --asa price_oracle.ct
+    # ================================================================
+
+    Struct Script:
+        SuffixData: string
+        PartialHash: string
+        Size: number
+
+    Struct Output:
+        Value: number
+        LockingScript: Script
+
+    Struct Input:
+        Data: {txid: hex32, vout: hex4, sequence: hex4}
+
+    Struct PreTX:
+        VLIO: string
+        Inputs: Input[3]
+        UnlockingScriptHash: string
+        Outputs: Output[3]
+
+    Struct CurrentTX:
+        Outputs: Output[3]
+
+    # ----------------------------------------------------------------
+    # 函数 1/2：验证操作员权限与父交易，准备副栈数据
+    #
+    # 副栈写入顺序（从底到顶）：
+    #   new_price → pre_code_partialhash → pre_code_size
+    # ----------------------------------------------------------------
+    def verifyOracleInput(sig: hex, pubKey: hex, new_price: int, pretx: PreTX):
+        # 步骤 1：验证调用者为授权预言机操作员
+        pubKey_copy = pubKey.Clone()
+        pubKeyHash = Hash160(pubKey_copy)
+        EqualVerify(pubKeyHash, self.oracleKeyHash)
+
+        # 步骤 2：验证签名
+        CheckSigVerify(sig, pubKey)
+
+        # 步骤 3：定位当前 UTXO 在父交易中的输出位置
+        utxoData: {txid: hex32, vout: hex4, sequence: hex4}
+        utxoData = Push(BVM.unlockingInput)
+        vout = BinToNum(utxoData.vout)
+        vout_copy = vout.Clone()
+        Delete(utxoData.sequence)
+        Delete(utxoData.txid)
+
+        # 步骤 4：将 new_price 以局部变量名压入副栈（对应 Counter 中 pre_count 的位置）
+        # 顺序：price_alt 最先压入（底部），再压 partialhash，最后 size（顶部）
+        price_alt = new_price
+        SetAlt(price_alt)
+
+        # 步骤 5：读取父交易合约代码元数据并立即压入副栈（仿 Counter 模式）
+        pre_code_partialhash = pretx.Outputs[vout_copy].LockingScript.PartialHash.Clone()
+        SetAlt(pre_code_partialhash)
+        pre_code_size = pretx.Outputs[vout_copy].LockingScript.Size.Clone()
+        SetAlt(pre_code_size)
+
+        # 步骤 6：验证父交易 txid，防止伪造 pretx 参数
+        tx_data = Push(0)
+        SetAlt(tx_data)
+        for i in Range(2, -1, -1):
+            size_copy = pretx.Outputs[i].LockingScript.Size.Clone()
+            if size_copy != 0:
+                tx_data_temp = PartialHash(pretx.Outputs[i].LockingScript.SuffixData, pretx.Outputs[i].LockingScript.PartialHash, pretx.Outputs[i].LockingScript.Size)
+                tx_data_temp = Cat(pretx.Outputs[i].Value, tx_data_temp)
+                SetMain(tx_data)
+                tx_data = Cat(tx_data_temp, tx_data)
+                SetAlt(tx_data)
+            else:
+                Delete(pretx.Outputs[i].LockingScript.Size)
+                Delete(pretx.Outputs[i].LockingScript.PartialHash)
+                Delete(pretx.Outputs[i].LockingScript.SuffixData)
+                Delete(pretx.Outputs[i].Value)
+
+        SetMain(tx_data)
+        tx_data = Sha256(tx_data)
+        tx_data = Cat(pretx.UnlockingScriptHash, tx_data)
+        SetAlt(tx_data)
+        tx_input_data = Push(0)
+        for i in Range(2, -1, -1):
+            tx_input_data = Cat(pretx.Inputs[i].Data, tx_input_data)
+        tx_input_hash = Sha256(tx_input_data)
+        SetMain(tx_data)
+        tx_data = Cat(tx_input_hash, tx_data)
+        tx_data = Cat(pretx.VLIO, tx_data)
+        txid = Hash256(tx_data)
+        preTXID = BVM.unlockingInput.Slice(0, 32)
+        EqualVerify(txid, preTXID)
+
+        # 函数结束；副栈状态（从底到顶）：price_alt | pre_code_partialhash | pre_code_size
+
+    # ----------------------------------------------------------------
+    # 函数 2/2：验证当前交易输出包含正确更新后的价格
+    #
+    # 前提：副栈中已有（从底到顶）：
+    #   new_price | pre_code_partialhash | pre_code_size
+    #
+    # 遍历所有输出，找到与父交易预言机输出大小和 PartialHash 一致的延续
+    # 输出，验证其 SuffixData 中的价格等于 new_price，最后验证输出哈希。
+    # ----------------------------------------------------------------
+    def verifyOracleOutput(ctx: CurrentTX):
+        found = Push(3)
+        SetAlt(found)
+        outputs_data = Push(0)
+        SetAlt(outputs_data)
+
+        for i in Range(2, -1, -1):
+            size = ctx.Outputs[i].LockingScript.Size.Clone()
+            size_copy = size.Clone()
+            if size_copy != 0:
+                SetMain(outputs_data)
+                SetMain(found)
+                SetMain(pre_code_size)
+                pre_code_size_copy = pre_code_size.Clone()
+                if size == pre_code_size_copy:
+                    # 找到大小匹配的输出，进一步核验 PartialHash
+                    SetMain(pre_code_partialhash)
+                    pre_code_partialhash_copy = pre_code_partialhash.Clone()
+                    code_partialhash = ctx.Outputs[i].LockingScript.PartialHash.Clone()
+                    EqualVerify(pre_code_partialhash_copy, code_partialhash)
+
+                    # 解析延续输出的 SuffixData，提取新价格并与 new_price 比对
+                    code_suffixdata = ctx.Outputs[i].LockingScript.SuffixData.Clone()
+                    { _m, code_suffixdata } = Split(code_suffixdata, 1)
+                    Delete(_m)
+                    { ctx_price_bytes, code_suffixdata } = Split(code_suffixdata, 8)
+                    Delete(code_suffixdata)
+                    ctx_price = BinToNum(ctx_price_bytes)
+                    SetMain(price_alt)
+                    price_alt_cmp = price_alt.Clone()
+                    EqualVerify(price_alt_cmp, ctx_price)
+                    SetAlt(price_alt)
+
+                    SetAlt(pre_code_partialhash)
+                    found = found - 1
+                    SetAlt(pre_code_size)
+                    SetAlt(found)
+                else:
+                    SetAlt(pre_code_size)
+                    SetAlt(found)
+                SetAlt(outputs_data)
+                outputs_data_temp = PartialHash(ctx.Outputs[i].LockingScript.SuffixData, ctx.Outputs[i].LockingScript.PartialHash, ctx.Outputs[i].LockingScript.Size)
+                outputs_data_temp = Cat(ctx.Outputs[i].Value, outputs_data_temp)
+                SetMain(outputs_data)
+                outputs_data = Cat(outputs_data_temp, outputs_data)
+                SetAlt(outputs_data)
+            else:
+                Delete(size)
+                Delete(ctx.Outputs[i].LockingScript.Size)
+                Delete(ctx.Outputs[i].LockingScript.PartialHash)
+                Delete(ctx.Outputs[i].LockingScript.SuffixData)
+                Delete(ctx.Outputs[i].Value)
+
+        # 验证所有输出的哈希与 BVM 元数据一致
+        SetMain(outputs_data)
+        outputs_data = Sha256(outputs_data)
+        EqualVerify(outputs_data, BVM.outputsHash)
+        SetMain(found)
+        # 至少找到了一个延续输出（found 减少过）才算成功
+        Return (found < 3 == 1)
+        Push(self.oracleKeyHash)

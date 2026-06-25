@@ -1,0 +1,11 @@
+# 测试setMain函数的基本功能
+Contract SetMainFunctionTest:
+    def test_setmain(a: int, b: int, c: int, d: int):
+        # 先移到副栈
+        setAlt(c)
+        # 主栈: [a, b], 副栈: [c, d]
+        
+        # 再移回主栈
+        setMain(c)
+        # 主栈: [a, b, c], 副栈: [d]
+    

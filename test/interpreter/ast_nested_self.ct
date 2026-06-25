@@ -1,0 +1,4 @@
+Contract ASTNestedSelf:
+    def main():
+        EqualVerify(self.config.key, 0x0102)
+        Return(Size(self.config.key))

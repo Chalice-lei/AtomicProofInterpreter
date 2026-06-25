@@ -1,0 +1,17 @@
+# EN: A commitment can be opened by Alice, while the alternate branch requires both signatures.
+# ZH: Alice 可以打开承诺；另一条分支需要双方签名共同确认。
+Contract TimedCommit:
+
+    def main(aliceNonce: hex, aliceSig: hex, bobSig: hex, path: number):
+        if path == 1:
+            # EN: Opening consumes Alice's nonce and proves it matches the stored hash.
+            # ZH: 打开分支会消费 Alice 的 nonce，并证明它匹配保存的哈希。
+            Delete(bobSig)
+            EqualVerify(Sha256(aliceNonce), self.aliceHash)
+            CheckSigVerify(aliceSig, self.alice)
+        else:
+            # EN: The fallback branch discards the nonce and asks both parties to sign.
+            # ZH: 备用分支丢弃 nonce，改为要求双方都签名。
+            Delete(aliceNonce)
+            CheckSigVerify(aliceSig, self.alice)
+            CheckSigVerify(bobSig, self.bob)

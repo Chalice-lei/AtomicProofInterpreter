@@ -1,0 +1,1224 @@
+{
+  "bytecode": [
+    "OP_ROT",
+    "OP_ROT",
+    "OP_ADD",
+    "OP_ADD",
+    "OP_1ADD",
+    "OP_RETURN",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE",
+    "OP_INVALIDOPCODE"
+  ],
+  "debugInfo": {
+    "contractName": "DebugLineMappingBasic",
+    "functions": [
+      {
+        "endPC": 6,
+        "isPublic": true,
+        "location": {
+          "column": 9,
+          "endColumn": 9,
+          "endLine": 7,
+          "file": "test/debugger_regression/debug_line_mapping_basic.ct",
+          "line": 7
+        },
+        "name": "test_line_mapping",
+        "startPC": 0
+      }
+    ],
+    "lineToPC": {
+      "10": [
+        4
+      ],
+      "11": [
+        5
+      ],
+      "8": [
+        0,
+        1,
+        2
+      ],
+      "9": [
+        3
+      ]
+    },
+    "sourceFile": "test/debugger_regression/debug_line_mapping_basic.ct"
+  },
+  "format": "apc-stack-trace",
+  "lifecycle": {
+    "elements": [
+      {
+        "consumed": true,
+        "consumedAt": 2,
+        "elementId": "e1",
+        "events": [
+          {
+            "opcode": "OP_ROT",
+            "pc": 0,
+            "sourceFile": "test/debugger_regression/debug_line_mapping_basic.ct",
+            "sourceLine": 8,
+            "stack": "main",
+            "step": 0,
+            "type": "initial"
+          },
+          {
+            "opcode": "OP_ADD",
+            "pc": 2,
+            "sourceFile": "test/debugger_regression/debug_line_mapping_basic.ct",
+            "sourceLine": 8,
+            "stack": "main",
+            "step": 2,
+            "type": "pop"
+          }
+        ],
+        "hex": "0x01",
+        "lastStack": "main",
+        "lastStep": 2,
+        "originStack": "main",
+        "originStep": 0
+      },
+      {
+        "consumed": true,
+        "consumedAt": 2,
+        "elementId": "e2",
+        "events": [
+          {
+            "opcode": "OP_ROT",
+            "pc": 0,
+            "sourceFile": "test/debugger_regression/debug_line_mapping_basic.ct",
+            "sourceLine": 8,
+            "stack": "main",
+            "step": 0,
+            "type": "initial"
+          },
+          {
+            "opcode": "OP_ADD",
+            "pc": 2,
+            "sourceFile": "test/debugger_regression/debug_line_mapping_basic.ct",
+            "sourceLine": 8,
+            "stack": "main",
+            "step": 2,
+            "type": "pop"
+          }
+        ],
+        "hex": "0x02",
+        "lastStack": "main",
+        "lastStep": 2,
+        "originStack": "main",
+        "originStep": 0
+      },
+      {
+        "consumed": true,
+        "consumedAt": 3,
+        "elementId": "e3",
+        "events": [
+          {
+            "opcode": "OP_ROT",
+            "pc": 0,
+            "sourceFile": "test/debugger_regression/debug_line_mapping_basic.ct",
+            "sourceLine": 8,
+            "stack": "main",
+            "step": 0,
+            "type": "initial"
+          },
+          {
+            "opcode": "OP_ADD",
+            "pc": 3,
+            "sourceFile": "test/debugger_regression/debug_line_mapping_basic.ct",
+            "sourceLine": 9,
+            "stack": "main",
+            "step": 3,
+            "type": "pop"
+          }
+        ],
+        "hex": "0x03",
+        "lastStack": "main",
+        "lastStep": 3,
+        "originStack": "main",
+        "originStep": 0
+      },
+      {
+        "consumed": true,
+        "consumedAt": 3,
+        "elementId": "e4",
+        "events": [
+          {
+            "opcode": "OP_ADD",
+            "pc": 2,
+            "sourceFile": "test/debugger_regression/debug_line_mapping_basic.ct",
+            "sourceLine": 8,
+            "stack": "main",
+            "step": 2,
+            "type": "push"
+          },
+          {
+            "opcode": "OP_ADD",
+            "pc": 3,
+            "sourceFile": "test/debugger_regression/debug_line_mapping_basic.ct",
+            "sourceLine": 9,
+            "stack": "main",
+            "step": 3,
+            "type": "pop"
+          }
+        ],
+        "hex": "0x03",
+        "lastStack": "main",
+        "lastStep": 3,
+        "originStack": "main",
+        "originStep": 2
+      },
+      {
+        "consumed": true,
+        "consumedAt": 4,
+        "elementId": "e5",
+        "events": [
+          {
+            "opcode": "OP_ADD",
+            "pc": 3,
+            "sourceFile": "test/debugger_regression/debug_line_mapping_basic.ct",
+            "sourceLine": 9,
+            "stack": "main",
+            "step": 3,
+            "type": "push"
+          },
+          {
+            "opcode": "OP_1ADD",
+            "pc": 4,
+            "sourceFile": "test/debugger_regression/debug_line_mapping_basic.ct",
+            "sourceLine": 10,
+            "stack": "main",
+            "step": 4,
+            "type": "pop"
+          }
+        ],
+        "hex": "0x06",
+        "lastStack": "main",
+        "lastStep": 4,
+        "originStack": "main",
+        "originStep": 3
+      },
+      {
+        "consumed": false,
+        "elementId": "e6",
+        "events": [
+          {
+            "opcode": "OP_1ADD",
+            "pc": 4,
+            "sourceFile": "test/debugger_regression/debug_line_mapping_basic.ct",
+            "sourceLine": 10,
+            "stack": "main",
+            "step": 4,
+            "type": "push"
+          }
+        ],
+        "hex": "0x07",
+        "lastStack": "main",
+        "lastStep": 5,
+        "originStack": "main",
+        "originStep": 4
+      }
+    ],
+    "idFormat": "e<number>",
+    "matching": "synthetic: prefer same stack/index, same stack/value, then cross-stack/value"
+  },
+  "source": {
+    "file": "test/debugger_regression/debug_line_mapping_basic.ct",
+    "lines": [
+      "# Debugger regression: source line to PC mapping for simple statements.",
+      "# Suggested checks:",
+      "#   apc debug_line_mapping_basic.ct -d --debug-output /tmp/line_mapping.debug",
+      "#   pcToSource and lineToPC should not be empty.",
+      "#   In --debug mode, breakpoints on the marked lines should resolve.",
+      "Contract DebugLineMappingBasic:",
+      "    def test_line_mapping(a: int, b: int, c: int):",
+      "        first: int = a + b          # break here: expression emits OP_ADD",
+      "        second: int = first + c     # break here: should map to a later PC",
+      "        third: int = second + 1     # break here: literal + variable",
+      "        Return(third)",
+      ""
+    ]
+  },
+  "stackOrder": "bottom-to-top",
+  "steps": [
+    {
+      "altStack": {
+        "after": [],
+        "before": []
+      },
+      "altStackAfter": [],
+      "altStackBefore": [],
+      "effects": {
+        "altStack": {
+          "popped": [],
+          "pushed": [],
+          "reordered": false,
+          "sizeAfter": 0,
+          "sizeBefore": 0
+        },
+        "mainStack": {
+          "popped": [],
+          "pushed": [],
+          "reordered": true,
+          "sizeAfter": 3,
+          "sizeBefore": 3
+        },
+        "moves": []
+      },
+      "functionName": "test_line_mapping",
+      "instruction": "OP_ROT",
+      "mainStack": {
+        "after": [
+          {
+            "byteLength": 1,
+            "depth": 2,
+            "elementId": "e2",
+            "hex": "0x02",
+            "index": 0,
+            "int": 2,
+            "intString": "2",
+            "originStack": "main",
+            "originStep": 0
+          },
+          {
+            "byteLength": 1,
+            "depth": 1,
+            "elementId": "e3",
+            "hex": "0x03",
+            "index": 1,
+            "int": 3,
+            "intString": "3",
+            "originStack": "main",
+            "originStep": 0
+          },
+          {
+            "byteLength": 1,
+            "depth": 0,
+            "elementId": "e1",
+            "hex": "0x01",
+            "index": 2,
+            "int": 1,
+            "intString": "1",
+            "originStack": "main",
+            "originStep": 0
+          }
+        ],
+        "before": [
+          {
+            "byteLength": 1,
+            "depth": 2,
+            "elementId": "e1",
+            "hex": "0x01",
+            "index": 0,
+            "int": 1,
+            "intString": "1",
+            "originStack": "main",
+            "originStep": 0
+          },
+          {
+            "byteLength": 1,
+            "depth": 1,
+            "elementId": "e2",
+            "hex": "0x02",
+            "index": 1,
+            "int": 2,
+            "intString": "2",
+            "originStack": "main",
+            "originStep": 0
+          },
+          {
+            "byteLength": 1,
+            "depth": 0,
+            "elementId": "e3",
+            "hex": "0x03",
+            "index": 2,
+            "int": 3,
+            "intString": "3",
+            "originStack": "main",
+            "originStep": 0
+          }
+        ]
+      },
+      "mainStackAfter": [
+        {
+          "byteLength": 1,
+          "depth": 2,
+          "elementId": "e2",
+          "hex": "0x02",
+          "index": 0,
+          "int": 2,
+          "intString": "2",
+          "originStack": "main",
+          "originStep": 0
+        },
+        {
+          "byteLength": 1,
+          "depth": 1,
+          "elementId": "e3",
+          "hex": "0x03",
+          "index": 1,
+          "int": 3,
+          "intString": "3",
+          "originStack": "main",
+          "originStep": 0
+        },
+        {
+          "byteLength": 1,
+          "depth": 0,
+          "elementId": "e1",
+          "hex": "0x01",
+          "index": 2,
+          "int": 1,
+          "intString": "1",
+          "originStack": "main",
+          "originStep": 0
+        }
+      ],
+      "mainStackBefore": [
+        {
+          "byteLength": 1,
+          "depth": 2,
+          "elementId": "e1",
+          "hex": "0x01",
+          "index": 0,
+          "int": 1,
+          "intString": "1",
+          "originStack": "main",
+          "originStep": 0
+        },
+        {
+          "byteLength": 1,
+          "depth": 1,
+          "elementId": "e2",
+          "hex": "0x02",
+          "index": 1,
+          "int": 2,
+          "intString": "2",
+          "originStack": "main",
+          "originStep": 0
+        },
+        {
+          "byteLength": 1,
+          "depth": 0,
+          "elementId": "e3",
+          "hex": "0x03",
+          "index": 2,
+          "int": 3,
+          "intString": "3",
+          "originStack": "main",
+          "originStep": 0
+        }
+      ],
+      "opcode": "OP_ROT",
+      "operand": "",
+      "pc": 0,
+      "source": {
+        "column": 22,
+        "endColumn": 22,
+        "endLine": 8,
+        "file": "test/debugger_regression/debug_line_mapping_basic.ct",
+        "line": 8
+      },
+      "sourceFile": "test/debugger_regression/debug_line_mapping_basic.ct",
+      "sourceLine": 8,
+      "step": 0
+    },
+    {
+      "altStack": {
+        "after": [],
+        "before": []
+      },
+      "altStackAfter": [],
+      "altStackBefore": [],
+      "effects": {
+        "altStack": {
+          "popped": [],
+          "pushed": [],
+          "reordered": false,
+          "sizeAfter": 0,
+          "sizeBefore": 0
+        },
+        "mainStack": {
+          "popped": [],
+          "pushed": [],
+          "reordered": true,
+          "sizeAfter": 3,
+          "sizeBefore": 3
+        },
+        "moves": []
+      },
+      "functionName": "test_line_mapping",
+      "instruction": "OP_ROT",
+      "mainStack": {
+        "after": [
+          {
+            "byteLength": 1,
+            "depth": 2,
+            "elementId": "e3",
+            "hex": "0x03",
+            "index": 0,
+            "int": 3,
+            "intString": "3",
+            "originStack": "main",
+            "originStep": 0
+          },
+          {
+            "byteLength": 1,
+            "depth": 1,
+            "elementId": "e1",
+            "hex": "0x01",
+            "index": 1,
+            "int": 1,
+            "intString": "1",
+            "originStack": "main",
+            "originStep": 0
+          },
+          {
+            "byteLength": 1,
+            "depth": 0,
+            "elementId": "e2",
+            "hex": "0x02",
+            "index": 2,
+            "int": 2,
+            "intString": "2",
+            "originStack": "main",
+            "originStep": 0
+          }
+        ],
+        "before": [
+          {
+            "byteLength": 1,
+            "depth": 2,
+            "elementId": "e2",
+            "hex": "0x02",
+            "index": 0,
+            "int": 2,
+            "intString": "2",
+            "originStack": "main",
+            "originStep": 0
+          },
+          {
+            "byteLength": 1,
+            "depth": 1,
+            "elementId": "e3",
+            "hex": "0x03",
+            "index": 1,
+            "int": 3,
+            "intString": "3",
+            "originStack": "main",
+            "originStep": 0
+          },
+          {
+            "byteLength": 1,
+            "depth": 0,
+            "elementId": "e1",
+            "hex": "0x01",
+            "index": 2,
+            "int": 1,
+            "intString": "1",
+            "originStack": "main",
+            "originStep": 0
+          }
+        ]
+      },
+      "mainStackAfter": [
+        {
+          "byteLength": 1,
+          "depth": 2,
+          "elementId": "e3",
+          "hex": "0x03",
+          "index": 0,
+          "int": 3,
+          "intString": "3",
+          "originStack": "main",
+          "originStep": 0
+        },
+        {
+          "byteLength": 1,
+          "depth": 1,
+          "elementId": "e1",
+          "hex": "0x01",
+          "index": 1,
+          "int": 1,
+          "intString": "1",
+          "originStack": "main",
+          "originStep": 0
+        },
+        {
+          "byteLength": 1,
+          "depth": 0,
+          "elementId": "e2",
+          "hex": "0x02",
+          "index": 2,
+          "int": 2,
+          "intString": "2",
+          "originStack": "main",
+          "originStep": 0
+        }
+      ],
+      "mainStackBefore": [
+        {
+          "byteLength": 1,
+          "depth": 2,
+          "elementId": "e2",
+          "hex": "0x02",
+          "index": 0,
+          "int": 2,
+          "intString": "2",
+          "originStack": "main",
+          "originStep": 0
+        },
+        {
+          "byteLength": 1,
+          "depth": 1,
+          "elementId": "e3",
+          "hex": "0x03",
+          "index": 1,
+          "int": 3,
+          "intString": "3",
+          "originStack": "main",
+          "originStep": 0
+        },
+        {
+          "byteLength": 1,
+          "depth": 0,
+          "elementId": "e1",
+          "hex": "0x01",
+          "index": 2,
+          "int": 1,
+          "intString": "1",
+          "originStack": "main",
+          "originStep": 0
+        }
+      ],
+      "opcode": "OP_ROT",
+      "operand": "",
+      "pc": 1,
+      "source": {
+        "column": 26,
+        "endColumn": 26,
+        "endLine": 8,
+        "file": "test/debugger_regression/debug_line_mapping_basic.ct",
+        "line": 8
+      },
+      "sourceFile": "test/debugger_regression/debug_line_mapping_basic.ct",
+      "sourceLine": 8,
+      "step": 1
+    },
+    {
+      "altStack": {
+        "after": [],
+        "before": []
+      },
+      "altStackAfter": [],
+      "altStackBefore": [],
+      "effects": {
+        "altStack": {
+          "popped": [],
+          "pushed": [],
+          "reordered": false,
+          "sizeAfter": 0,
+          "sizeBefore": 0
+        },
+        "mainStack": {
+          "popped": [
+            {
+              "byteLength": 1,
+              "depth": 1,
+              "elementId": "e1",
+              "hex": "0x01",
+              "index": 0,
+              "int": 1,
+              "intString": "1",
+              "originStack": "main",
+              "originStep": 0
+            },
+            {
+              "byteLength": 1,
+              "depth": 0,
+              "elementId": "e2",
+              "hex": "0x02",
+              "index": 1,
+              "int": 2,
+              "intString": "2",
+              "originStack": "main",
+              "originStep": 0
+            }
+          ],
+          "pushed": [
+            {
+              "byteLength": 1,
+              "depth": 0,
+              "elementId": "e4",
+              "hex": "0x03",
+              "index": 0,
+              "int": 3,
+              "intString": "3",
+              "originStack": "main",
+              "originStep": 2
+            }
+          ],
+          "reordered": false,
+          "sizeAfter": 2,
+          "sizeBefore": 3
+        },
+        "moves": []
+      },
+      "functionName": "test_line_mapping",
+      "instruction": "OP_ADD",
+      "mainStack": {
+        "after": [
+          {
+            "byteLength": 1,
+            "depth": 1,
+            "elementId": "e3",
+            "hex": "0x03",
+            "index": 0,
+            "int": 3,
+            "intString": "3",
+            "originStack": "main",
+            "originStep": 0
+          },
+          {
+            "byteLength": 1,
+            "depth": 0,
+            "elementId": "e4",
+            "hex": "0x03",
+            "index": 1,
+            "int": 3,
+            "intString": "3",
+            "originStack": "main",
+            "originStep": 2
+          }
+        ],
+        "before": [
+          {
+            "byteLength": 1,
+            "depth": 2,
+            "elementId": "e3",
+            "hex": "0x03",
+            "index": 0,
+            "int": 3,
+            "intString": "3",
+            "originStack": "main",
+            "originStep": 0
+          },
+          {
+            "byteLength": 1,
+            "depth": 1,
+            "elementId": "e1",
+            "hex": "0x01",
+            "index": 1,
+            "int": 1,
+            "intString": "1",
+            "originStack": "main",
+            "originStep": 0
+          },
+          {
+            "byteLength": 1,
+            "depth": 0,
+            "elementId": "e2",
+            "hex": "0x02",
+            "index": 2,
+            "int": 2,
+            "intString": "2",
+            "originStack": "main",
+            "originStep": 0
+          }
+        ]
+      },
+      "mainStackAfter": [
+        {
+          "byteLength": 1,
+          "depth": 1,
+          "elementId": "e3",
+          "hex": "0x03",
+          "index": 0,
+          "int": 3,
+          "intString": "3",
+          "originStack": "main",
+          "originStep": 0
+        },
+        {
+          "byteLength": 1,
+          "depth": 0,
+          "elementId": "e4",
+          "hex": "0x03",
+          "index": 1,
+          "int": 3,
+          "intString": "3",
+          "originStack": "main",
+          "originStep": 2
+        }
+      ],
+      "mainStackBefore": [
+        {
+          "byteLength": 1,
+          "depth": 2,
+          "elementId": "e3",
+          "hex": "0x03",
+          "index": 0,
+          "int": 3,
+          "intString": "3",
+          "originStack": "main",
+          "originStep": 0
+        },
+        {
+          "byteLength": 1,
+          "depth": 1,
+          "elementId": "e1",
+          "hex": "0x01",
+          "index": 1,
+          "int": 1,
+          "intString": "1",
+          "originStack": "main",
+          "originStep": 0
+        },
+        {
+          "byteLength": 1,
+          "depth": 0,
+          "elementId": "e2",
+          "hex": "0x02",
+          "index": 2,
+          "int": 2,
+          "intString": "2",
+          "originStack": "main",
+          "originStep": 0
+        }
+      ],
+      "opcode": "OP_ADD",
+      "operand": "",
+      "pc": 2,
+      "source": {
+        "column": 26,
+        "endColumn": 26,
+        "endLine": 8,
+        "file": "test/debugger_regression/debug_line_mapping_basic.ct",
+        "line": 8
+      },
+      "sourceFile": "test/debugger_regression/debug_line_mapping_basic.ct",
+      "sourceLine": 8,
+      "step": 2
+    },
+    {
+      "altStack": {
+        "after": [],
+        "before": []
+      },
+      "altStackAfter": [],
+      "altStackBefore": [],
+      "effects": {
+        "altStack": {
+          "popped": [],
+          "pushed": [],
+          "reordered": false,
+          "sizeAfter": 0,
+          "sizeBefore": 0
+        },
+        "mainStack": {
+          "popped": [
+            {
+              "byteLength": 1,
+              "depth": 1,
+              "elementId": "e3",
+              "hex": "0x03",
+              "index": 0,
+              "int": 3,
+              "intString": "3",
+              "originStack": "main",
+              "originStep": 0
+            },
+            {
+              "byteLength": 1,
+              "depth": 0,
+              "elementId": "e4",
+              "hex": "0x03",
+              "index": 1,
+              "int": 3,
+              "intString": "3",
+              "originStack": "main",
+              "originStep": 2
+            }
+          ],
+          "pushed": [
+            {
+              "byteLength": 1,
+              "depth": 0,
+              "elementId": "e5",
+              "hex": "0x06",
+              "index": 0,
+              "int": 6,
+              "intString": "6",
+              "originStack": "main",
+              "originStep": 3
+            }
+          ],
+          "reordered": false,
+          "sizeAfter": 1,
+          "sizeBefore": 2
+        },
+        "moves": []
+      },
+      "functionName": "test_line_mapping",
+      "instruction": "OP_ADD",
+      "mainStack": {
+        "after": [
+          {
+            "byteLength": 1,
+            "depth": 0,
+            "elementId": "e5",
+            "hex": "0x06",
+            "index": 0,
+            "int": 6,
+            "intString": "6",
+            "originStack": "main",
+            "originStep": 3
+          }
+        ],
+        "before": [
+          {
+            "byteLength": 1,
+            "depth": 1,
+            "elementId": "e3",
+            "hex": "0x03",
+            "index": 0,
+            "int": 3,
+            "intString": "3",
+            "originStack": "main",
+            "originStep": 0
+          },
+          {
+            "byteLength": 1,
+            "depth": 0,
+            "elementId": "e4",
+            "hex": "0x03",
+            "index": 1,
+            "int": 3,
+            "intString": "3",
+            "originStack": "main",
+            "originStep": 2
+          }
+        ]
+      },
+      "mainStackAfter": [
+        {
+          "byteLength": 1,
+          "depth": 0,
+          "elementId": "e5",
+          "hex": "0x06",
+          "index": 0,
+          "int": 6,
+          "intString": "6",
+          "originStack": "main",
+          "originStep": 3
+        }
+      ],
+      "mainStackBefore": [
+        {
+          "byteLength": 1,
+          "depth": 1,
+          "elementId": "e3",
+          "hex": "0x03",
+          "index": 0,
+          "int": 3,
+          "intString": "3",
+          "originStack": "main",
+          "originStep": 0
+        },
+        {
+          "byteLength": 1,
+          "depth": 0,
+          "elementId": "e4",
+          "hex": "0x03",
+          "index": 1,
+          "int": 3,
+          "intString": "3",
+          "originStack": "main",
+          "originStep": 2
+        }
+      ],
+      "opcode": "OP_ADD",
+      "operand": "",
+      "pc": 3,
+      "source": {
+        "column": 9,
+        "endColumn": 9,
+        "endLine": 9,
+        "file": "test/debugger_regression/debug_line_mapping_basic.ct",
+        "line": 9
+      },
+      "sourceFile": "test/debugger_regression/debug_line_mapping_basic.ct",
+      "sourceLine": 9,
+      "step": 3
+    },
+    {
+      "altStack": {
+        "after": [],
+        "before": []
+      },
+      "altStackAfter": [],
+      "altStackBefore": [],
+      "effects": {
+        "altStack": {
+          "popped": [],
+          "pushed": [],
+          "reordered": false,
+          "sizeAfter": 0,
+          "sizeBefore": 0
+        },
+        "mainStack": {
+          "popped": [
+            {
+              "byteLength": 1,
+              "depth": 0,
+              "elementId": "e5",
+              "hex": "0x06",
+              "index": 0,
+              "int": 6,
+              "intString": "6",
+              "originStack": "main",
+              "originStep": 3
+            }
+          ],
+          "pushed": [
+            {
+              "byteLength": 1,
+              "depth": 0,
+              "elementId": "e6",
+              "hex": "0x07",
+              "index": 0,
+              "int": 7,
+              "intString": "7",
+              "originStack": "main",
+              "originStep": 4
+            }
+          ],
+          "reordered": false,
+          "sizeAfter": 1,
+          "sizeBefore": 1
+        },
+        "moves": []
+      },
+      "functionName": "test_line_mapping",
+      "instruction": "OP_1ADD",
+      "mainStack": {
+        "after": [
+          {
+            "byteLength": 1,
+            "depth": 0,
+            "elementId": "e6",
+            "hex": "0x07",
+            "index": 0,
+            "int": 7,
+            "intString": "7",
+            "originStack": "main",
+            "originStep": 4
+          }
+        ],
+        "before": [
+          {
+            "byteLength": 1,
+            "depth": 0,
+            "elementId": "e5",
+            "hex": "0x06",
+            "index": 0,
+            "int": 6,
+            "intString": "6",
+            "originStack": "main",
+            "originStep": 3
+          }
+        ]
+      },
+      "mainStackAfter": [
+        {
+          "byteLength": 1,
+          "depth": 0,
+          "elementId": "e6",
+          "hex": "0x07",
+          "index": 0,
+          "int": 7,
+          "intString": "7",
+          "originStack": "main",
+          "originStep": 4
+        }
+      ],
+      "mainStackBefore": [
+        {
+          "byteLength": 1,
+          "depth": 0,
+          "elementId": "e5",
+          "hex": "0x06",
+          "index": 0,
+          "int": 6,
+          "intString": "6",
+          "originStack": "main",
+          "originStep": 3
+        }
+      ],
+      "opcode": "OP_1ADD",
+      "operand": "",
+      "pc": 4,
+      "source": {
+        "column": 22,
+        "endColumn": 22,
+        "endLine": 10,
+        "file": "test/debugger_regression/debug_line_mapping_basic.ct",
+        "line": 10
+      },
+      "sourceFile": "test/debugger_regression/debug_line_mapping_basic.ct",
+      "sourceLine": 10,
+      "step": 4
+    },
+    {
+      "altStack": {
+        "after": [],
+        "before": []
+      },
+      "altStackAfter": [],
+      "altStackBefore": [],
+      "effects": {
+        "altStack": {
+          "popped": [],
+          "pushed": [],
+          "reordered": false,
+          "sizeAfter": 0,
+          "sizeBefore": 0
+        },
+        "mainStack": {
+          "popped": [],
+          "pushed": [],
+          "reordered": false,
+          "sizeAfter": 1,
+          "sizeBefore": 1
+        },
+        "moves": []
+      },
+      "functionName": "test_line_mapping",
+      "instruction": "OP_RETURN",
+      "mainStack": {
+        "after": [
+          {
+            "byteLength": 1,
+            "depth": 0,
+            "elementId": "e6",
+            "hex": "0x07",
+            "index": 0,
+            "int": 7,
+            "intString": "7",
+            "originStack": "main",
+            "originStep": 4
+          }
+        ],
+        "before": [
+          {
+            "byteLength": 1,
+            "depth": 0,
+            "elementId": "e6",
+            "hex": "0x07",
+            "index": 0,
+            "int": 7,
+            "intString": "7",
+            "originStack": "main",
+            "originStep": 4
+          }
+        ]
+      },
+      "mainStackAfter": [
+        {
+          "byteLength": 1,
+          "depth": 0,
+          "elementId": "e6",
+          "hex": "0x07",
+          "index": 0,
+          "int": 7,
+          "intString": "7",
+          "originStack": "main",
+          "originStep": 4
+        }
+      ],
+      "mainStackBefore": [
+        {
+          "byteLength": 1,
+          "depth": 0,
+          "elementId": "e6",
+          "hex": "0x07",
+          "index": 0,
+          "int": 7,
+          "intString": "7",
+          "originStack": "main",
+          "originStep": 4
+        }
+      ],
+      "opcode": "OP_RETURN",
+      "operand": "",
+      "pc": 5,
+      "source": {
+        "column": 9,
+        "endColumn": 9,
+        "endLine": 11,
+        "file": "test/debugger_regression/debug_line_mapping_basic.ct",
+        "line": 11
+      },
+      "sourceFile": "test/debugger_regression/debug_line_mapping_basic.ct",
+      "sourceLine": 11,
+      "step": 5
+    }
+  ],
+  "top": "last element in each stack array",
+  "version": "1.0"
+}

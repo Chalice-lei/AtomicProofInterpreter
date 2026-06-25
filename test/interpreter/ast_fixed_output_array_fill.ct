@@ -1,0 +1,23 @@
+Contract ASTFixedOutputArrayFill:
+    Struct Script:
+        SuffixData: hex
+        PartialHash: hex
+        Size: hex4
+
+    Struct Output:
+        Value: hex4
+        LockingScript: Script
+
+    Struct CurrentTX:
+        Outputs: Output[3]
+
+    def main(ctx: CurrentTX):
+        size0 = ctx.Outputs[0].LockingScript.Size.Clone()
+        EqualVerify(BVM.outputCount, 1)
+        EqualVerify(size0.Clone(), 0x03000000)
+        EqualVerify(ctx.Outputs[1].LockingScript.Size, 0)
+        EqualVerify(ctx.Outputs[2].Value, 0)
+
+        scriptHash = PartialHash(ctx.Outputs[0].LockingScript.SuffixData, ctx.Outputs[0].LockingScript.PartialHash, size0)
+        EqualVerify(scriptHash, Sha256(0xaabbcc))
+        Return(BinToNum(ctx.Outputs[0].Value))

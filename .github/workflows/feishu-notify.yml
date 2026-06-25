@@ -1,0 +1,182 @@
+name: Code Build & Doc Notify
+
+on:
+  push:
+    branches: [ main, test ]  # 监听的分支，可根据需要添加
+  pull_request:
+    branches: [ main, test ]
+
+jobs:
+  process:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2  # 拉取最近2次提交用于对比
+
+      - name: Determine file change type
+        id: file_check
+        run: |
+          # 定义代码文件扩展名（根据项目补充）
+          CODE_EXTENSIONS=("cpp" "h" "cc" "cxx" "c")
+          
+          # 获取修改的文件列表（区分push和PR事件）
+          if [[ "${{ github.event_name }}" == "push" ]]; then
+            CHANGED_FILES=$(git diff --name-only HEAD^ HEAD | tr '\n' ' ')
+          else
+            CHANGED_FILES=$(git diff --name-only ${{ github.event.pull_request.base.sha }} ${{ github.event.pull_request.head.sha }} | tr '\n' ' ')
+          fi
+          
+          # 输出修改文件列表（调试用）
+          echo "Changed files: $CHANGED_FILES"
+          echo "changed_files=$CHANGED_FILES" >> $GITHUB_ENV
+          
+          # 核心判断：是否包含代码文件
+          IS_CODE_CHANGE=false
+          for ext in "${CODE_EXTENSIONS[@]}"; do
+            # 检查是否有文件匹配代码扩展名
+            if echo "$CHANGED_FILES" | grep -q "\.$ext\b"; then
+              IS_CODE_CHANGE=true
+              break
+            fi
+          done
+          echo "is_code_change=$IS_CODE_CHANGE" >> $GITHUB_ENV
+
+      # 代码文件更新：安装环境+执行构建
+      - name: Set up C++ environment (code change)
+        if: env.is_code_change == 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y g++
+
+      - name: Run build script (code change)
+        if: env.is_code_change == 'true'
+        run: |
+          chmod +x ./scripts/cross-platform-builder.sh
+          ./scripts/cross-platform-builder.sh
+
+      # 代码更新：发送构建结果通知
+      - name: Send code build success
+        if: env.is_code_change == 'true' && success()
+        env:
+          FEISHU_WEBHOOK: ${{ secrets.FEISHU_WEBHOOK }}
+          REPOSITORY: ${{ github.repository }}
+          REF_NAME: ${{ github.ref_name }}
+          ACTOR: ${{ github.actor }}
+          CHANGED_FILES: ${{ env.changed_files }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          if [[ -z "$FEISHU_WEBHOOK" ]]; then
+            echo "FEISHU_WEBHOOK is not configured; skip notification."
+            exit 0
+          fi
+          python3 - <<'PY' > payload.json
+          import json
+          import os
+
+          payload = {
+              "msg_type": "post",
+              "content": {
+                  "post": {
+                      "zh_cn": {
+                          "title": "✅ 代码构建成功",
+                          "content": [
+                              [{"tag": "text", "text": "仓库: "}, {"tag": "text", "text": os.environ["REPOSITORY"], "style": "bold"}],
+                              [{"tag": "text", "text": "分支: "}, {"tag": "text", "text": os.environ["REF_NAME"], "style": "bold"}],
+                              [{"tag": "text", "text": "提交者: "}, {"tag": "text", "text": os.environ["ACTOR"], "style": "bold"}],
+                              [{"tag": "text", "text": "修改文件: "}, {"tag": "text", "text": os.environ["CHANGED_FILES"], "style": "italic"}],
+                              [{"tag": "text", "text": "详情: "}, {"tag": "a", "text": "查看日志", "href": os.environ["RUN_URL"]}],
+                          ],
+                      }
+                  }
+              },
+          }
+          print(json.dumps(payload, ensure_ascii=False))
+          PY
+          curl -X POST "$FEISHU_WEBHOOK" \
+            -H "Content-Type: application/json" \
+            --data @payload.json
+
+      - name: Send code build failure
+        if: env.is_code_change == 'true' && failure()
+        env:
+          FEISHU_WEBHOOK: ${{ secrets.FEISHU_WEBHOOK }}
+          REPOSITORY: ${{ github.repository }}
+          REF_NAME: ${{ github.ref_name }}
+          ACTOR: ${{ github.actor }}
+          CHANGED_FILES: ${{ env.changed_files }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          if [[ -z "$FEISHU_WEBHOOK" ]]; then
+            echo "FEISHU_WEBHOOK is not configured; skip notification."
+            exit 0
+          fi
+          python3 - <<'PY' > payload.json
+          import json
+          import os
+
+          payload = {
+              "msg_type": "post",
+              "content": {
+                  "post": {
+                      "zh_cn": {
+                          "title": "❌ 代码构建失败",
+                          "content": [
+                              [{"tag": "text", "text": "仓库: "}, {"tag": "text", "text": os.environ["REPOSITORY"], "style": "bold"}],
+                              [{"tag": "text", "text": "分支: "}, {"tag": "text", "text": os.environ["REF_NAME"], "style": "bold"}],
+                              [{"tag": "text", "text": "提交者: "}, {"tag": "text", "text": os.environ["ACTOR"], "style": "bold"}],
+                              [{"tag": "text", "text": "修改文件: "}, {"tag": "text", "text": os.environ["CHANGED_FILES"], "style": "italic"}],
+                              [{"tag": "text", "text": "排查: "}, {"tag": "a", "text": "查看日志", "href": os.environ["RUN_URL"]}],
+                          ],
+                      }
+                  }
+              },
+          }
+          print(json.dumps(payload, ensure_ascii=False))
+          PY
+          curl -X POST "$FEISHU_WEBHOOK" \
+            -H "Content-Type: application/json" \
+            --data @payload.json
+
+      # 非代码文件更新（全视为文档类）：仅发送通知
+      - name: Send doc update notification
+        if: env.is_code_change == 'false'  # 只要不是代码文件，就触发
+        env:
+          FEISHU_WEBHOOK: ${{ secrets.FEISHU_WEBHOOK }}
+          REPOSITORY: ${{ github.repository }}
+          REF_NAME: ${{ github.ref_name }}
+          ACTOR: ${{ github.actor }}
+          CHANGED_FILES: ${{ env.changed_files }}
+          COMMIT_URL: ${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}
+        run: |
+          if [[ -z "$FEISHU_WEBHOOK" ]]; then
+            echo "FEISHU_WEBHOOK is not configured; skip notification."
+            exit 0
+          fi
+          python3 - <<'PY' > payload.json
+          import json
+          import os
+
+          payload = {
+              "msg_type": "post",
+              "content": {
+                  "post": {
+                      "zh_cn": {
+                          "title": "📄 文档更新提醒",
+                          "content": [
+                              [{"tag": "text", "text": "仓库: "}, {"tag": "text", "text": os.environ["REPOSITORY"], "style": "bold"}],
+                              [{"tag": "text", "text": "分支: "}, {"tag": "text", "text": os.environ["REF_NAME"], "style": "bold"}],
+                              [{"tag": "text", "text": "更新者: "}, {"tag": "text", "text": os.environ["ACTOR"], "style": "bold"}],
+                              [{"tag": "text", "text": "修改文件: "}, {"tag": "text", "text": os.environ["CHANGED_FILES"], "style": "italic"}],
+                              [{"tag": "text", "text": "详情: "}, {"tag": "a", "text": "查看提交", "href": os.environ["COMMIT_URL"]}],
+                          ],
+                      }
+                  }
+              },
+          }
+          print(json.dumps(payload, ensure_ascii=False))
+          PY
+          curl -X POST "$FEISHU_WEBHOOK" \
+            -H "Content-Type: application/json" \
+            --data @payload.json

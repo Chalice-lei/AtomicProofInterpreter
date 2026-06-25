@@ -1,0 +1,31 @@
+Contract ArrayFieldMultipleTest:
+    Struct ComplexData:
+        name: int
+        arr1: uint64[2]  # 第一个数组字段
+        arr2: uint64[3]  # 第二个数组字段
+        arr3: uint64[2]  # 第三个数组字段
+        value: int
+        
+    def test_multiple_array_fields(data: ComplexData):
+        # 测试多个数组字段的访问
+        # 访问第一个数组
+        arr1_0: int = data.arr1[0]
+        arr1_1: int = data.arr1[1]
+        
+        # 访问第二个数组
+        arr2_0: int = data.arr2[0]
+        arr2_1: int = data.arr2[1]
+        arr2_2: int = data.arr2[2]
+        
+        # 访问第三个数组
+        arr3_0: int = data.arr3[0]
+        arr3_1: int = data.arr3[1]
+        
+        # 访问普通字段
+        name_val: int = data.name
+        value_val: int = data.value
+        
+        # 测试交叉访问（不同数组字段）
+        # arr1_0_again: int = data.arr1[0]
+        # arr2_2_again: int = data.arr2[2]
+        # arr3_1_again: int = data.arr3[1]

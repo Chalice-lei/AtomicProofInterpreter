@@ -1,0 +1,9 @@
+Contract Test:
+    def _test(a: int, b: int):
+        c: int = a.Clone() + b.Clone()
+        d: int = a - b
+
+    def main(x1: int, y1: int, x2: int, y2: int):
+        _test(x1, y1)
+        z: int = x2.Clone() + y2.Clone()
+        k: int = x2 - y2

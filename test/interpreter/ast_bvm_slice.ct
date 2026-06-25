@@ -1,0 +1,5 @@
+Contract ASTBVMSlice:
+    def main():
+        prefix = BVM.unlockingInput.Slice(0, 2)
+        EqualVerify(prefix, 0x0102)
+        Return(BinToNum(BVM.unlockingInput.Slice(2, 1)))

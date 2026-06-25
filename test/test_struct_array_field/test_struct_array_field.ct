@@ -1,0 +1,20 @@
+# 测试结构体字段数组类型
+Contract StructArrayFieldTest:
+    Struct Data:
+        arr: uint64[3]  # 数组类型字段，每个元素8字节（64位），长度3
+        value: int
+
+    def test_array_field(data: Data):
+        # 访问数组字段的特定元素
+        # first: int = data.arr[0]  # 自动展开数组并访问第一个元素
+        # second: int = data.arr[1] # 访问第二个元素
+        # third: int = data.arr[2]  # 访问第三个元素
+
+        data_arr_cloned = data.arr.clone()
+        # first: int = data_arr_cloned[0]
+        # second: int = data_arr_cloned[1]
+        # third: int = data.arr[2]
+
+        # 数组字段在第一次访问时会被展开到栈顶
+        # 后续访问按照原有的数组访问逻辑处理
+        # sum: int = data.arr[0] + data.arr[1] + data.arr[2] + data.arr[3]

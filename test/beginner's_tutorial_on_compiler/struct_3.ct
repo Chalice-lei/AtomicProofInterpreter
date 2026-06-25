@@ -1,0 +1,11 @@
+Contract ProductManagement:
+    # 定义结构体
+    Struct Product:
+        price: int
+        quantity: int
+        name: string
+    
+    def process_products(products: Product[3]):   
+        # 访问结构体数组元素的字段
+        first_price: int = products[0].price
+        second_name: string = products[1].name

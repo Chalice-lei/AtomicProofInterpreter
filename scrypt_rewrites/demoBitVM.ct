@@ -1,0 +1,31 @@
+# EN: A compact boolean proof: each bit is opened by choosing one hash from a committed pair.
+# ZH: 紧凑布尔证明：每个位都通过一对哈希承诺中的一个原像来打开。
+Contract DemoBitVM:
+
+    # EN: For each wire, index 0 represents bit 0 and index 1 represents bit 1.
+    # ZH: 每条线的第 0 项表示 bit 0，第 1 项表示 bit 1。
+    Struct HashPair:
+        hash0: hex
+        hash1: hex
+
+    def main(preimageE: hex, preimageB: hex, preimageA: hex):
+        # EN: Opening a preimage tells us which bit value was selected for A, B, and E.
+        # ZH: 打开原像即可确定 A、B、E 分别选择了哪个 bit 值。
+        hA = Hash160(preimageA)
+        okA = Or(Equal(hA.Clone(), self.hashPairA.hash0), Equal(hA.Clone(), self.hashPairA.hash1))
+        NumEqualVerify(okA, 1)
+        bitA = Equal(hA, self.hashPairA.hash1)
+
+        hB = Hash160(preimageB)
+        okB = Or(Equal(hB.Clone(), self.hashPairB.hash0), Equal(hB.Clone(), self.hashPairB.hash1))
+        NumEqualVerify(okB, 1)
+        bitB = Equal(hB, self.hashPairB.hash1)
+
+        hE = Hash160(preimageE)
+        okE = Or(Equal(hE.Clone(), self.hashPairE.hash0), Equal(hE.Clone(), self.hashPairE.hash1))
+        NumEqualVerify(okE, 1)
+        bitE = Equal(hE, self.hashPairE.hash1)
+
+        # EN: The selected E bit must be the NAND result of the selected A and B bits.
+        # ZH: 被选择的 E 必须等于 A 与 B 的 NAND 结果。
+        EqualVerify(Not(And(bitA, bitB)), bitE)

@@ -1,0 +1,12 @@
+# EN: Absolute locktime template.
+# ZH: 绝对时间锁样板。
+Contract TimeLock:
+
+    # EN: The spending transaction must have locktime greater than or equal to `self.matureTime`.
+    # EN: The current input must be non-final so the transaction locktime is enforced.
+    # ZH: 花费交易的 locktime 必须大于或等于 `self.matureTime`。
+    # ZH: 当前输入必须是非 final sequence，交易 locktime 才会被共识执行。
+    def unlock():
+        inputSequence = BVM.unlockingInput.Slice(36, 40)
+        NumEqualVerify(Equal(inputSequence, 0xffffffff), 0)
+        NumEqualVerify(GreaterOrEqual(BVM.locktime, self.matureTime), 1)

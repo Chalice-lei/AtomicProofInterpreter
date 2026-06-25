@@ -1,0 +1,7 @@
+# 测试赋值给string类型变量
+Contract AssignmentStringTest:
+    def test_assignment_string():
+        # 赋值给string类型变量
+        name_1: string = "literal"
+        name_2: string 
+        name_2 = name_1

@@ -1,0 +1,24 @@
+Contract ArrayFieldEdgeCasesTest:
+    Struct EdgeCase:
+        single: uint64[1]  # 单元素数组
+        empty_info: int
+        triple: uint64[3]
+        
+    def test_edge_cases(data: EdgeCase):
+        # 测试单元素数组
+        single_val: int = data.single[0]
+        
+        # 测试普通字段
+        empty_val: int = data.empty_info
+        
+        # 测试三元素数组
+        triple_0: int = data.triple[0]
+        triple_1: int = data.triple[1]
+        triple_2: int = data.triple[2]
+        
+        # 测试重复访问单元素数组
+        # single_val_again: int = data.single[0]
+        
+        # 测试重复访问三元素数组
+        # triple_0_again: int = data.triple[0]
+        # triple_2_again: int = data.triple[2]

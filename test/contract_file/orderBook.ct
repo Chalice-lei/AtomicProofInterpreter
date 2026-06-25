@@ -1,0 +1,243 @@
+Contract OrderBookSellContract:
+    Struct Input:
+        Data: string
+
+    Struct Script:
+        SuffixData: string
+        PartialHash: string
+        Size: number
+
+    Struct Output:
+        Value: number
+        LockingScript: Script
+
+    Struct PreTX:
+        VLIO: string
+        Inputs: Input[10]
+        UnlockingScriptHash: string
+        Outputs: Output[10]
+
+    Struct TapeOutput:
+        Value: number
+        LockingScript: string
+
+    Struct FTOutput:
+        Code: Output
+        Tape: TapeOutput
+
+    Struct CurrentTX:
+        FTbySeller: FTOutput
+        FTbyTax: FTOutput
+        TBCbyBuyer: Output
+        TBCbyTax: Output
+        TBCbyChange: Output
+        BuyOrSellChange: Output
+        FTbyChange: FTOutput
+
+    def verifyPreTX(ctx: CurrentTX, pretx: PreTX):
+        vout = BinToNum(BVM.unlockingInput.Slice(32, 4)) #获取code在父交易中输出的位置
+        vout_copy = vout.Clone()
+        #取到code_data
+        code_data = pretx.Outputs[vout_copy].LockingScript.SuffixData.Clone()
+        { hold_address, code_data } = Split(code_data, 20)
+        { sale_volume, code_data } = Split(code_data, 8)
+        Delete(sale_volume)
+        { token_partialhash, code_data } = Split(code_data, 32)
+        { fee_rate, code_data } = Split(code_data, 8)
+        { unit_price, code_data } = Split(code_data, 8)
+        Delete(code_data)
+        SetAlt(unit_price)
+        SetAlt(fee_rate)
+        SetAlt(token_partialhash)
+        SetAlt(hold_address)
+
+        #取到code_value，转换为数值
+        vout_copy = vout.Clone()
+        code_value = BinToNum(pretx.Outputs[vout_copy].Value.Clone())
+        SetAlt(code_value)
+
+        #取到code_partialhash和code_size
+        vout_copy = vout.Clone()
+        code_size = pretx.Outputs[vout_copy].LockingScript.Size.Clone()
+        SetAlt(code_size)
+        code_partialhash = pretx.Outputs[vout].LockingScript.PartialHash.Clone()
+        SetAlt(code_partialhash)
+        
+
+        #验证父交易
+        #拼接输出
+        tx_data = Push(0)
+        SetAlt(tx_data)
+        for i in Range(9, -1, -1):
+            size_copy = pretx.Outputs[i].LockingScript.Size.Clone()
+            if size_copy != 0:
+                tx_data_temp = PartialHash(pretx.Outputs[i].LockingScript.SuffixData, pretx.Outputs[i].LockingScript.PartialHash, pretx.Outputs[i].LockingScript.Size)
+                tx_data_temp = Cat(pretx.Outputs[i].Value, tx_data_temp)
+                SetMain(tx_data)
+                tx_data = Cat(tx_data_temp, tx_data)
+                SetAlt(tx_data)
+                Keep(tx_data)
+            else:
+                Delete(pretx.Outputs[i].LockingScript.Size)
+                Delete(pretx.Outputs[i].LockingScript.PartialHash)
+                Delete(pretx.Outputs[i].LockingScript.SuffixData)
+                Delete(pretx.Outputs[i].Value)
+
+        #开始计算txid
+        SetMain(tx_data)
+        tx_data = Sha256(tx_data)
+        tx_data = Cat(pretx.UnlockingScriptHash, tx_data)
+        SetAlt(tx_data)
+        #拼接输入
+        tx_input_data = Push(0)
+        for i in Range(9, -1, -1):
+            tx_input_data = Cat(pretx.Inputs[i].Data, tx_input_data)
+        tx_input_hash = Sha256(tx_input_data)
+        SetMain(tx_data)
+        tx_data = Cat(tx_input_hash, tx_data)
+        tx_data = Cat(pretx.VLIO, tx_data)
+        #tx数据拼接完成，计算txid
+        txid = Hash256(tx_data)
+        preTXID = BVM.unlockingInput.Slice(0, 32) #获取当前解锁的输入txid
+        EqualVerify(txid, preTXID)
+
+        #验证当前交易
+        outputs_data = Push(0)
+        SetAlt(outputs_data)
+        temp_data = ctx.FTbyChange.Tape.LockingScript.Clone()
+        if temp_data != 0:
+            #若是卖单找零
+            locking_script_hash = Sha256(ctx.FTbyChange.Tape.LockingScript)
+            SetMain(outputs_data)
+            outputs_data = Cat(locking_script_hash, outputs_data)
+            outputs_data = Cat(ctx.FTbyChange.Tape.Value, outputs_data)
+            SetAlt(outputs_data)
+
+            outputs_data_temp = PartialHash(ctx.FTbyChange.Code.LockingScript.SuffixData, ctx.FTbyChange.Code.LockingScript.PartialHash, ctx.FTbyChange.Code.LockingScript.Size)
+            SetMain(outputs_data)
+            outputs_data = Cat(outputs_data_temp, outputs_data)
+            outputs_data = Cat(ctx.FTbyChange.Code.Value, outputs_data)
+            SetAlt(outputs_data)
+
+            outputs_data_temp = PartialHash(ctx.BuyOrSellChange.LockingScript.SuffixData, ctx.BuyOrSellChange.LockingScript.PartialHash, ctx.BuyOrSellChange.LockingScript.Size)
+            SetMain(outputs_data)
+            outputs_data = Cat(outputs_data_temp, outputs_data)
+            outputs_data = Cat(ctx.BuyOrSellChange.Value, outputs_data)
+            SetAlt(outputs_data)
+            Keep(outputs_data)
+        else:
+            #若是买单找零
+            Delete(ctx.FTbyChange)
+            #对sell_change的验证
+            temp_catdata = Cat(ctx.BuyOrSellChange.LockingScript.PartialHash.Clone(), ctx.BuyOrSellChange.LockingScript.Size.Clone())
+            SetMain(outputs_data)
+            SetMain(code_partialhash)
+            SetMain(code_size)
+            temp_data = Cat(code_partialhash, code_size)
+            EqualVerify(temp_catdata, temp_data)    #验证sell_change的code是否和pretx.code的partialhash和size一致
+
+            SetMain(code_value)
+            code_value = code_value - BinToNum(ctx.BuyOrSellChange.Value.Clone()) #令sell_code_value = sell_code_value - SELL_CHANGE.value
+
+            code_data_copy = ctx.BuyOrSellChange.LockingScript.SuffixData.Clone()
+            { hold_address_check, code_data_copy } = Split(code_data_copy, 20)
+            { sale_volume_check, code_data_copy } = Split(code_data_copy, 8)
+            EqualVerify(BinToNum(ctx.BuyOrSellChange.Value.Clone()), BinToNum(sale_volume_check))
+            SetMain(hold_address)
+            hold_address_copy = hold_address.Clone()
+            EqualVerify(hold_address_copy, hold_address_check)
+            { token_partialhash_check, code_data_copy } = Split(code_data_copy, 32)
+            SetMain(token_partialhash)
+            token_partialhash_copy = token_partialhash.Clone()
+            EqualVerify(token_partialhash_copy, token_partialhash_check)
+            { fee_rate_check, code_data_copy } = Split(code_data_copy, 8)
+            SetMain(fee_rate)
+            fee_rate_copy = fee_rate.Clone()
+            EqualVerify(fee_rate_copy, fee_rate_check)
+            { unit_price_check, code_data_copy } = Split(code_data_copy, 8)
+            Delete(code_data_copy)
+            SetMain(unit_price)
+            unit_price_copy = unit_price.Clone()
+            EqualVerify(unit_price_copy, unit_price_check)
+
+            SetAlt(unit_price)
+            SetAlt(fee_rate)
+            SetAlt(token_partialhash)
+            SetAlt(hold_address)
+            SetAlt(code_value)
+            SetAlt(outputs_data)
+
+            outputs_data_temp = PartialHash(ctx.BuyOrSellChange.LockingScript.SuffixData, ctx.BuyOrSellChange.LockingScript.PartialHash, ctx.BuyOrSellChange.LockingScript.Size)
+            SetMain(outputs_data)
+            outputs_data = Cat(outputs_data_temp, outputs_data)
+            outputs_data = Cat(ctx.BuyOrSellChange.Value, outputs_data)
+            SetAlt(outputs_data)
+            Keep(outputs_data)
+            Keep(code_value)
+
+
+    # def verifyCurrentTX(ctx: CurrentTX):
+    #     outputs_data = Push(0)
+    #     SetAlt(outputs_data)
+    #     temp_data = ctx.FTbyChange.Tape.LockingScript.Clone()
+    #     if temp_data != 0:
+    #         #若是卖单找零
+    #         locking_script_hash = Sha256(ctx.FTbyChange.Tape.LockingScript)
+    #         SetMain(outputs_data)
+    #         outputs_data = Cat(locking_script_hash, outputs_data)
+    #         outputs_data = Cat(ctx.FTbyChange.Tape.Value, outputs_data)
+    #         SetAlt(outputs_data)
+
+    #         outputs_data_temp = PartialHash(ctx.FTbyChange.Code.LockingScript.SuffixData, ctx.FTbyChange.Code.LockingScript.PartialHash, ctx.FTbyChange.Code.LockingScript.Size)
+    #         SetMain(outputs_data)
+    #         outputs_data = Cat(outputs_data_temp, outputs_data)
+    #         outputs_data = Cat(ctx.FTbyChange.Code.Value, outputs_data)
+    #         SetAlt(outputs_data)
+
+    #         outputs_data_temp = PartialHash(ctx.BuyOrSellChange.LockingScript.SuffixData, ctx.BuyOrSellChange.LockingScript.PartialHash, ctx.BuyOrSellChange.LockingScript.Size)
+    #         SetMain(outputs_data)
+    #         outputs_data = Cat(outputs_data_temp, outputs_data)
+    #         outputs_data = Cat(ctx.BuyOrSellChange.LockingScript.Value, outputs_data)
+    #         SetAlt(outputs_data)
+    #         Keep(outputs_data)
+    #     else:
+    #         #若是买单找零
+    #         Delete(ctx.FTbyChange)
+    #         #对sell_change的验证
+    #         temp_catdata = Cat(ctx.BuyOrSellChange.LockingScript.PartialHash.Clone(), ctx.BuyOrSellChange.LockingScript.Size.Clone())
+    #         SetMain(outputs_data)
+    #         SetMain(code_partialhash)
+    #         SetMain(code_size)
+    #         temp_data = Cat(code_partialhash, code_size)
+    #         EqualVerify(temp_catdata, temp_data)    #验证sell_change的code是否和pretx.code的partialhash和size一致
+
+    #         SetMain(code_value)
+    #         code_value = code_value - BinToNum(ctx.BuyOrSellChange.LockingScript.Value.Clone()) #令sell_code_value = sell_code_value - SELL_CHANGE.value
+
+    #         code_data_copy = ctx.BuyOrSellChange.LockingScript.SuffixData.Clone()
+    #         { hold_address_check, code_data_copy } = Split(code_data_copy, 20)
+    #         { sale_volume_check, code_data_copy } = Split(code_data_copy, 8)
+    #         EqualVerify(BinToNum(ctx.BuyOrSellChange.LockingScript.Value.Clone()), BinToNum(sale_volume_check))
+    #         SetMain(hold_address)
+    #         hold_address_copy = hold_address.Clone()
+    #         EqualVerify(hold_address_copy, hold_address_check)
+    #         { token_partialhash_check, code_data_copy } = Split(code_data_copy, 32)
+    #         SetMain(token_partialhash)
+    #         token_partialhash_copy = token_partialhash.Clone()
+    #         EqualVerify(token_partialhash_copy, token_partialhash_check)
+    #         { fee_rate_check, code_data_copy } = Split(code_data_copy, 8)
+    #         SetMain(fee_rate)
+    #         fee_rate_copy = fee_rate.Clone()
+    #         EqualVerify(fee_rate_copy, fee_rate_check)
+    #         { unit_price_check, code_data_copy } = Split(code_data_copy, 8)
+    #         Delete(code_data_copy)
+    #         SetMain(unit_price)
+    #         unit_price_copy = unit_price.Clone()
+    #         EqualVerify(unit_price_copy, unit_price_check)
+
+    #         SetAlt(unit_price)
+    #         SetAlt(fee_rate)
+    #         SetAlt(token_partialhash)
+    #         SetAlt(hold_address)
+    #         SetAlt(code_value)
+    #         SetAlt(outputs_data)

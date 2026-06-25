@@ -1,0 +1,20 @@
+# EN: A two-branch lock: the receiver claims with a secret, or the sender refunds after time passes.
+# ZH: 双路径锁定：接收方凭秘密值领取，发送方在超时后退款。
+Contract AtomicSwap:
+
+    def main(x: hex, sig: hex, path: number):
+        if path == 1:
+            # EN: The claim branch proves the secret first, then checks the receiver signature.
+            # ZH: 领取分支先证明秘密值正确，再验证接收方签名。
+            EqualVerify(Sha256(x), self.hashX)
+            CheckSigVerify(sig, self.receiver)
+        else:
+            # EN: The refund branch ignores the secret and only opens after the timeout.
+            # EN: The current input must be non-final so the transaction locktime is enforced.
+            # ZH: 退款分支不使用秘密值，只在超时后开放。
+            # ZH: 当前输入必须是非 final sequence，交易 locktime 才会被共识执行。
+            Delete(x)
+            inputSequence = BVM.unlockingInput.Slice(36, 40)
+            NumEqualVerify(Equal(inputSequence, 0xffffffff), 0)
+            NumEqualVerify(GreaterOrEqual(BVM.locktime, self.timeout),1)
+            CheckSigVerify(sig, self.sender)

@@ -1,0 +1,6 @@
+# 测试带参数公有函数（作为合约入口，处理外部输入）
+Contract PublicFunctionWithParamsTest:
+    # 带参数公有函数：处理输入并更新状态
+    def add_to_total(amount: int):
+        total: int = 0
+        total = total + amount

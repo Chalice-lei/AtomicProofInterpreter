@@ -1,0 +1,3723 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>APC Stack Trace Visualizer</title>
+  <link rel="icon" href="data:,">
+  <style>
+    :root {
+      --bg: #fbfdff;
+      --panel: #ffffff;
+      --panel-strong: #f8fbff;
+      --text: #172033;
+      --muted: #64748b;
+      --line: #e2e8f0;
+      --code: #0f172a;
+      --accent: var(--vscode-focusBorder, #2563eb);
+      --accent-soft: #dbeafe;
+      --push: #16a34a;
+      --push-soft: #dcfce7;
+      --pop: #dc2626;
+      --pop-soft: #fee2e2;
+      --move: #ca8a04;
+      --move-soft: #fef3c7;
+      --alt-move: #0284c7;
+      --alt-move-soft: #e0f2fe;
+      --bookmark: #db2777;
+      --bookmark-soft: #fce7f3;
+      --input-bg: #ffffff;
+      --input-border: #cbd5e1;
+      --source-bg: #ffffff;
+      --source-text: #0f172a;
+      --source-gutter-bg: #f1f5f9;
+      --source-gutter-text: #64748b;
+      --source-active-bg: #dbeafe;
+      --source-active-gutter-bg: #eaf2ff;
+      --source-active-gutter-text: #2563eb;
+      --card-bg: #ffffff;
+      --tag-bg: #ffffff;
+      --empty-border: #cbd5e1;
+      --shadow: 0 12px 28px rgba(15, 23, 42, 0.06);
+      color-scheme: light;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+        "Segoe UI", sans-serif;
+    }
+
+    body[data-theme="vscode"] {
+      --bg: var(--vscode-editor-background, #fbfdff);
+      --panel: var(--vscode-sideBar-background, #ffffff);
+      --panel-strong: var(--vscode-editorWidget-background, #f8fbff);
+      --text: var(--vscode-foreground, #172033);
+      --muted: var(--vscode-descriptionForeground, #64748b);
+      --line: var(--vscode-panel-border, #e2e8f0);
+      --code: var(--vscode-editor-foreground, #0f172a);
+      --input-bg: var(--vscode-input-background, #ffffff);
+      --input-border: var(--vscode-input-border, #cbd5e1);
+      --source-bg: var(--vscode-editor-background, #ffffff);
+      --source-text: var(--vscode-editor-foreground, #0f172a);
+      --source-gutter-bg: var(--vscode-editorGutter-background, #f1f5f9);
+      --source-gutter-text: var(--vscode-editorLineNumber-foreground, #64748b);
+      --source-active-bg: var(--vscode-editor-selectionBackground, #dbeafe);
+      --source-active-gutter-bg: var(--vscode-editorGutter-background, #eaf2ff);
+      --source-active-gutter-text: var(--vscode-editorLineNumber-activeForeground, #2563eb);
+      color-scheme: light;
+    }
+
+    body[data-theme="dark"] {
+      --bg: #111827;
+      --panel: #1f2937;
+      --panel-strong: #111827;
+      --text: #e5e7eb;
+      --muted: #9ca3af;
+      --line: #374151;
+      --code: #f9fafb;
+      --accent-soft: rgba(37, 99, 235, 0.24);
+      --push-soft: rgba(22, 163, 74, 0.2);
+      --pop-soft: rgba(220, 38, 38, 0.2);
+      --move-soft: rgba(202, 138, 4, 0.22);
+      --alt-move-soft: rgba(2, 132, 199, 0.2);
+      --bookmark-soft: rgba(219, 39, 119, 0.18);
+      --input-bg: #111827;
+      --input-border: #475569;
+      --source-bg: #0f172a;
+      --source-text: #e5e7eb;
+      --source-gutter-bg: rgba(15, 23, 42, 0.82);
+      --source-gutter-text: #94a3b8;
+      --source-active-bg: rgba(37, 99, 235, 0.24);
+      --source-active-gutter-bg: rgba(37, 99, 235, 0.42);
+      --source-active-gutter-text: #dbeafe;
+      --card-bg: #1f2937;
+      --tag-bg: #111827;
+      --empty-border: #475569;
+      --shadow: none;
+      color-scheme: dark;
+    }
+
+    body[data-theme="vscode"].vscode-dark,
+    body[data-theme="vscode"].vscode-high-contrast {
+      --bg: var(--vscode-editor-background, #111827);
+      --panel: var(--vscode-sideBar-background, #1f2937);
+      --panel-strong: var(--vscode-editorWidget-background, #111827);
+      --text: var(--vscode-foreground, #e5e7eb);
+      --muted: var(--vscode-descriptionForeground, #9ca3af);
+      --line: var(--vscode-panel-border, #374151);
+      --code: var(--vscode-editor-foreground, #f9fafb);
+      --accent-soft: rgba(37, 99, 235, 0.24);
+      --push-soft: rgba(22, 163, 74, 0.2);
+      --pop-soft: rgba(220, 38, 38, 0.2);
+      --move-soft: rgba(202, 138, 4, 0.22);
+      --alt-move-soft: rgba(2, 132, 199, 0.2);
+      --bookmark-soft: rgba(219, 39, 119, 0.18);
+      --input-bg: var(--vscode-input-background, #111827);
+      --input-border: var(--vscode-input-border, #475569);
+      --source-bg: var(--vscode-editor-background, #0f172a);
+      --source-text: var(--vscode-editor-foreground, #e5e7eb);
+      --source-gutter-bg: var(--vscode-editorGutter-background, rgba(15, 23, 42, 0.82));
+      --source-gutter-text: var(--vscode-editorLineNumber-foreground, #94a3b8);
+      --source-active-bg: var(--vscode-editor-selectionBackground, rgba(37, 99, 235, 0.24));
+      --source-active-gutter-bg: var(--vscode-editorGutter-background, rgba(37, 99, 235, 0.42));
+      --source-active-gutter-text: var(--vscode-editorLineNumber-activeForeground, #dbeafe);
+      --card-bg: var(--vscode-editorWidget-background, #1f2937);
+      --tag-bg: var(--vscode-editor-background, #111827);
+      --empty-border: var(--vscode-panel-border, #475569);
+      --shadow: none;
+      color-scheme: dark;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: var(--bg);
+      color: var(--text);
+    }
+
+    button,
+    input,
+    select {
+      font: inherit;
+    }
+
+    .app {
+      display: grid;
+      grid-template-columns: minmax(300px, 0.9fr) minmax(440px, 1.05fr) minmax(360px, 1.05fr);
+      gap: 10px;
+      min-height: 100vh;
+      padding: 12px;
+    }
+
+    body.presentation-mode .app {
+      grid-template-columns: minmax(360px, 0.82fr) minmax(520px, 1.18fr);
+    }
+
+    body.presentation-mode .source-panel {
+      display: none;
+    }
+
+    body.presentation-mode .explain-body {
+      font-size: 15px;
+      line-height: 1.5;
+    }
+
+    body.presentation-mode .stack-card {
+      min-height: 66px;
+    }
+
+    .panel {
+      min-width: 0;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      box-shadow: var(--shadow);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+
+    .panel-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--line);
+      background: var(--panel-strong);
+    }
+
+    .panel-title {
+      min-width: 0;
+      font-weight: 700;
+      color: var(--code);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .panel-subtitle {
+      color: var(--muted);
+      font-size: 12px;
+      white-space: nowrap;
+    }
+
+    .source-panel,
+    .detail-panel,
+    .stack-panel {
+      display: flex;
+      flex-direction: column;
+      height: calc(100vh - 24px);
+      min-height: calc(100vh - 24px);
+    }
+
+    .detail-panel {
+      overflow: auto;
+    }
+
+    .detail-panel .panel-header {
+      position: sticky;
+      top: 0;
+      z-index: 4;
+    }
+
+    .detail-panel .step-summary {
+      position: sticky;
+      top: 43px;
+      z-index: 3;
+    }
+
+    .source-view {
+      overflow: auto;
+      flex: 1;
+      background: var(--source-bg);
+      color: var(--source-text);
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+      font-size: 13px;
+      line-height: 1.5;
+    }
+
+    .source-line {
+      display: grid;
+      grid-template-columns: 52px 1fr;
+      min-width: max-content;
+      border-left: 4px solid transparent;
+    }
+
+    .source-line .gutter {
+      position: relative;
+      padding: 0 10px;
+      color: var(--source-gutter-text);
+      text-align: right;
+      user-select: none;
+      background: var(--source-gutter-bg);
+    }
+
+    .source-line .code {
+      padding: 0 12px 0 10px;
+      white-space: pre;
+    }
+
+    .source-line.active {
+      border-left-color: #3b82f6;
+      background: var(--source-active-bg);
+    }
+
+    .source-line.clickable {
+      cursor: pointer;
+    }
+
+    .source-line.active .gutter {
+      color: var(--source-active-gutter-text);
+      background: var(--source-active-gutter-bg);
+    }
+
+    .source-line.active .gutter::after {
+      content: ">";
+      position: absolute;
+      left: 8px;
+      color: var(--accent);
+      font-weight: 700;
+    }
+
+    .source-line.bookmarked .gutter::before {
+      content: "B";
+      display: inline-block;
+      min-width: 12px;
+      margin-right: 4px;
+      color: #f9a8d4;
+      font-weight: 700;
+      text-align: center;
+    }
+
+    .empty {
+      padding: 24px;
+      color: var(--muted);
+    }
+
+    .step-summary {
+      display: grid;
+      gap: 8px;
+      padding: 11px 12px 10px;
+      border-bottom: 1px solid var(--line);
+      background: var(--panel);
+      min-width: 0;
+    }
+
+    .step-summary-main {
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr);
+      align-items: center;
+      gap: 10px;
+      min-width: 0;
+    }
+
+    .step-summary-count {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 62px;
+      min-height: 30px;
+      padding: 4px 9px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: var(--panel-strong);
+      color: var(--muted);
+      font-size: 12px;
+      white-space: nowrap;
+    }
+
+    .step-summary-opcode {
+      min-width: 0;
+      color: var(--code);
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+      font-size: 16px;
+      font-weight: 700;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .step-summary-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      min-width: 0;
+    }
+
+    .summary-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      max-width: 100%;
+      min-height: 26px;
+      padding: 3px 8px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: var(--tag-bg);
+      color: var(--muted);
+      font-size: 12px;
+      white-space: nowrap;
+    }
+
+    .summary-pill strong {
+      min-width: 0;
+      color: var(--code);
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .summary-pill.source strong {
+      max-width: 210px;
+    }
+
+    .summary-pill.push {
+      color: #166534;
+      border-color: #86efac;
+      background: var(--push-soft);
+    }
+
+    .summary-pill.pop {
+      color: #991b1b;
+      border-color: #fecaca;
+      background: var(--pop-soft);
+    }
+
+    .summary-pill.move {
+      color: #854d0e;
+      border-color: #fde68a;
+      background: var(--move-soft);
+    }
+
+    .controls {
+      display: grid;
+      gap: 8px;
+      padding: 12px;
+      border-bottom: 1px solid var(--line);
+      background: var(--panel-strong);
+    }
+
+    .control-section {
+      display: grid;
+      gap: 7px;
+      min-width: 0;
+      padding: 8px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel);
+    }
+
+    .control-section.inline {
+      grid-template-columns: auto minmax(0, 1fr);
+      align-items: center;
+      column-gap: 8px;
+    }
+
+    .control-label {
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 700;
+      line-height: 1.2;
+      white-space: nowrap;
+    }
+
+    .control-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-width: 0;
+      flex-wrap: wrap;
+    }
+
+    .file-input {
+      max-width: 100%;
+      min-width: 0;
+    }
+
+    .button,
+    .search-input,
+    select {
+      border: 1px solid var(--input-border);
+      background: var(--input-bg);
+      color: var(--text);
+      border-radius: 6px;
+      min-height: 34px;
+      padding: 6px 10px;
+    }
+
+    .button,
+    select {
+      cursor: pointer;
+    }
+
+    .search-input {
+      flex: 1 1 280px;
+      min-width: min(260px, 100%);
+      cursor: text;
+    }
+
+    .button.primary {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: #ffffff;
+    }
+
+    .button.active {
+      border-color: var(--bookmark);
+      background: var(--bookmark-soft);
+      color: var(--code);
+    }
+
+    .button:disabled {
+      cursor: not-allowed;
+      opacity: 0.45;
+    }
+
+    .match-count {
+      min-width: 72px;
+      color: var(--muted);
+      font-size: 12px;
+      white-space: nowrap;
+    }
+
+    .function-select {
+      flex: 1 1 160px;
+      min-width: 150px;
+    }
+
+    .theme-select {
+      flex: 0 1 150px;
+      min-width: 120px;
+    }
+
+    .trace-overview {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(92px, 1fr));
+      gap: 8px;
+    }
+
+    .tab-panel .trace-overview {
+      padding: 12px 12px 0;
+    }
+
+    .overview-item {
+      min-width: 0;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 7px 8px;
+      background: var(--panel-strong);
+    }
+
+    .overview-label {
+      color: var(--muted);
+      font-size: 11px;
+      margin-bottom: 2px;
+    }
+
+    .overview-value {
+      color: var(--code);
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+      font-size: 12px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .event-rail {
+      position: relative;
+      height: 18px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: var(--panel-strong);
+      overflow: hidden;
+    }
+
+    .event-dot {
+      position: absolute;
+      top: 50%;
+      width: 10px;
+      height: 10px;
+      padding: 0;
+      border: 0;
+      border-radius: 50%;
+      transform: translate(-50%, -50%);
+      cursor: pointer;
+      background: var(--muted);
+    }
+
+    .event-dot.push {
+      background: var(--push);
+    }
+
+    .event-dot.pop {
+      background: var(--pop);
+    }
+
+    .event-dot.move {
+      background: var(--move);
+    }
+
+    .event-dot.alt {
+      background: var(--alt-move);
+    }
+
+    .event-dot.error {
+      background: #ef4444;
+    }
+
+    .event-dot.bookmark {
+      background: var(--bookmark);
+    }
+
+    .event-dot.bookmarked {
+      box-shadow: 0 0 0 3px var(--bookmark-soft);
+    }
+
+    .event-dot.current {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+    }
+
+    .diagnostics-panel {
+      display: grid;
+      gap: 6px;
+      padding: 0 0 2px;
+    }
+
+    .tab-panel .diagnostics-panel {
+      padding: 12px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .diagnostics-panel.hidden {
+      display: none;
+    }
+
+    .diagnostics-title {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      color: var(--code);
+      font-weight: 700;
+      font-size: 12px;
+    }
+
+    .diagnostic-list {
+      display: grid;
+      gap: 5px;
+    }
+
+    .diagnostic-item {
+      border: 1px solid var(--line);
+      border-left: 4px solid var(--accent);
+      border-radius: 6px;
+      padding: 6px 8px;
+      background: var(--panel-strong);
+      color: var(--muted);
+      font-size: 12px;
+      overflow-wrap: anywhere;
+    }
+
+    .diagnostic-item.error {
+      border-left-color: var(--pop);
+    }
+
+    .diagnostic-item.warning {
+      border-left-color: var(--move);
+    }
+
+    .diagnostic-item.ok {
+      border-left-color: var(--push);
+    }
+
+    .slider {
+      flex: 1 1 150px;
+      min-width: 130px;
+      accent-color: var(--accent);
+    }
+
+    .meta-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+      padding: 12px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .metric {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 8px;
+      background: var(--panel-strong);
+      min-width: 0;
+    }
+
+    .metric-label {
+      color: var(--muted);
+      font-size: 12px;
+      margin-bottom: 3px;
+    }
+
+    .metric-value {
+      color: var(--code);
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+      font-size: 13px;
+      overflow-wrap: anywhere;
+    }
+
+    .metric-value.actionable {
+      cursor: pointer;
+      text-decoration: underline;
+      text-decoration-style: dotted;
+      text-underline-offset: 3px;
+    }
+
+    .diff-summary {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--line);
+      background: var(--panel);
+    }
+
+    .diff-summary .chip {
+      min-height: 28px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 4px 12px;
+      line-height: 1;
+      white-space: nowrap;
+    }
+
+    .explain-panel {
+      display: grid;
+      gap: 12px;
+      padding: 14px 16px 16px;
+      border-bottom: 1px solid var(--line);
+      background: var(--panel);
+    }
+
+    .explain-header {
+      display: grid;
+      grid-template-columns: 1fr;
+      align-items: start;
+      row-gap: 10px;
+      min-width: 0;
+    }
+
+    .explain-header > div:first-child {
+      min-width: 0;
+      display: grid;
+      gap: 3px;
+    }
+
+    .explain-actions {
+      display: grid;
+      grid-template-columns: repeat(3, max-content);
+      gap: 8px;
+      justify-content: start;
+      align-items: start;
+    }
+
+    .explain-actions .button,
+    .json-toolbar-actions .button {
+      min-height: 32px;
+      padding: 5px 11px;
+      border-radius: 8px;
+      font-size: 13px;
+      line-height: 1;
+      white-space: nowrap;
+    }
+
+    .explain-actions .button {
+      min-width: 76px;
+    }
+
+    #copyTraceMarkdownBtn {
+      min-width: 122px;
+    }
+
+    .explain-header .panel-subtitle {
+      display: block;
+      max-width: 100%;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .explain-title {
+      color: var(--code);
+      font-weight: 700;
+      font-size: 15px;
+      line-height: 1.25;
+    }
+
+    .explain-body {
+      display: grid;
+      gap: 8px;
+      min-width: 0;
+      color: var(--text);
+      font-size: 13px;
+      line-height: 1.45;
+    }
+
+    .explain-sentence {
+      margin: 0;
+      overflow-wrap: anywhere;
+    }
+
+    .explain-list {
+      display: grid;
+      gap: 5px;
+      margin: 0;
+      padding-left: 18px;
+      color: var(--muted);
+    }
+
+    .explain-list li {
+      padding-left: 2px;
+      overflow-wrap: anywhere;
+    }
+
+    .detail-tabs {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 0;
+      padding: 8px 12px 0;
+      border-bottom: 1px solid var(--line);
+      background: var(--panel);
+    }
+
+    .tab-button {
+      min-height: 36px;
+      border: 0;
+      border-bottom: 2px solid transparent;
+      border-radius: 0;
+      background: transparent;
+      color: var(--muted);
+      cursor: pointer;
+      font-weight: 700;
+    }
+
+    .tab-button.active {
+      border-bottom-color: var(--accent);
+      color: var(--code);
+      background: var(--panel-strong);
+    }
+
+    .detail-tab-content {
+      min-width: 0;
+      background: var(--panel);
+    }
+
+    .tab-panel {
+      display: none;
+      min-width: 0;
+    }
+
+    .tab-panel.active {
+      display: block;
+    }
+
+    .tab-panel[data-detail-panel="json"].active {
+      display: flex;
+      flex-direction: column;
+      min-height: 260px;
+    }
+
+    .lifecycle-panel {
+      display: grid;
+      gap: 8px;
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--line);
+      background: var(--panel-strong);
+    }
+
+    .lifecycle-panel.hidden {
+      display: none;
+    }
+
+    .lifecycle-title {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      color: var(--code);
+      font-weight: 700;
+      min-width: 0;
+    }
+
+    .lifecycle-title span {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .lifecycle-meta,
+    .lifecycle-events {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      min-width: 0;
+    }
+
+    .lifecycle-event {
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 3px 8px;
+      background: var(--panel);
+      color: var(--text);
+      cursor: pointer;
+      font-size: 12px;
+    }
+
+    .chip {
+      border-radius: 999px;
+      padding: 4px 8px;
+      font-size: 12px;
+      color: var(--muted);
+      border: 1px solid var(--line);
+      background: var(--tag-bg);
+    }
+
+    .chip.push {
+      color: #166534;
+      border-color: #86efac;
+      background: var(--push-soft);
+    }
+
+    .chip.pop {
+      color: #991b1b;
+      border-color: #fecaca;
+      background: var(--pop-soft);
+    }
+
+    .chip.move {
+      color: #854d0e;
+      border-color: #fde68a;
+      background: var(--move-soft);
+    }
+
+    .json-box {
+      flex: 1;
+      min-height: 180px;
+      overflow: auto;
+      margin: 0;
+      padding: 12px;
+      background: var(--source-bg);
+      color: var(--source-text);
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+      font-size: 12px;
+      line-height: 1.45;
+    }
+
+    .json-toolbar {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 12px;
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--line);
+      background: var(--panel-strong);
+      min-width: 0;
+    }
+
+    .json-title {
+      color: var(--code);
+      font-weight: 700;
+      font-size: 15px;
+      line-height: 1.25;
+    }
+
+    .json-toolbar > div:first-child {
+      min-width: 0;
+      display: grid;
+      gap: 3px;
+    }
+
+    .json-toolbar .panel-subtitle {
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .json-toolbar-actions {
+      display: grid;
+      grid-template-columns: repeat(2, max-content);
+      gap: 8px;
+      justify-content: end;
+      align-items: center;
+    }
+
+    .json-toolbar-actions .button {
+      min-width: 104px;
+    }
+
+    .json-box.collapsed {
+      display: none;
+    }
+
+    .stacks {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+      padding: 12px;
+      overflow: hidden;
+      flex: 1;
+      min-height: 0;
+    }
+
+    .stack-column {
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+      min-height: 0;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel-strong);
+      overflow: hidden;
+    }
+
+    .stack-title {
+      padding: 10px;
+      border-bottom: 1px solid var(--line);
+      background: var(--panel);
+    }
+
+    .stack-name {
+      font-weight: 700;
+    }
+
+    .top-label {
+      margin-top: 4px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .stack-list {
+      flex: 1;
+      overflow: auto;
+      padding: 0;
+      min-height: 220px;
+      position: relative;
+      overscroll-behavior: contain;
+    }
+
+    .stack-window {
+      display: grid;
+      gap: 8px;
+      min-height: 100%;
+      padding: 10px;
+      align-content: start;
+    }
+
+    .stack-spacer {
+      height: var(--stack-spacer-height, 0px);
+      min-height: 0;
+      pointer-events: none;
+    }
+
+    .stack-empty {
+      color: var(--muted);
+      border: 1px dashed var(--empty-border);
+      border-radius: 8px;
+      min-height: 54px;
+      padding: 12px;
+      text-align: center;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: var(--panel);
+    }
+
+    .stack-overflow-note {
+      color: var(--muted);
+      border: 1px dashed var(--empty-border);
+      border-radius: 8px;
+      padding: 10px;
+      font-size: 12px;
+      background: var(--panel-strong);
+      overflow-wrap: anywhere;
+    }
+
+    .stack-card {
+      position: relative;
+      border: 1px solid var(--input-border);
+      background: var(--card-bg);
+      border-radius: 8px;
+      padding: 9px 10px;
+      min-height: 58px;
+      display: grid;
+      gap: 4px;
+      overflow: hidden;
+    }
+
+    .stack-card .hex {
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+      font-weight: 700;
+      color: var(--code);
+      overflow-wrap: anywhere;
+    }
+
+    .stack-card .decoded {
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .tag {
+      justify-self: start;
+      width: max-content;
+      max-width: 100%;
+      border-radius: 999px;
+      padding: 2px 7px;
+      font-size: 11px;
+      color: var(--muted);
+      border: 1px solid var(--line);
+      background: var(--tag-bg);
+    }
+
+    .stack-card.pushed {
+      border-color: #4ade80;
+      background: var(--push-soft);
+      animation: pushGlow 680ms ease;
+    }
+
+    .stack-card.matched {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+    }
+
+    .stack-card.selected {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+      box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.12);
+    }
+
+    body[data-theme="dark"] .button,
+    body[data-theme="dark"] .search-input,
+    body[data-theme="dark"] select,
+    body[data-theme="vscode"].vscode-dark .button,
+    body[data-theme="vscode"].vscode-dark .search-input,
+    body[data-theme="vscode"].vscode-dark select,
+    body[data-theme="vscode"].vscode-high-contrast .button,
+    body[data-theme="vscode"].vscode-high-contrast .search-input,
+    body[data-theme="vscode"].vscode-high-contrast select {
+      border-color: var(--line);
+    }
+
+    body[data-theme="dark"] .metric,
+    body[data-theme="dark"] .control-section,
+    body[data-theme="dark"] .explain-panel,
+    body[data-theme="dark"] .lifecycle-event,
+    body[data-theme="dark"] .stack-column,
+    body[data-theme="dark"] .stack-title,
+    body[data-theme="dark"] .stack-card,
+    body[data-theme="dark"] .chip,
+    body[data-theme="vscode"].vscode-dark .metric,
+    body[data-theme="vscode"].vscode-dark .control-section,
+    body[data-theme="vscode"].vscode-dark .explain-panel,
+    body[data-theme="vscode"].vscode-dark .lifecycle-event,
+    body[data-theme="vscode"].vscode-dark .stack-column,
+    body[data-theme="vscode"].vscode-dark .stack-title,
+    body[data-theme="vscode"].vscode-dark .stack-card,
+    body[data-theme="vscode"].vscode-dark .chip,
+    body[data-theme="vscode"].vscode-high-contrast .metric,
+    body[data-theme="vscode"].vscode-high-contrast .control-section,
+    body[data-theme="vscode"].vscode-high-contrast .explain-panel,
+    body[data-theme="vscode"].vscode-high-contrast .lifecycle-event,
+    body[data-theme="vscode"].vscode-high-contrast .stack-column,
+    body[data-theme="vscode"].vscode-high-contrast .stack-title,
+    body[data-theme="vscode"].vscode-high-contrast .stack-card,
+    body[data-theme="vscode"].vscode-high-contrast .chip {
+      background: var(--panel);
+      border-color: var(--line);
+    }
+
+    .stack-card.popped {
+      border-color: #fca5a5;
+      background: var(--pop-soft);
+      animation: popFade 820ms ease;
+    }
+
+    .stack-card.moved-in,
+    .stack-card.moved-out {
+      border-color: #facc15;
+      background: var(--move-soft);
+      animation: movePulse 760ms ease;
+    }
+
+    .alt-stack .stack-card.moved-in,
+    .alt-stack .stack-card.moved-out {
+      border-color: #38bdf8;
+      background: var(--alt-move-soft);
+    }
+
+    .stack-card.popped .tag {
+      color: #991b1b;
+      border-color: #fca5a5;
+      background: #fff7f7;
+    }
+
+    .stack-card.pushed .tag {
+      color: #166534;
+      border-color: #86efac;
+      background: #f0fdf4;
+    }
+
+    .stack-card.moved-in .tag,
+    .stack-card.moved-out .tag {
+      color: #854d0e;
+      border-color: #fde68a;
+      background: #fffbea;
+    }
+
+    @keyframes pushGlow {
+      0% {
+        transform: translateY(-8px);
+        box-shadow: 0 0 0 rgba(22, 163, 74, 0);
+      }
+      45% {
+        box-shadow: 0 0 0 4px rgba(22, 163, 74, 0.18);
+      }
+      100% {
+        transform: translateY(0);
+        box-shadow: 0 0 0 rgba(22, 163, 74, 0);
+      }
+    }
+
+    @keyframes popFade {
+      0% {
+        opacity: 1;
+      }
+      70% {
+        opacity: 0.55;
+      }
+      100% {
+        opacity: 0.75;
+      }
+    }
+
+    @keyframes movePulse {
+      0% {
+        transform: translateX(-6px);
+      }
+      50% {
+        transform: translateX(4px);
+      }
+      100% {
+        transform: translateX(0);
+      }
+    }
+
+    @media (max-width: 1120px) {
+      .app {
+        grid-template-columns: 1fr;
+      }
+
+      body.presentation-mode .app {
+        grid-template-columns: 1fr;
+      }
+
+      body.presentation-mode .source-panel {
+        display: flex;
+      }
+
+      .source-panel,
+      .detail-panel,
+      .stack-panel {
+        min-height: 520px;
+      }
+    }
+
+    @media (max-width: 760px) {
+      .explain-header,
+      .json-toolbar {
+        grid-template-columns: 1fr;
+      }
+
+      .explain-actions,
+      .json-toolbar-actions {
+        justify-content: stretch;
+      }
+
+      .explain-actions {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+      }
+
+      .json-toolbar-actions {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .explain-actions .button,
+      .json-toolbar-actions .button,
+      #copyTraceMarkdownBtn {
+        min-width: 0;
+      }
+    }
+
+    @media (max-width: 640px) {
+      .app {
+        padding: 8px;
+      }
+
+      .stacks,
+      .meta-grid,
+      .trace-overview,
+      .detail-tabs {
+        grid-template-columns: 1fr;
+      }
+
+      .panel-header {
+        align-items: flex-start;
+        flex-direction: column;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="app">
+    <section class="panel source-panel">
+      <div class="panel-header">
+        <div class="panel-title" id="sourceTitle">Source</div>
+        <div class="panel-subtitle" id="sourceMeta">Line -</div>
+      </div>
+      <div class="source-view" id="sourceView">
+        <div class="empty">Load stack_trace.json</div>
+      </div>
+    </section>
+
+    <section class="panel detail-panel" id="detailPanel">
+      <div class="panel-header">
+        <div class="panel-title">Instruction</div>
+        <div class="panel-subtitle" id="stepCount">0 / 0</div>
+      </div>
+
+      <div class="step-summary" id="stepSummary">
+        <div class="step-summary-main">
+          <span class="step-summary-count">0 / 0</span>
+          <span class="step-summary-opcode">Load stack_trace.json</span>
+        </div>
+        <div class="step-summary-meta">
+          <span class="summary-pill">pc <strong>-</strong></span>
+          <span class="summary-pill source">source <strong>-</strong></span>
+        </div>
+      </div>
+
+      <div class="controls">
+        <div class="control-section inline">
+          <div class="control-label">Trace</div>
+          <div class="control-row">
+            <input class="file-input" id="traceFile" type="file" accept="application/json,.json">
+          </div>
+        </div>
+        <div class="control-section">
+          <div class="control-label">Playback</div>
+          <div class="control-row">
+            <button class="button" id="prevBtn" title="Previous step">&lt;&lt;</button>
+            <button class="button primary" id="playBtn" title="Play or pause">Play</button>
+            <button class="button" id="nextBtn" title="Next step">&gt;&gt;</button>
+            <select id="viewMode" title="Stack view mode">
+              <option value="diff">Diff</option>
+              <option value="before">Before</option>
+              <option value="after">After</option>
+            </select>
+          </div>
+          <div class="control-row">
+            <span class="panel-subtitle">Timeline</span>
+            <input class="slider" id="timeline" type="range" min="0" max="0" value="0">
+          </div>
+          <div class="control-row">
+            <span class="panel-subtitle">Speed</span>
+            <input class="slider" id="speed" type="range" min="0.25" max="4" value="1" step="0.25">
+            <span class="panel-subtitle" id="speedValue">1x</span>
+          </div>
+        </div>
+        <div class="control-section">
+          <div class="control-label">Find</div>
+          <div class="control-row">
+            <input class="search-input" id="searchBox" type="search" placeholder="Search opcode, PC, value, source">
+            <button class="button" id="prevMatchBtn" title="Previous match">Prev</button>
+            <button class="button" id="nextMatchBtn" title="Next match">Next</button>
+            <span class="match-count" id="matchCount"></span>
+          </div>
+          <div class="control-row">
+            <span class="panel-subtitle">Filter</span>
+            <select id="filterMode" title="Step filter">
+              <option value="all">All steps</option>
+              <option value="changed">Stack changes</option>
+              <option value="alt">Alt stack</option>
+              <option value="errors">Errors</option>
+              <option value="bookmarks">Bookmarks</option>
+            </select>
+            <button class="button" id="openSourceBtn" title="Open current source line in VS Code">Open Source</button>
+          </div>
+        </div>
+        <div class="control-section">
+          <div class="control-label">Navigate</div>
+          <div class="control-row">
+            <button class="button" id="prevLineBtn" title="Previous source line">Prev Line</button>
+            <button class="button" id="nextLineBtn" title="Next source line">Next Line</button>
+            <button class="button" id="prevEventBtn" title="Previous stack event">Prev Event</button>
+            <button class="button" id="nextEventBtn" title="Next stack event">Next Event</button>
+          </div>
+          <div class="control-row">
+            <button class="button" id="toggleBookmarkBtn" title="Toggle bookmark for current step">Mark Step</button>
+            <button class="button" id="prevBookmarkBtn" title="Previous bookmarked step">Prev Mark</button>
+            <button class="button" id="nextBookmarkBtn" title="Next bookmarked step">Next Mark</button>
+            <button class="button" id="clearBookmarksBtn" title="Clear all bookmarks for this trace">Clear Marks</button>
+          </div>
+        </div>
+        <div class="control-section">
+          <div class="control-label">Scope</div>
+          <div class="control-row">
+            <span class="panel-subtitle">Function</span>
+            <select class="function-select" id="functionSelect" title="Jump to function">
+              <option value="">All functions</option>
+            </select>
+          </div>
+          <div class="control-row">
+            <button class="button" id="presentationBtn" type="button" title="Toggle presentation mode">Present</button>
+            <span class="panel-subtitle">Theme</span>
+            <select class="theme-select" id="themeMode" title="Visualizer theme">
+              <option value="light">Light</option>
+              <option value="dark">Dark</option>
+              <option value="vscode">VS Code</option>
+            </select>
+          </div>
+        </div>
+        <div class="event-rail" id="eventRail" title="Stack events and bookmarks"></div>
+      </div>
+
+      <div class="detail-tabs" id="detailTabs" role="tablist" aria-label="Instruction details">
+        <button class="tab-button active" id="explainTabButton" type="button" role="tab" aria-controls="explainTab" aria-selected="true" data-detail-tab="explain">Explanation</button>
+        <button class="tab-button" id="detailsTabButton" type="button" role="tab" aria-controls="detailsTab" aria-selected="false" data-detail-tab="details">Details</button>
+        <button class="tab-button" id="jsonTabButton" type="button" role="tab" aria-controls="jsonTab" aria-selected="false" data-detail-tab="json">JSON</button>
+      </div>
+      <div class="detail-tab-content">
+        <section class="tab-panel active" id="explainTab" role="tabpanel" aria-labelledby="explainTabButton" data-detail-panel="explain">
+          <div class="explain-panel" id="explainPanel">
+            <div class="explain-header">
+              <div>
+                <div class="explain-title">Step Explanation</div>
+                <div class="panel-subtitle" id="explainSubtitle">No trace loaded</div>
+              </div>
+              <div class="explain-actions">
+                <button class="button" id="copyExplainBtn" type="button" data-default-text="Copy">Copy</button>
+                <button class="button" id="copyMarkdownBtn" type="button" data-default-text="Copy MD">Copy MD</button>
+                <button class="button" id="copyTraceMarkdownBtn" type="button" data-default-text="Copy Trace MD">Copy Trace MD</button>
+              </div>
+            </div>
+            <div class="explain-body" id="explainBody">
+              <p class="explain-sentence">Load stack_trace.json</p>
+            </div>
+          </div>
+          <div class="lifecycle-panel hidden" id="lifecyclePanel"></div>
+        </section>
+        <section class="tab-panel" id="detailsTab" role="tabpanel" aria-labelledby="detailsTabButton" data-detail-panel="details">
+          <div class="trace-overview" id="traceOverview"></div>
+          <div class="meta-grid">
+            <div class="metric">
+              <div class="metric-label">Step</div>
+              <div class="metric-value" id="metricStep">-</div>
+            </div>
+            <div class="metric">
+              <div class="metric-label">PC</div>
+              <div class="metric-value" id="metricPc">-</div>
+            </div>
+            <div class="metric">
+              <div class="metric-label">Opcode</div>
+              <div class="metric-value" id="metricOpcode">-</div>
+            </div>
+            <div class="metric">
+              <div class="metric-label">Function</div>
+              <div class="metric-value" id="metricFunction">-</div>
+            </div>
+            <div class="metric">
+              <div class="metric-label">Operand</div>
+              <div class="metric-value" id="metricOperand">-</div>
+            </div>
+            <div class="metric">
+              <div class="metric-label">Source</div>
+              <div class="metric-value" id="metricSource">-</div>
+            </div>
+          </div>
+          <div class="diff-summary" id="diffSummary"></div>
+          <div class="diagnostics-panel hidden" id="diagnosticsPanel">
+            <div class="diagnostics-title">
+              <span>Trace Diagnostics</span>
+              <span class="panel-subtitle" id="diagnosticsSummary"></span>
+            </div>
+            <div class="diagnostic-list" id="diagnosticsList"></div>
+          </div>
+        </section>
+        <section class="tab-panel" id="jsonTab" role="tabpanel" aria-labelledby="jsonTabButton" data-detail-panel="json">
+          <div class="json-toolbar">
+            <div>
+              <div class="json-title">Raw Step JSON</div>
+              <div class="panel-subtitle" id="jsonStatus">Collapsed</div>
+            </div>
+            <div class="json-toolbar-actions">
+              <button class="button" id="toggleJsonBtn" type="button">Show JSON</button>
+              <button class="button" id="copyJsonBtn" type="button" data-default-text="Copy JSON">Copy JSON</button>
+            </div>
+          </div>
+          <pre class="json-box collapsed" id="jsonBox"></pre>
+        </section>
+      </div>
+    </section>
+
+    <section class="panel stack-panel">
+      <div class="panel-header">
+        <div class="panel-title">Stacks</div>
+        <div class="panel-subtitle" id="stackMode">Diff</div>
+      </div>
+      <div class="stacks">
+        <section class="stack-column main-stack">
+          <div class="stack-title">
+            <div class="stack-name">Main Stack</div>
+            <div class="top-label">Top at upper edge</div>
+          </div>
+          <div class="stack-list" id="mainStackList"></div>
+        </section>
+        <section class="stack-column alt-stack">
+          <div class="stack-title">
+            <div class="stack-name">Alt Stack</div>
+            <div class="top-label">Top at upper edge</div>
+          </div>
+          <div class="stack-list" id="altStackList"></div>
+        </section>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    const THEME_STORAGE_KEY = "apc.stackVisualizer.themeMode";
+    const THEME_MODES = ["light", "dark", "vscode"];
+
+    function normalizeThemeMode(value) {
+      return THEME_MODES.includes(value) ? value : "light";
+    }
+
+    function loadSavedThemeMode() {
+      try {
+        return normalizeThemeMode(localStorage.getItem(THEME_STORAGE_KEY));
+      } catch (error) {
+        return "light";
+      }
+    }
+
+    const state = {
+      trace: null,
+      current: 0,
+      playing: false,
+      timer: null,
+      viewMode: "diff",
+      themeMode: loadSavedThemeMode(),
+      speed: 1,
+      query: "",
+      filterMode: "all",
+      sourceRenderKey: "",
+      lastActiveLine: 0,
+      functionRenderKey: "",
+      selectedElementId: "",
+      bookmarks: [],
+      bookmarkStorageKey: "",
+      showJson: false,
+      jsonRenderKey: "",
+      diagnostics: [],
+      presentationMode: false,
+      activeDetailTab: "explain",
+      stackScrollRaf: {
+        main: 0,
+        alt: 0
+      }
+    };
+
+    const BOOKMARK_STORAGE_PREFIX = "apc.stackVisualizer.bookmarks:";
+    const STACK_VIRTUAL_THRESHOLD = 140;
+    const STACK_VIRTUAL_ITEM_HEIGHT = 74;
+    const STACK_VIRTUAL_OVERSCAN = 8;
+
+    const vscodeApi = typeof acquireVsCodeApi === "function"
+      ? acquireVsCodeApi()
+      : null;
+
+    const el = {
+      traceFile: document.getElementById("traceFile"),
+      prevBtn: document.getElementById("prevBtn"),
+      detailPanel: document.getElementById("detailPanel"),
+      playBtn: document.getElementById("playBtn"),
+      nextBtn: document.getElementById("nextBtn"),
+      searchBox: document.getElementById("searchBox"),
+      prevMatchBtn: document.getElementById("prevMatchBtn"),
+      nextMatchBtn: document.getElementById("nextMatchBtn"),
+      matchCount: document.getElementById("matchCount"),
+      filterMode: document.getElementById("filterMode"),
+      openSourceBtn: document.getElementById("openSourceBtn"),
+      prevLineBtn: document.getElementById("prevLineBtn"),
+      nextLineBtn: document.getElementById("nextLineBtn"),
+      prevEventBtn: document.getElementById("prevEventBtn"),
+      nextEventBtn: document.getElementById("nextEventBtn"),
+      toggleBookmarkBtn: document.getElementById("toggleBookmarkBtn"),
+      prevBookmarkBtn: document.getElementById("prevBookmarkBtn"),
+      nextBookmarkBtn: document.getElementById("nextBookmarkBtn"),
+      clearBookmarksBtn: document.getElementById("clearBookmarksBtn"),
+      functionSelect: document.getElementById("functionSelect"),
+      viewMode: document.getElementById("viewMode"),
+      themeMode: document.getElementById("themeMode"),
+      timeline: document.getElementById("timeline"),
+      speed: document.getElementById("speed"),
+      speedValue: document.getElementById("speedValue"),
+      presentationBtn: document.getElementById("presentationBtn"),
+      traceOverview: document.getElementById("traceOverview"),
+      eventRail: document.getElementById("eventRail"),
+      diagnosticsPanel: document.getElementById("diagnosticsPanel"),
+      diagnosticsSummary: document.getElementById("diagnosticsSummary"),
+      diagnosticsList: document.getElementById("diagnosticsList"),
+      sourceView: document.getElementById("sourceView"),
+      sourceTitle: document.getElementById("sourceTitle"),
+      sourceMeta: document.getElementById("sourceMeta"),
+      stepCount: document.getElementById("stepCount"),
+      stepSummary: document.getElementById("stepSummary"),
+      detailTabs: document.getElementById("detailTabs"),
+      metricStep: document.getElementById("metricStep"),
+      metricPc: document.getElementById("metricPc"),
+      metricOpcode: document.getElementById("metricOpcode"),
+      metricFunction: document.getElementById("metricFunction"),
+      metricOperand: document.getElementById("metricOperand"),
+      metricSource: document.getElementById("metricSource"),
+      diffSummary: document.getElementById("diffSummary"),
+      explainSubtitle: document.getElementById("explainSubtitle"),
+      explainBody: document.getElementById("explainBody"),
+      copyExplainBtn: document.getElementById("copyExplainBtn"),
+      copyMarkdownBtn: document.getElementById("copyMarkdownBtn"),
+      copyTraceMarkdownBtn: document.getElementById("copyTraceMarkdownBtn"),
+      lifecyclePanel: document.getElementById("lifecyclePanel"),
+      jsonStatus: document.getElementById("jsonStatus"),
+      toggleJsonBtn: document.getElementById("toggleJsonBtn"),
+      copyJsonBtn: document.getElementById("copyJsonBtn"),
+      jsonBox: document.getElementById("jsonBox"),
+      stackMode: document.getElementById("stackMode"),
+      mainStackList: document.getElementById("mainStackList"),
+      altStackList: document.getElementById("altStackList")
+    };
+
+    function persistThemeMode(mode) {
+      try {
+        localStorage.setItem(THEME_STORAGE_KEY, mode);
+      } catch (error) {
+        // Ignore storage failures inside restricted Webview contexts.
+      }
+    }
+
+    function applyThemeMode(mode, persist = true) {
+      state.themeMode = normalizeThemeMode(mode);
+      document.body.dataset.theme = state.themeMode;
+      if (el.themeMode) {
+        el.themeMode.value = state.themeMode;
+      }
+      if (persist) {
+        persistThemeMode(state.themeMode);
+      }
+    }
+
+    applyThemeMode(state.themeMode, false);
+
+    function steps() {
+      return state.trace && Array.isArray(state.trace.steps)
+        ? state.trace.steps
+        : [];
+    }
+
+    function currentStep() {
+      return steps()[state.current] || null;
+    }
+
+    function hashText(value) {
+      let hash = 2166136261;
+      const text = String(value || "");
+      for (let i = 0; i < text.length; i++) {
+        hash ^= text.charCodeAt(i);
+        hash = Math.imul(hash, 16777619);
+      }
+      return (hash >>> 0).toString(36);
+    }
+
+    function traceBookmarkKey() {
+      if (!state.trace) {
+        return "";
+      }
+      const allSteps = steps();
+      const source = state.trace.source || {};
+      const sourceLines = Array.isArray(source.lines) ? source.lines : [];
+      const first = allSteps[0] || {};
+      const last = allSteps[allSteps.length - 1] || {};
+      const signature = [
+        source.file || "",
+        sourceLines.length,
+        sourceLines[0] || "",
+        sourceLines[sourceLines.length - 1] || "",
+        allSteps.length,
+        first.pc ?? "",
+        first.opcode || first.instruction || "",
+        last.pc ?? "",
+        last.opcode || last.instruction || ""
+      ].join("\u0000");
+      return BOOKMARK_STORAGE_PREFIX + hashText(signature);
+    }
+
+    function normalizeBookmarks() {
+      const total = steps().length;
+      state.bookmarks = Array.from(new Set(state.bookmarks
+        .map((index) => Number(index))
+        .filter((index) => Number.isInteger(index) && index >= 0 && index < total)))
+        .sort((left, right) => left - right);
+      return state.bookmarks;
+    }
+
+    function bookmarkCount() {
+      return normalizeBookmarks().length;
+    }
+
+    function isBookmarked(index) {
+      return normalizeBookmarks().includes(Number(index));
+    }
+
+    function saveBookmarks() {
+      if (!state.bookmarkStorageKey) {
+        return;
+      }
+      try {
+        window.localStorage.setItem(
+          state.bookmarkStorageKey,
+          JSON.stringify(normalizeBookmarks())
+        );
+      } catch (error) {
+        // Local storage can be unavailable in restricted webview contexts.
+      }
+    }
+
+    function loadBookmarks() {
+      state.bookmarkStorageKey = traceBookmarkKey();
+      state.bookmarks = [];
+      if (!state.bookmarkStorageKey) {
+        return;
+      }
+      try {
+        const raw = window.localStorage.getItem(state.bookmarkStorageKey);
+        state.bookmarks = raw ? JSON.parse(raw) : [];
+      } catch (error) {
+        state.bookmarks = [];
+      }
+      normalizeBookmarks();
+    }
+
+    function toggleBookmark(index = state.current) {
+      if (!steps().length) {
+        return;
+      }
+      const stepIndex = Math.max(0, Math.min(Number(index), steps().length - 1));
+      const existing = state.bookmarks.indexOf(stepIndex);
+      if (existing >= 0) {
+        state.bookmarks.splice(existing, 1);
+      } else {
+        state.bookmarks.push(stepIndex);
+      }
+      normalizeBookmarks();
+      saveBookmarks();
+      render();
+    }
+
+    function clearBookmarks() {
+      state.bookmarks = [];
+      saveBookmarks();
+      render();
+    }
+
+    function findBookmarkStep(direction) {
+      const marks = normalizeBookmarks();
+      if (!marks.length) {
+        return null;
+      }
+      if (direction > 0) {
+        return marks.find((index) => index > state.current) ?? null;
+      }
+      for (let i = marks.length - 1; i >= 0; i--) {
+        if (marks[i] < state.current) {
+          return marks[i];
+        }
+      }
+      return null;
+    }
+
+    function bookmarkedSourceLines() {
+      const lines = new Set();
+      for (const index of normalizeBookmarks()) {
+        const line = sourceLineForStep(steps()[index]);
+        if (line > 0) {
+          lines.add(line);
+        }
+      }
+      return lines;
+    }
+
+    function htmlEscape(value) {
+      return String(value ?? "")
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;");
+    }
+
+    function normalizedQuery() {
+      return state.query.trim().toLowerCase();
+    }
+
+    function stringifyForSearch(value) {
+      return JSON.stringify(value ?? "").toLowerCase();
+    }
+
+    function stepSearchText(step) {
+      if (!step) {
+        return "";
+      }
+      return [
+        step.step,
+        step.pc,
+        step.opcode,
+        step.instruction,
+        step.operand,
+        step.functionName,
+        step.sourceFile,
+        step.sourceLine,
+        step.error,
+        stringifyForSearch(stackFor(step, "main", "before")),
+        stringifyForSearch(stackFor(step, "main", "after")),
+        stringifyForSearch(stackFor(step, "alt", "before")),
+        stringifyForSearch(stackFor(step, "alt", "after"))
+      ].join(" ").toLowerCase();
+    }
+
+    function stepMatchesSearch(step) {
+      const query = normalizedQuery();
+      return !query || stepSearchText(step).includes(query);
+    }
+
+    function stackChanged(effect) {
+      return count(effect && effect.pushed) > 0 ||
+        count(effect && effect.popped) > 0 ||
+        (effect && effect.sizeBefore !== effect.sizeAfter) ||
+        Boolean(effect && effect.reordered);
+    }
+
+    function stepMatchesFilter(step, index) {
+      if (!step || state.filterMode === "all") {
+        return true;
+      }
+      const effects = effectsFor(step);
+      if (state.filterMode === "changed") {
+        return stackChanged(effects.mainStack) ||
+          stackChanged(effects.altStack) ||
+          count(effects.moves) > 0;
+      }
+      if (state.filterMode === "alt") {
+        return stackChanged(effects.altStack) ||
+          (effects.moves || []).some((move) => move.from === "alt" || move.to === "alt");
+      }
+      if (state.filterMode === "errors") {
+        return Boolean(step.error || step.errorMessage);
+      }
+      if (state.filterMode === "bookmarks") {
+        return isBookmarked(index);
+      }
+      return true;
+    }
+
+    function stepMatchesSelectors(step, index) {
+      return stepMatchesSearch(step) && stepMatchesFilter(step, index);
+    }
+
+    function hasActiveSelectors() {
+      return Boolean(normalizedQuery()) || state.filterMode !== "all";
+    }
+
+    function matchingStepIndices() {
+      return steps()
+        .map((step, index) => stepMatchesSelectors(step, index) ? index : -1)
+        .filter((index) => index >= 0);
+    }
+
+    function findMatchingStep(direction) {
+      const matches = matchingStepIndices();
+      if (!matches.length) {
+        return null;
+      }
+      if (direction > 0) {
+        return matches.find((index) => index > state.current) ?? null;
+      }
+      for (let i = matches.length - 1; i >= 0; i--) {
+        if (matches[i] < state.current) {
+          return matches[i];
+        }
+      }
+      return null;
+    }
+
+    function navigationTarget(direction) {
+      if (hasActiveSelectors()) {
+        return findMatchingStep(direction);
+      }
+      const next = state.current + direction;
+      return next >= 0 && next < steps().length ? next : null;
+    }
+
+    function moveStep(direction) {
+      const target = navigationTarget(direction);
+      if (target !== null) {
+        setStep(target);
+      }
+    }
+
+    function jumpMatches(direction) {
+      const target = findMatchingStep(direction);
+      if (target !== null) {
+        setStep(target);
+      }
+    }
+
+    function sourceLineForStep(step) {
+      return step ? Number(step.sourceLine || (step.source && step.source.line) || 0) : 0;
+    }
+
+    function sourceColumnForStep(step) {
+      return step ? Number((step.source && step.source.column) || 1) : 1;
+    }
+
+    function sourceFileForStep(step) {
+      const source = (state.trace && state.trace.source) || {};
+      return source.file ||
+        (step && (step.sourceFile || (step.source && step.source.file))) ||
+        "Source";
+    }
+
+    function compactPath(file, line) {
+      const text = String(file || "-");
+      const normalized = text.replaceAll("\\", "/");
+      const parts = normalized.split("/").filter(Boolean);
+      const shortFile = parts.length > 2
+        ? parts.slice(-2).join("/")
+        : normalized || "-";
+      return shortFile + (line ? ":" + line : "");
+    }
+
+    function postVsCodeMessage(message) {
+      if (vscodeApi) {
+        vscodeApi.postMessage(message);
+      }
+    }
+
+    function openSourceForStep(step) {
+      if (!step) {
+        return;
+      }
+      postVsCodeMessage({
+        type: "openSource",
+        file: sourceFileForStep(step),
+        line: sourceLineForStep(step) || 1,
+        column: sourceColumnForStep(step)
+      });
+    }
+
+    function sourceStepKey(step) {
+      const line = sourceLineForStep(step);
+      return line > 0 ? sourceFileForStep(step) + ":" + line : "";
+    }
+
+    function findSourceLineStep(direction) {
+      const allSteps = steps();
+      const currentKey = sourceStepKey(currentStep());
+      for (
+        let i = state.current + direction;
+        i >= 0 && i < allSteps.length;
+        i += direction
+      ) {
+        const key = sourceStepKey(allSteps[i]);
+        if (key && key !== currentKey) {
+          return i;
+        }
+      }
+      return null;
+    }
+
+    function stepHasPush(effect) {
+      return count(effect && effect.pushed) > 0;
+    }
+
+    function stepHasPop(effect) {
+      return count(effect && effect.popped) > 0;
+    }
+
+    function isStackEvent(step) {
+      if (!step) {
+        return false;
+      }
+      const effects = effectsFor(step);
+      return Boolean(step.error || step.errorMessage) ||
+        stackChanged(effects.mainStack) ||
+        stackChanged(effects.altStack) ||
+        count(effects.moves) > 0;
+    }
+
+    function eventKind(step) {
+      if (!step) {
+        return "";
+      }
+      const effects = effectsFor(step);
+      if (step.error || step.errorMessage) {
+        return "error";
+      }
+      if (count(effects.moves) > 0) {
+        return "move";
+      }
+      if (stackChanged(effects.altStack)) {
+        return "alt";
+      }
+      if (stepHasPush(effects.mainStack) || stepHasPush(effects.altStack)) {
+        return "push";
+      }
+      if (stepHasPop(effects.mainStack) || stepHasPop(effects.altStack)) {
+        return "pop";
+      }
+      return "event";
+    }
+
+    function findEventStep(direction) {
+      const allSteps = steps();
+      for (
+        let i = state.current + direction;
+        i >= 0 && i < allSteps.length;
+        i += direction
+      ) {
+        if (isStackEvent(allSteps[i])) {
+          return i;
+        }
+      }
+      return null;
+    }
+
+    function traceFunctions() {
+      const allSteps = steps();
+      const debugFunctions =
+        state.trace &&
+        state.trace.debugInfo &&
+        Array.isArray(state.trace.debugInfo.functions)
+          ? state.trace.debugInfo.functions
+          : [];
+      const byName = new Map();
+
+      for (const fn of debugFunctions) {
+        if (fn && fn.name && !byName.has(fn.name)) {
+          byName.set(fn.name, {
+            name: fn.name,
+            startPC: fn.startPC,
+            endPC: fn.endPC,
+            isPublic: fn.isPublic,
+            startStep: -1,
+            endStep: -1
+          });
+        }
+      }
+
+      allSteps.forEach((step, index) => {
+        const name = step.functionName || "";
+        if (!name) {
+          return;
+        }
+        if (!byName.has(name)) {
+          byName.set(name, {
+            name,
+            startPC: step.pc,
+            endPC: step.pc,
+            isPublic: undefined,
+            startStep: index,
+            endStep: index
+          });
+        }
+        const fn = byName.get(name);
+        fn.startStep = fn.startStep < 0 ? index : Math.min(fn.startStep, index);
+        fn.endStep = Math.max(fn.endStep, index);
+        if (Number.isFinite(Number(step.pc))) {
+          fn.startPC = fn.startPC === undefined
+            ? step.pc
+            : Math.min(Number(fn.startPC), Number(step.pc));
+          fn.endPC = fn.endPC === undefined
+            ? step.pc
+            : Math.max(Number(fn.endPC), Number(step.pc));
+        }
+      });
+
+      return Array.from(byName.values())
+        .filter((fn) => fn.name)
+        .sort((left, right) => {
+          const leftStep = left.startStep < 0 ? Number.MAX_SAFE_INTEGER : left.startStep;
+          const rightStep = right.startStep < 0 ? Number.MAX_SAFE_INTEGER : right.startStep;
+          return leftStep - rightStep || left.name.localeCompare(right.name);
+        });
+    }
+
+    function currentFunctionInfo(step) {
+      if (!step || !step.functionName) {
+        return null;
+      }
+      return traceFunctions().find((fn) => fn.name === step.functionName) || null;
+    }
+
+    function jumpToFunction(name) {
+      if (!name) {
+        setStep(0);
+        return;
+      }
+      const fn = traceFunctions().find((item) => item.name === name);
+      if (!fn) {
+        return;
+      }
+      if (fn.startStep >= 0) {
+        setStep(fn.startStep);
+        return;
+      }
+      const byPc = steps().findIndex((step) =>
+        Number(step.pc) >= Number(fn.startPC) &&
+        Number(step.pc) <= Number(fn.endPC)
+      );
+      if (byPc >= 0) {
+        setStep(byPc);
+      }
+    }
+
+    function valueKey(item) {
+      return item && item.hex ? item.hex : JSON.stringify(item);
+    }
+
+    function countMap(items) {
+      const map = new Map();
+      for (const item of items || []) {
+        const key = valueKey(item);
+        map.set(key, (map.get(key) || 0) + 1);
+      }
+      return map;
+    }
+
+    function consume(map, key) {
+      const count = map.get(key) || 0;
+      if (count <= 0) {
+        return false;
+      }
+      if (count === 1) {
+        map.delete(key);
+      } else {
+        map.set(key, count - 1);
+      }
+      return true;
+    }
+
+    function stackFor(step, stackName, phase) {
+      const prefix = stackName === "main" ? "mainStack" : "altStack";
+      const nested = step[prefix];
+      if (nested && Array.isArray(nested[phase])) {
+        return nested[phase];
+      }
+      const direct = prefix + (phase === "before" ? "Before" : "After");
+      return Array.isArray(step[direct]) ? step[direct] : [];
+    }
+
+    function diffValues(left, right) {
+      const remaining = countMap(right);
+      const out = [];
+      for (const item of left || []) {
+        const key = valueKey(item);
+        if (!consume(remaining, key)) {
+          out.push(item);
+        }
+      }
+      return out;
+    }
+
+    function fallbackEffects(step) {
+      const mainBefore = stackFor(step, "main", "before");
+      const mainAfter = stackFor(step, "main", "after");
+      const altBefore = stackFor(step, "alt", "before");
+      const altAfter = stackFor(step, "alt", "after");
+      return {
+        mainStack: {
+          pushed: diffValues(mainAfter, mainBefore),
+          popped: diffValues(mainBefore, mainAfter)
+        },
+        altStack: {
+          pushed: diffValues(altAfter, altBefore),
+          popped: diffValues(altBefore, altAfter)
+        },
+        moves: []
+      };
+    }
+
+    function effectsFor(step) {
+      return step.effects || fallbackEffects(step);
+    }
+
+    function formatElementMeta(item) {
+      const parts = [];
+      if (item && item.depth !== undefined) {
+        parts.push(Number(item.depth) === 0 ? "top" : "depth=" + item.depth);
+      }
+      if (item && item.elementId) {
+        parts.push("id=" + item.elementId);
+      }
+      if (item && item.intString !== undefined) {
+        parts.push("int=" + item.intString);
+      } else if (item && item.int !== undefined) {
+        parts.push("int=" + item.int);
+      }
+      if (item && item.ascii) {
+        parts.push('str="' + item.ascii + '"');
+      }
+      if (item && item.byteLength !== undefined) {
+        parts.push(item.byteLength + " bytes");
+      }
+      return parts;
+    }
+
+    function cardHtml(item, className, tag) {
+      const meta = formatElementMeta(item)
+        .map((part) => "<span>" + htmlEscape(part) + "</span>")
+        .join("");
+      const query = normalizedQuery();
+      const matched = query && stringifyForSearch(item).includes(query);
+      const elementId = item && item.elementId ? String(item.elementId) : "";
+      const selected = elementId && elementId === state.selectedElementId;
+      const classes = [
+        className || "",
+        matched ? "matched" : "",
+        selected ? "selected" : ""
+      ]
+        .filter(Boolean)
+        .join(" ");
+      return [
+        '<article class="stack-card ' + htmlEscape(classes) + '"' +
+          (elementId ? ' data-element-id="' + htmlEscape(elementId) + '"' : "") +
+          ">",
+        tag ? '<span class="tag">' + htmlEscape(tag) + "</span>" : "",
+        '<div class="hex">' + htmlEscape(item && item.hex ? item.hex : "<empty>") + "</div>",
+        '<div class="decoded">' + meta + "</div>",
+        "</article>"
+      ].join("");
+    }
+
+    function topFirst(items) {
+      const copy = (items || []).slice();
+      if (copy.every((item) => item && Number.isFinite(Number(item.depth)))) {
+        return copy.sort((left, right) => Number(left.depth) - Number(right.depth));
+      }
+      return copy.reverse();
+    }
+
+    function bucketsFor(step, stackName) {
+      const effects = effectsFor(step);
+      const key = stackName === "main" ? "mainStack" : "altStack";
+      const pushed = (effects[key] && effects[key].pushed) || [];
+      const popped = (effects[key] && effects[key].popped) || [];
+      const movedIn = [];
+      const movedOut = [];
+      for (const move of effects.moves || []) {
+        const toName = move.to === "main" ? "main" : "alt";
+        const fromName = move.from === "main" ? "main" : "alt";
+        if (toName === stackName) {
+          movedIn.push(move.element);
+        }
+        if (fromName === stackName) {
+          movedOut.push(move.element);
+        }
+      }
+      return {
+        pushed,
+        popped,
+        movedIn,
+        movedOut,
+        pushedMap: countMap(pushed),
+        movedInMap: countMap(movedIn)
+      };
+    }
+
+    function stackNoteHtml(text) {
+      return '<div class="stack-overflow-note">' + htmlEscape(text) + "</div>";
+    }
+
+    function stackRowsFor(step, stackName) {
+      const mode = state.viewMode;
+      const phase = mode === "before" ? "before" : "after";
+      const visible = topFirst(stackFor(step, stackName, phase));
+      const buckets = bucketsFor(step, stackName);
+      const rows = [];
+
+      if (mode === "diff") {
+        const movedOut = topFirst(buckets.movedOut);
+        for (const item of movedOut) {
+          const label = stackName === "main" ? "to alt" : "to main";
+          rows.push({ type: "card", item, className: "moved-out", tag: label });
+        }
+
+        const popped = topFirst(buckets.popped);
+        for (const item of popped) {
+          rows.push({ type: "card", item, className: "popped", tag: "popped" });
+        }
+      }
+
+      for (const item of visible) {
+        let className = "";
+        let tag = "";
+        const key = valueKey(item);
+        if (mode === "diff") {
+          if (consume(buckets.movedInMap, key)) {
+            className = "moved-in";
+            tag = stackName === "main" ? "from alt" : "from main";
+          } else if (consume(buckets.pushedMap, key)) {
+            className = "pushed";
+            tag = "pushed";
+          }
+        }
+        rows.push({ type: "card", item, className, tag });
+      }
+
+      return rows;
+    }
+
+    function stackRowHtml(row) {
+      if (row.type === "note") {
+        return stackNoteHtml(row.text || "");
+      }
+      return cardHtml(row.item, row.className, row.tag);
+    }
+
+    function renderStack(container, stackName, step) {
+      if (!step) {
+        container.innerHTML = '<div class="stack-window"><div class="stack-empty">No trace loaded</div></div>';
+        return;
+      }
+
+      const scrollTop = container.scrollTop || 0;
+      const rows = stackRowsFor(step, stackName);
+      if (!rows.length) {
+        container.innerHTML = '<div class="stack-window"><div class="stack-empty">No values at this step</div></div>';
+        return;
+      }
+
+      if (rows.length <= STACK_VIRTUAL_THRESHOLD) {
+        container.innerHTML =
+          '<div class="stack-window">' + rows.map(stackRowHtml).join("") + "</div>";
+        container.scrollTop = Math.min(scrollTop, container.scrollHeight);
+        return;
+      }
+
+      const viewportHeight = Math.max(container.clientHeight || 420, 220);
+      const start = Math.max(
+        0,
+        Math.floor(scrollTop / STACK_VIRTUAL_ITEM_HEIGHT) - STACK_VIRTUAL_OVERSCAN
+      );
+      const windowSize =
+        Math.ceil(viewportHeight / STACK_VIRTUAL_ITEM_HEIGHT) +
+        STACK_VIRTUAL_OVERSCAN * 2;
+      const end = Math.min(rows.length, start + windowSize);
+      const beforeHeight = start * STACK_VIRTUAL_ITEM_HEIGHT;
+      const afterHeight = Math.max(0, rows.length - end) * STACK_VIRTUAL_ITEM_HEIGHT;
+      const summary =
+        "Virtualized: showing rows " + (start + 1) + "-" + end +
+        " of " + rows.length + ". Scroll to inspect deeper stack values.";
+
+      container.innerHTML = [
+        '<div class="stack-window">',
+        stackNoteHtml(summary),
+        '<div class="stack-spacer" style="--stack-spacer-height:' + beforeHeight + 'px"></div>',
+        rows.slice(start, end).map(stackRowHtml).join(""),
+        '<div class="stack-spacer" style="--stack-spacer-height:' + afterHeight + 'px"></div>',
+        "</div>"
+      ].join("");
+      container.scrollTop = Math.min(scrollTop, container.scrollHeight);
+    }
+
+    function renderSource(step) {
+      const source = (state.trace && state.trace.source) || {};
+      const lines = Array.isArray(source.lines) ? source.lines : [];
+      const activeLine = sourceLineForStep(step);
+      const sourceFile = sourceFileForStep(step);
+      el.sourceTitle.textContent = sourceFile;
+      el.sourceTitle.title = sourceFile;
+      el.sourceMeta.textContent = activeLine > 0 ? "Line " + activeLine : "Line -";
+
+      if (!lines.length) {
+        state.sourceRenderKey = "";
+        state.lastActiveLine = 0;
+        el.sourceView.innerHTML =
+          '<div class="empty">' + htmlEscape(sourceFile) + ":" + htmlEscape(activeLine || "-") + "</div>";
+        return;
+      }
+
+      const renderKey = [
+        sourceFile,
+        lines.length,
+        lines[0] || "",
+        lines[lines.length - 1] || ""
+      ].join("\u0000");
+
+      if (state.sourceRenderKey !== renderKey) {
+        el.sourceView.innerHTML = lines
+          .map((line, index) => {
+            const lineNo = index + 1;
+            return [
+              '<div class="source-line clickable" data-line="' + lineNo + '">',
+              '<span class="gutter">' + lineNo + "</span>",
+              '<span class="code">' + htmlEscape(line) + "</span>",
+              "</div>"
+            ].join("");
+          })
+          .join("");
+        state.sourceRenderKey = renderKey;
+        state.lastActiveLine = 0;
+      }
+
+      el.sourceView
+        .querySelectorAll(".source-line.bookmarked")
+        .forEach((lineEl) => lineEl.classList.remove("bookmarked"));
+      const markLines = bookmarkedSourceLines();
+      for (const lineNo of markLines) {
+        const markedEl = el.sourceView.querySelector(
+          '.source-line[data-line="' + lineNo + '"]'
+        );
+        if (markedEl) {
+          markedEl.classList.add("bookmarked");
+        }
+      }
+
+      if (state.lastActiveLine && state.lastActiveLine !== activeLine) {
+        const previous = el.sourceView.querySelector(
+          '.source-line[data-line="' + state.lastActiveLine + '"]'
+        );
+        if (previous) {
+          previous.classList.remove("active");
+        }
+      }
+
+      const activeEl = activeLine > 0
+        ? el.sourceView.querySelector('.source-line[data-line="' + activeLine + '"]')
+        : null;
+      if (activeEl) {
+        activeEl.classList.add("active");
+        if (state.lastActiveLine !== activeLine) {
+          activeEl.scrollIntoView({ block: "center" });
+        }
+      }
+      state.lastActiveLine = activeLine;
+    }
+
+    function count(items) {
+      return Array.isArray(items) ? items.length : 0;
+    }
+
+    function traceDiagnosticsFor(trace) {
+      const diagnostics = [];
+      const add = (severity, message) => diagnostics.push({ severity, message });
+      if (!trace || typeof trace !== "object") {
+        add("error", "Trace payload is not an object.");
+        return diagnostics;
+      }
+      if (trace.format !== "apc-stack-trace") {
+        add("warning", "Trace format is not marked as apc-stack-trace.");
+      }
+      const allSteps = Array.isArray(trace.steps) ? trace.steps : [];
+      if (!allSteps.length) {
+        add("error", "Trace has no execution steps.");
+      }
+
+      const source = trace.source || {};
+      const sourceLines = Array.isArray(source.lines) ? source.lines : [];
+      const missingSource = allSteps.filter((step) => !sourceLineForRawStep(step)).length;
+      if (missingSource) {
+        add("warning", missingSource + " step(s) do not include a source line.");
+      }
+      if (sourceLines.length) {
+        const outOfRange = allSteps.filter((step) => {
+          const line = sourceLineForRawStep(step);
+          return line > sourceLines.length;
+        }).length;
+        if (outOfRange) {
+          add("warning", outOfRange + " step source line(s) are outside the embedded source.");
+        }
+      } else {
+        add("warning", "Trace does not embed source lines; source view will only show file and line.");
+      }
+
+      const missingEffects = allSteps.filter((step) => !step.effects).length;
+      if (missingEffects) {
+        add("info", missingEffects + " step(s) do not include effects; diff is computed in the Webview.");
+      }
+
+      const missingOpcode = allSteps.filter((step) => !(step.opcode || step.instruction)).length;
+      if (missingOpcode) {
+        add("warning", missingOpcode + " step(s) do not include opcode/instruction text.");
+      }
+
+      if (!trace.lifecycle || !Array.isArray(trace.lifecycle.elements)) {
+        add("info", "Trace has no lifecycle summary; stack cards still render without value history.");
+      }
+
+      const nonMonotonicSteps = allSteps.filter((step, index) =>
+        step.step !== undefined && Number(step.step) !== index
+      ).length;
+      if (nonMonotonicSteps) {
+        add("info", nonMonotonicSteps + " step index value(s) differ from their trace array position.");
+      }
+
+      if (!diagnostics.length) {
+        add("ok", "Trace metadata looks complete.");
+      }
+      return diagnostics;
+    }
+
+    function sourceLineForRawStep(step) {
+      return step ? Number(step.sourceLine || (step.source && step.source.line) || 0) : 0;
+    }
+
+    function renderDiagnostics() {
+      if (!state.trace) {
+        el.diagnosticsPanel.classList.add("hidden");
+        el.diagnosticsSummary.textContent = "";
+        el.diagnosticsList.innerHTML = "";
+        return;
+      }
+      const diagnostics = state.diagnostics.length
+        ? state.diagnostics
+        : traceDiagnosticsFor(state.trace);
+      const issueCount = diagnostics.filter((item) => item.severity !== "ok").length;
+      el.diagnosticsPanel.classList.remove("hidden");
+      el.diagnosticsSummary.textContent = issueCount
+        ? issueCount + " issue(s)"
+        : "OK";
+      el.diagnosticsList.innerHTML = diagnostics
+        .map((item) =>
+          '<div class="diagnostic-item ' + htmlEscape(item.severity || "info") + '">' +
+            htmlEscape(item.message) +
+          "</div>"
+        )
+        .join("");
+    }
+
+    function renderSummary(step) {
+      if (!step) {
+        el.diffSummary.innerHTML = "";
+        return;
+      }
+      const effects = effectsFor(step);
+      const main = effects.mainStack || {};
+      const alt = effects.altStack || {};
+      const chips = [
+        { text: "main +" + count(main.pushed), cls: "push" },
+        { text: "main -" + count(main.popped), cls: "pop" },
+        { text: "alt +" + count(alt.pushed), cls: "push" },
+        { text: "alt -" + count(alt.popped), cls: "pop" },
+        { text: "moves " + count(effects.moves), cls: "move" }
+      ];
+      el.diffSummary.innerHTML = chips
+        .map((chip) => '<span class="chip ' + chip.cls + '">' + htmlEscape(chip.text) + "</span>")
+        .join("");
+    }
+
+    function renderStepSummary(step) {
+      if (!el.stepSummary) {
+        return;
+      }
+      const total = steps().length;
+      if (!step) {
+        el.stepSummary.innerHTML = [
+          '<div class="step-summary-main">',
+          '<span class="step-summary-count">0 / 0</span>',
+          '<span class="step-summary-opcode">Load stack_trace.json</span>',
+          "</div>",
+          '<div class="step-summary-meta">',
+          '<span class="summary-pill">pc <strong>-</strong></span>',
+          '<span class="summary-pill source">source <strong>-</strong></span>',
+          "</div>"
+        ].join("");
+        return;
+      }
+
+      const effects = effectsFor(step);
+      const main = effects.mainStack || {};
+      const alt = effects.altStack || {};
+      const opcode = step.opcode || step.instruction || "-";
+      const line = sourceLineForStep(step);
+      const file = sourceFileForStep(step);
+      const sourceLabel = compactPath(file, line);
+      const sourceTitle = (file || "-") + (line ? ":" + line : "");
+      const pc = String(step.pc ?? "-");
+      const moveCount = count(effects.moves);
+      el.stepSummary.innerHTML = [
+        '<div class="step-summary-main">',
+        '<span class="step-summary-count">' + htmlEscape(state.current + 1 + " / " + total) + "</span>",
+        '<span class="step-summary-opcode" title="' + htmlEscape(opcode) + '">' + htmlEscape(opcode) + "</span>",
+        "</div>",
+        '<div class="step-summary-meta">',
+        '<span class="summary-pill">pc <strong>' + htmlEscape(pc) + "</strong></span>",
+        '<span class="summary-pill source" title="' + htmlEscape(sourceTitle) + '">source <strong>' + htmlEscape(sourceLabel) + "</strong></span>",
+        '<span class="summary-pill push">main +' + count(main.pushed) + "</span>",
+        '<span class="summary-pill pop">main -' + count(main.popped) + "</span>",
+        '<span class="summary-pill push">alt +' + count(alt.pushed) + "</span>",
+        '<span class="summary-pill pop">alt -' + count(alt.popped) + "</span>",
+        '<span class="summary-pill move">moves ' + moveCount + "</span>",
+        "</div>"
+      ].join("");
+    }
+
+    function valueSummary(item) {
+      if (!item) {
+        return "-";
+      }
+      const parts = [item.hex || JSON.stringify(item)];
+      if (item.intString !== undefined) {
+        parts.push("int=" + item.intString);
+      } else if (item.int !== undefined) {
+        parts.push("int=" + item.int);
+      }
+      if (item.ascii) {
+        parts.push('str="' + item.ascii + '"');
+      }
+      if (item.elementId) {
+        parts.push("id=" + item.elementId);
+      }
+      return parts.join(" ");
+    }
+
+    function valueListSummary(items) {
+      return count(items)
+        ? items.map((item) => valueSummary(item)).join(", ")
+        : "-";
+    }
+
+    function sourceTextForStep(step) {
+      const source = (state.trace && state.trace.source) || {};
+      const lines = Array.isArray(source.lines) ? source.lines : [];
+      const line = sourceLineForStep(step);
+      return line > 0 && lines[line - 1] !== undefined ? lines[line - 1] : "";
+    }
+
+    function sizeForEffect(effect, step, stackName, phase) {
+      const field = phase === "before" ? "sizeBefore" : "sizeAfter";
+      if (effect && effect[field] !== undefined) {
+        return Number(effect[field]);
+      }
+      return stackFor(step, stackName, phase).length;
+    }
+
+    function topValueSummary(step, stackName, phase) {
+      const top = topFirst(stackFor(step, stackName, phase))[0];
+      return valueSummary(top);
+    }
+
+    function stackEffectLines(label, effect) {
+      const lines = [];
+      if (count(effect && effect.pushed)) {
+        lines.push(label + " pushes " + valueListSummary(effect.pushed) + ".");
+      }
+      if (count(effect && effect.popped)) {
+        lines.push(label + " pops " + valueListSummary(effect.popped) + ".");
+      }
+      if (effect && effect.reordered) {
+        lines.push(label + " order changed.");
+      }
+      return lines;
+    }
+
+    function explanationForStep(step) {
+      if (!step) {
+        return {
+          subtitle: "No trace loaded",
+          sentence: "Load stack_trace.json",
+          bullets: [],
+          text: ""
+        };
+      }
+
+      const allSteps = steps();
+      const effects = effectsFor(step);
+      const opcode = step.opcode || step.instruction || "instruction";
+      const functionName = step.functionName || "-";
+      const pc = step.pc ?? "-";
+      const sourceKey = sourceStepKey(step);
+      const sourceText = sourceTextForStep(step);
+      const sentence = [
+        "Step " + (state.current + 1) + " of " + allSteps.length,
+        "executes " + opcode,
+        "at pc " + pc,
+        functionName !== "-" ? "in " + functionName : ""
+      ].filter(Boolean).join(" ") + ".";
+      const bullets = [];
+
+      if (sourceKey) {
+        bullets.push("Source " + sourceKey + (sourceText ? ": " + sourceText.trim() : "") + ".");
+      }
+      if (step.error || step.errorMessage) {
+        bullets.push("Error: " + (step.error || step.errorMessage) + ".");
+      }
+
+      for (const move of effects.moves || []) {
+        bullets.push(
+          "Moves " + valueSummary(move.element) +
+          " from " + (move.from || "-") +
+          " to " + (move.to || "-") + "."
+        );
+      }
+
+      bullets.push(...stackEffectLines("Main stack", effects.mainStack || {}));
+      bullets.push(...stackEffectLines("Alt stack", effects.altStack || {}));
+
+      const mainBefore = sizeForEffect(effects.mainStack, step, "main", "before");
+      const mainAfter = sizeForEffect(effects.mainStack, step, "main", "after");
+      const altBefore = sizeForEffect(effects.altStack, step, "alt", "before");
+      const altAfter = sizeForEffect(effects.altStack, step, "alt", "after");
+      bullets.push(
+        "Stack sizes: main " + mainBefore + " -> " + mainAfter +
+        ", alt " + altBefore + " -> " + altAfter + "."
+      );
+      bullets.push(
+        "Top values: main " +
+        topValueSummary(step, "main", "before") + " -> " +
+        topValueSummary(step, "main", "after") +
+        ", alt " +
+        topValueSummary(step, "alt", "before") + " -> " +
+        topValueSummary(step, "alt", "after") + "."
+      );
+
+      if (state.selectedElementId) {
+        const life = lifecycleFor(state.selectedElementId);
+        const lifeEvents = life && Array.isArray(life.events)
+          ? life.events.filter((event) => Number(event.step) === state.current)
+          : [];
+        if (lifeEvents.length) {
+          bullets.push(
+            "Selected value " + state.selectedElementId +
+            " has " + lifeEvents.map((event) => event.type || "event").join(", ") +
+            " at this step."
+          );
+        }
+      }
+
+      const text = [sentence, ...bullets].join("\n");
+      return {
+        subtitle: sourceKey || "pc " + pc,
+        sentence,
+        bullets,
+        text
+      };
+    }
+
+    function renderExplanation(step) {
+      const explanation = explanationForStep(step);
+      el.explainSubtitle.textContent = explanation.subtitle;
+      el.copyExplainBtn.disabled = !step;
+      el.copyMarkdownBtn.disabled = !step;
+      el.copyTraceMarkdownBtn.disabled = !state.trace;
+      el.copyExplainBtn.textContent = "Copy";
+      el.copyMarkdownBtn.textContent = "Copy MD";
+      el.copyTraceMarkdownBtn.textContent = "Copy Trace MD";
+      el.explainBody.innerHTML = [
+        '<p class="explain-sentence">' + htmlEscape(explanation.sentence) + "</p>",
+        explanation.bullets.length
+          ? '<ul class="explain-list">' +
+            explanation.bullets
+              .map((line) => "<li>" + htmlEscape(line) + "</li>")
+              .join("") +
+            "</ul>"
+          : ""
+      ].join("");
+    }
+
+    function markdownForStep(step) {
+      if (!step) {
+        return "";
+      }
+      const explanation = explanationForStep(step);
+      const effects = effectsFor(step);
+      const main = effects.mainStack || {};
+      const alt = effects.altStack || {};
+      const lines = [
+        "# AtomicProof Trace Step " + (state.current + 1),
+        "",
+        "- PC: `" + String(step.pc ?? "-") + "`",
+        "- Opcode: `" + htmlEscapeForMarkdown(step.opcode || step.instruction || "-") + "`",
+        "- Function: `" + htmlEscapeForMarkdown(step.functionName || "-") + "`",
+        "- Source: `" + htmlEscapeForMarkdown(sourceStepKey(step) || "-") + "`",
+        "",
+        "## Explanation",
+        "",
+        explanation.sentence,
+        "",
+        ...explanation.bullets.map((line) => "- " + line),
+        "",
+        "## Stack Effects",
+        "",
+        "- Main pushed: `" + count(main.pushed) + "`",
+        "- Main popped: `" + count(main.popped) + "`",
+        "- Alt pushed: `" + count(alt.pushed) + "`",
+        "- Alt popped: `" + count(alt.popped) + "`",
+        "- Moves: `" + count(effects.moves) + "`"
+      ];
+
+      if (count(effects.moves)) {
+        lines.push("", "## Moves", "");
+        for (const move of effects.moves || []) {
+          lines.push(
+            "- `" + htmlEscapeForMarkdown(valueSummary(move.element)) + "` " +
+            "`" + htmlEscapeForMarkdown(move.from || "-") + "` -> " +
+            "`" + htmlEscapeForMarkdown(move.to || "-") + "`"
+          );
+        }
+      }
+
+      if (state.selectedElementId) {
+        const life = lifecycleFor(state.selectedElementId);
+        if (life) {
+          lines.push(
+            "",
+            "## Selected Value",
+            "",
+            "- Element: `" + htmlEscapeForMarkdown(life.elementId || state.selectedElementId) + "`",
+            "- Hex: `" + htmlEscapeForMarkdown(life.hex || "-") + "`",
+            "- Origin: `" + htmlEscapeForMarkdown(life.originStack || "-") +
+              " step " + (Number(life.originStep || 0) + 1) + "`",
+            "- Last: `" + htmlEscapeForMarkdown(life.lastStack || "-") +
+              " step " + (Number(life.lastStep || 0) + 1) + "`"
+          );
+        }
+      }
+
+      return lines.join("\n");
+    }
+
+    function markdownForTrace() {
+      if (!state.trace) {
+        return "";
+      }
+
+      const allSteps = steps();
+      const functions = traceFunctions();
+      const diagnostics = state.diagnostics.length
+        ? state.diagnostics
+        : traceDiagnosticsFor(state.trace);
+      const events = allSteps
+        .map((step, index) => ({ step, index }))
+        .filter((entry) => isStackEvent(entry.step));
+      const bookmarks = normalizeBookmarks();
+      const opcodeCounts = new Map();
+
+      for (const step of allSteps) {
+        const opcode = step.opcode || step.instruction || "-";
+        opcodeCounts.set(opcode, (opcodeCounts.get(opcode) || 0) + 1);
+      }
+
+      const topOpcodes = Array.from(opcodeCounts.entries())
+        .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
+        .slice(0, 15);
+      const source = state.trace.source || {};
+      const lifecycleCount = state.trace.lifecycle && Array.isArray(state.trace.lifecycle.elements)
+        ? state.trace.lifecycle.elements.length
+        : 0;
+
+      const lines = [
+        "# AtomicProof Stack Trace Report",
+        "",
+        "- Steps: `" + allSteps.length + "`",
+        "- Stack events: `" + events.length + "`",
+        "- Bookmarks: `" + bookmarks.length + "`",
+        "- Functions: `" + functions.length + "`",
+        "- Lifecycle values: `" + lifecycleCount + "`",
+        "- Source: `" + htmlEscapeForMarkdown(source.file || sourceFileForStep(allSteps[0]) || "-") + "`",
+        "- Current step: `" + (state.current + 1) + "`",
+        "",
+        "## Diagnostics",
+        ""
+      ];
+
+      lines.push(...diagnostics.map((item) =>
+        "- `" + htmlEscapeForMarkdown(item.severity || "info") + "` " +
+        htmlEscapeForMarkdown(item.message || "")
+      ));
+
+      lines.push("", "## Functions", "");
+      if (functions.length) {
+        for (const fn of functions) {
+          const stepRange = fn.startStep >= 0
+            ? "steps " + (fn.startStep + 1) + "-" + (fn.endStep + 1)
+            : "steps -";
+          const pcRange = fn.startPC !== undefined || fn.endPC !== undefined
+            ? "pc " + String(fn.startPC ?? "-") + "-" + String(fn.endPC ?? "-")
+            : "pc -";
+          lines.push(
+            "- `" + htmlEscapeForMarkdown(fn.name) + "`: " +
+            htmlEscapeForMarkdown(stepRange + ", " + pcRange)
+          );
+        }
+      } else {
+        lines.push("- No function metadata available.");
+      }
+
+      lines.push("", "## Opcode Summary", "");
+      if (topOpcodes.length) {
+        for (const [opcode, total] of topOpcodes) {
+          lines.push("- `" + htmlEscapeForMarkdown(opcode) + "`: `" + total + "`");
+        }
+      } else {
+        lines.push("- No opcode data available.");
+      }
+
+      lines.push("", "## Key Events", "");
+      if (events.length) {
+        for (const { step, index } of events.slice(0, 80)) {
+          const effects = effectsFor(step);
+          const summary = [
+            eventKind(step),
+            step.opcode || step.instruction || "-",
+            sourceStepKey(step) || "pc " + (step.pc ?? "-"),
+            "main +" + count(effects.mainStack && effects.mainStack.pushed),
+            "main -" + count(effects.mainStack && effects.mainStack.popped),
+            "alt +" + count(effects.altStack && effects.altStack.pushed),
+            "alt -" + count(effects.altStack && effects.altStack.popped),
+            "moves " + count(effects.moves)
+          ].join(", ");
+          lines.push("- Step `" + (index + 1) + "`: " + htmlEscapeForMarkdown(summary));
+        }
+        if (events.length > 80) {
+          lines.push("- ... `" + (events.length - 80) + "` more event(s).");
+        }
+      } else {
+        lines.push("- No stack events detected.");
+      }
+
+      if (bookmarks.length) {
+        lines.push("", "## Bookmarks", "");
+        for (const index of bookmarks) {
+          const step = allSteps[index];
+          lines.push(
+            "- Step `" + (index + 1) + "`: `" +
+            htmlEscapeForMarkdown(step && (step.opcode || step.instruction) || "-") +
+            "` at `" + htmlEscapeForMarkdown(step ? sourceStepKey(step) || "pc " + (step.pc ?? "-") : "-") +
+            "`"
+          );
+        }
+      }
+
+      lines.push("", "## Current Step", "", markdownForStep(currentStep()));
+      return lines.join("\n");
+    }
+
+    function htmlEscapeForMarkdown(value) {
+      return String(value ?? "").replaceAll("`", "\\`");
+    }
+
+    function lifecycleFor(elementId) {
+      const lifecycle = state.trace && state.trace.lifecycle;
+      const elements = lifecycle && Array.isArray(lifecycle.elements)
+        ? lifecycle.elements
+        : [];
+      return elements.find((item) => item.elementId === elementId) || null;
+    }
+
+    function renderLifecycle() {
+      const selected = state.selectedElementId;
+      if (!selected) {
+        el.lifecyclePanel.classList.add("hidden");
+        el.lifecyclePanel.innerHTML = "";
+        return;
+      }
+
+      const life = lifecycleFor(selected);
+      if (!life) {
+        el.lifecyclePanel.classList.remove("hidden");
+        el.lifecyclePanel.innerHTML = [
+          '<div class="lifecycle-title">',
+          '<span>Value Lifecycle: ' + htmlEscape(selected) + "</span>",
+          '<button class="button" id="clearLifecycleBtn" type="button">Clear</button>',
+          "</div>",
+          '<div class="panel-subtitle">No lifecycle summary is available for this trace.</div>'
+        ].join("");
+        return;
+      }
+
+      const consumedText = life.consumed
+        ? "consumed at step " + (Number(life.consumedAt) + 1)
+        : "alive at end";
+      const events = Array.isArray(life.events) ? life.events : [];
+      el.lifecyclePanel.classList.remove("hidden");
+      el.lifecyclePanel.innerHTML = [
+        '<div class="lifecycle-title">',
+        '<span>Value Lifecycle: ' + htmlEscape(life.elementId) +
+          " " + htmlEscape(life.hex || "") + "</span>",
+        '<button class="button" id="clearLifecycleBtn" type="button">Clear</button>',
+        "</div>",
+        '<div class="lifecycle-meta">',
+        '<span class="chip">origin ' + htmlEscape(life.originStack || "-") +
+          " step " + htmlEscape(Number(life.originStep || 0) + 1) + "</span>",
+        '<span class="chip">last ' + htmlEscape(life.lastStack || "-") +
+          " step " + htmlEscape(Number(life.lastStep || 0) + 1) + "</span>",
+        '<span class="chip">' + htmlEscape(consumedText) + "</span>",
+        "</div>",
+        '<div class="lifecycle-events">',
+        events.length
+          ? events.map((event) => lifecycleEventHtml(event)).join("")
+          : '<span class="panel-subtitle">No events</span>',
+        "</div>"
+      ].join("");
+    }
+
+    function lifecycleEventHtml(event) {
+      const step = Number(event.step || 0);
+      const movement = event.from && event.to
+        ? " " + event.from + " -> " + event.to
+        : event.stack
+          ? " " + event.stack
+          : "";
+      const label = [
+        event.type || "event",
+        "step " + (step + 1),
+        event.opcode || "",
+        movement
+      ].filter(Boolean).join(" ");
+      return '<button class="lifecycle-event" data-step="' + step + '">' +
+        htmlEscape(label) +
+        "</button>";
+    }
+
+    function renderDetails(step) {
+      const total = steps().length;
+      el.stepCount.textContent = total ? state.current + 1 + " / " + total : "0 / 0";
+      el.timeline.max = Math.max(total - 1, 0);
+      el.timeline.value = state.current;
+      const marked = isBookmarked(state.current);
+
+      if (!step) {
+        el.metricStep.textContent = "-";
+        el.metricPc.textContent = "-";
+        el.metricOpcode.textContent = "-";
+        el.metricFunction.textContent = "-";
+        el.metricOperand.textContent = "-";
+        el.metricSource.textContent = "-";
+        el.metricSource.classList.remove("actionable");
+        return;
+      }
+
+      const line = sourceLineForStep(step);
+      const file = sourceFileForStep(step);
+      el.metricStep.textContent = String(step.step ?? state.current) +
+        (marked ? " (mark)" : "");
+      el.metricPc.textContent = String(step.pc ?? "-");
+      el.metricOpcode.textContent = step.opcode || step.instruction || "-";
+      el.metricFunction.textContent = step.functionName || "-";
+      el.metricOperand.textContent = step.operand || "-";
+      el.metricSource.textContent = compactPath(file, line);
+      el.metricSource.classList.toggle("actionable", Boolean(vscodeApi && file && line));
+      el.metricSource.title = (file || "-") + (line ? ":" + line : "") +
+        (vscodeApi && file && line ? " - open source line in VS Code" : "");
+    }
+
+    function renderJson(step) {
+      el.toggleJsonBtn.disabled = !step;
+      el.copyJsonBtn.disabled = !step;
+      el.toggleJsonBtn.textContent = state.showJson ? "Hide JSON" : "Show JSON";
+
+      if (!step) {
+        state.jsonRenderKey = "";
+        el.jsonStatus.textContent = "No trace loaded";
+        el.jsonBox.classList.add("collapsed");
+        el.jsonBox.textContent = "";
+        return;
+      }
+
+      if (!state.showJson) {
+        state.jsonRenderKey = "";
+        el.jsonStatus.textContent = "Collapsed to keep long traces responsive";
+        el.jsonBox.classList.add("collapsed");
+        el.jsonBox.textContent = "";
+        return;
+      }
+
+      const key = state.current + ":" + (step.pc ?? "") + ":" + (step.opcode || step.instruction || "");
+      el.jsonStatus.textContent = "Step " + (state.current + 1) + " JSON";
+      el.jsonBox.classList.remove("collapsed");
+      if (state.jsonRenderKey !== key) {
+        el.jsonBox.textContent = JSON.stringify(step, null, 2);
+        state.jsonRenderKey = key;
+      }
+    }
+
+    function renderDetailTabs() {
+      if (!el.detailTabs) {
+        return;
+      }
+      const activeTab = state.activeDetailTab || "explain";
+      document.querySelectorAll("[data-detail-tab]").forEach((button) => {
+        const isActive = button.dataset.detailTab === activeTab;
+        button.classList.toggle("active", isActive);
+        button.setAttribute("aria-selected", isActive ? "true" : "false");
+        button.tabIndex = isActive ? 0 : -1;
+      });
+      document.querySelectorAll("[data-detail-panel]").forEach((panel) => {
+        const isActive = panel.dataset.detailPanel === activeTab;
+        panel.classList.toggle("active", isActive);
+        panel.hidden = !isActive;
+      });
+    }
+
+    function overviewItem(label, value, title) {
+      return [
+        '<div class="overview-item" title="' + htmlEscape(title || value) + '">',
+        '<div class="overview-label">' + htmlEscape(label) + "</div>",
+        '<div class="overview-value">' + htmlEscape(value) + "</div>",
+        "</div>"
+      ].join("");
+    }
+
+    function renderOverview(step) {
+      const total = steps().length;
+      const functions = traceFunctions();
+      const mainSize = step ? stackFor(step, "main", "after").length : 0;
+      const altSize = step ? stackFor(step, "alt", "after").length : 0;
+      const currentFunction = currentFunctionInfo(step);
+      const functionText = currentFunction
+        ? currentFunction.name + " pc " + currentFunction.startPC + "-" + currentFunction.endPC
+        : "-";
+      const events = steps().filter(isStackEvent).length;
+      const marks = bookmarkCount();
+
+      el.traceOverview.innerHTML = [
+        overviewItem("Steps", total ? state.current + 1 + " / " + total : "0 / 0"),
+        overviewItem("Events", String(events)),
+        overviewItem("Marks", String(marks)),
+        overviewItem("Stacks", "main " + mainSize + " / alt " + altSize),
+        overviewItem("Function", functionText)
+      ].join("");
+
+      renderFunctionSelect(functions, step);
+    }
+
+    function renderFunctionSelect(functions, step) {
+      const key = functions.map((fn) => fn.name).join("\u0000");
+      if (state.functionRenderKey !== key) {
+        const options = [
+          '<option value="">All functions</option>',
+          ...functions.map((fn) => {
+            const range = fn.startStep >= 0
+              ? "steps " + (fn.startStep + 1) + "-" + (fn.endStep + 1)
+              : "pc " + fn.startPC + "-" + fn.endPC;
+            return '<option value="' + htmlEscape(fn.name) + '">' +
+              htmlEscape(fn.name + " (" + range + ")") +
+              "</option>";
+          })
+        ];
+        el.functionSelect.innerHTML = options.join("");
+        state.functionRenderKey = key;
+      }
+      el.functionSelect.value = step && step.functionName ? step.functionName : "";
+      el.functionSelect.disabled = functions.length === 0;
+    }
+
+    function eventTitle(step, index) {
+      const effects = effectsFor(step);
+      const pieces = [
+        "Step " + (index + 1),
+        "pc " + (step.pc ?? "-"),
+        step.opcode || step.instruction || "",
+        sourceStepKey(step)
+      ].filter(Boolean);
+      if (count(effects.moves)) {
+        pieces.push("moves " + count(effects.moves));
+      }
+      return pieces.join(" | ");
+    }
+
+    function renderEventRail() {
+      const total = steps().length;
+      if (!total) {
+        el.eventRail.innerHTML = "";
+        return;
+      }
+
+      const markSet = new Set(normalizeBookmarks());
+      const events = steps()
+        .map((step, index) => ({
+          step,
+          index,
+          stackEvent: isStackEvent(step),
+          bookmarked: markSet.has(index)
+        }))
+        .filter((entry) => entry.stackEvent || entry.bookmarked);
+      el.eventRail.innerHTML = events
+        .map(({ step, index, stackEvent, bookmarked }) => {
+          const left = total <= 1 ? 0 : (index / (total - 1)) * 100;
+          const classes = [
+            "event-dot",
+            stackEvent ? eventKind(step) : "bookmark",
+            bookmarked && stackEvent ? "bookmarked" : "",
+            index === state.current ? "current" : ""
+          ].filter(Boolean).join(" ");
+          const title = eventTitle(step, index) + (bookmarked ? " | bookmarked" : "");
+          return [
+            '<button class="' + htmlEscape(classes) + '"',
+            ' data-step="' + index + '"',
+            ' style="left:' + left.toFixed(2) + '%"',
+            ' title="' + htmlEscape(title) + '"></button>'
+          ].join("");
+        })
+        .join("");
+    }
+
+    function renderSearchState() {
+      const total = steps().length;
+      const matches = matchingStepIndices();
+      const selectorsActive = hasActiveSelectors();
+      const marks = bookmarkCount();
+      const currentMarked = total > 0 && isBookmarked(state.current);
+      if (selectorsActive) {
+        const currentMatchPosition = matches.indexOf(state.current);
+        el.matchCount.textContent = currentMatchPosition >= 0
+          ? (currentMatchPosition + 1) + " / " + matches.length
+          : matches.length + " matches";
+      } else {
+        el.matchCount.textContent = "";
+      }
+
+      el.prevBtn.disabled = !total || navigationTarget(-1) === null;
+      el.nextBtn.disabled = !total || navigationTarget(1) === null;
+      el.prevMatchBtn.disabled = !selectorsActive ||
+        !matches.length ||
+        findMatchingStep(-1) === null;
+      el.nextMatchBtn.disabled = !selectorsActive ||
+        !matches.length ||
+        findMatchingStep(1) === null;
+      el.openSourceBtn.disabled = !vscodeApi ||
+        !currentStep() ||
+        sourceLineForStep(currentStep()) <= 0;
+      el.prevLineBtn.disabled = !total || findSourceLineStep(-1) === null;
+      el.nextLineBtn.disabled = !total || findSourceLineStep(1) === null;
+      el.prevEventBtn.disabled = !total || findEventStep(-1) === null;
+      el.nextEventBtn.disabled = !total || findEventStep(1) === null;
+      el.toggleBookmarkBtn.disabled = !total;
+      el.toggleBookmarkBtn.classList.toggle("active", currentMarked);
+      el.toggleBookmarkBtn.textContent = currentMarked ? "Unmark Step" : "Mark Step";
+      el.prevBookmarkBtn.disabled = !total || findBookmarkStep(-1) === null;
+      el.nextBookmarkBtn.disabled = !total || findBookmarkStep(1) === null;
+      el.clearBookmarksBtn.disabled = marks === 0;
+    }
+
+    function render() {
+      const step = currentStep();
+      renderPresentationMode();
+      renderSource(step);
+      renderDetails(step);
+      renderStepSummary(step);
+      renderSummary(step);
+      renderExplanation(step);
+      renderJson(step);
+      renderDetailTabs();
+      renderStack(el.mainStackList, "main", step);
+      renderStack(el.altStackList, "alt", step);
+      renderLifecycle();
+      renderOverview(step);
+      renderDiagnostics();
+      renderEventRail();
+      el.stackMode.textContent =
+        state.viewMode.charAt(0).toUpperCase() + state.viewMode.slice(1);
+      const total = steps().length;
+      el.playBtn.disabled = !total;
+      renderSearchState();
+    }
+
+    function setStep(index) {
+      const total = steps().length;
+      if (!total) {
+        state.current = 0;
+      } else {
+        state.current = Math.max(0, Math.min(index, total - 1));
+      }
+      render();
+    }
+
+    function playbackDelay() {
+      return Math.max(80, Math.round(900 / state.speed));
+    }
+
+    function stopPlayback() {
+      state.playing = false;
+      el.playBtn.textContent = "Play";
+      if (state.timer) {
+        clearInterval(state.timer);
+        state.timer = null;
+      }
+    }
+
+    function startPlayback() {
+      stopPlayback();
+      if (!steps().length) {
+        return;
+      }
+      state.playing = true;
+      el.playBtn.textContent = "Pause";
+      state.timer = setInterval(() => {
+        const next = navigationTarget(1);
+        if (next === null) {
+          stopPlayback();
+          return;
+        }
+        setStep(next);
+      }, playbackDelay());
+    }
+
+    function togglePlayback() {
+      if (state.playing) {
+        stopPlayback();
+      } else {
+        startPlayback();
+      }
+    }
+
+    function fallbackCopyText(text) {
+      const textarea = document.createElement("textarea");
+      textarea.value = text;
+      textarea.setAttribute("readonly", "");
+      textarea.style.position = "fixed";
+      textarea.style.left = "-9999px";
+      document.body.appendChild(textarea);
+      textarea.select();
+      let copied = false;
+      try {
+        copied = document.execCommand("copy");
+      } catch (error) {
+        copied = false;
+      }
+      textarea.remove();
+      return copied;
+    }
+
+    async function copyTextToClipboard(text) {
+      let copied = false;
+      try {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          await navigator.clipboard.writeText(text);
+          copied = true;
+        }
+      } catch (error) {
+        copied = false;
+      }
+      if (!copied) {
+        copied = fallbackCopyText(text);
+      }
+      return copied;
+    }
+
+    async function copyWithButtonFeedback(button, text) {
+      if (!text || !button) {
+        return;
+      }
+      const copied = await copyTextToClipboard(text);
+      button.textContent = copied ? "Copied" : "Copy failed";
+      window.setTimeout(() => {
+        button.textContent = button.dataset.defaultText || "Copy";
+      }, 1200);
+    }
+
+    async function copyCurrentExplanation() {
+      await copyWithButtonFeedback(
+        el.copyExplainBtn,
+        explanationForStep(currentStep()).text
+      );
+    }
+
+    async function copyCurrentMarkdown() {
+      await copyWithButtonFeedback(
+        el.copyMarkdownBtn,
+        markdownForStep(currentStep())
+      );
+    }
+
+    async function copyCurrentTraceMarkdown() {
+      await copyWithButtonFeedback(
+        el.copyTraceMarkdownBtn,
+        markdownForTrace()
+      );
+    }
+
+    async function copyCurrentJson() {
+      const step = currentStep();
+      await copyWithButtonFeedback(
+        el.copyJsonBtn,
+        step ? JSON.stringify(step, null, 2) : ""
+      );
+    }
+
+    function toggleJson() {
+      state.showJson = !state.showJson;
+      state.jsonRenderKey = "";
+      renderJson(currentStep());
+    }
+
+    function renderPresentationMode() {
+      document.body.classList.toggle("presentation-mode", state.presentationMode);
+      el.presentationBtn.classList.toggle("active", state.presentationMode);
+      el.presentationBtn.textContent = state.presentationMode ? "Exit Present" : "Present";
+      el.presentationBtn.title = state.presentationMode
+        ? "Exit presentation mode"
+        : "Toggle presentation mode";
+    }
+
+    function togglePresentationMode() {
+      state.presentationMode = !state.presentationMode;
+      render();
+    }
+
+    function stackNameForContainer(container) {
+      return container === el.mainStackList ? "main" : "alt";
+    }
+
+    function handleStackScroll(event) {
+      const container = event.currentTarget;
+      const stackName = stackNameForContainer(container);
+      if (state.stackScrollRaf[stackName]) {
+        return;
+      }
+      state.stackScrollRaf[stackName] = requestAnimationFrame(() => {
+        state.stackScrollRaf[stackName] = 0;
+        renderStack(container, stackName, currentStep());
+      });
+    }
+
+    function loadTraceJson(trace) {
+      if (!trace || !Array.isArray(trace.steps)) {
+        throw new Error("Invalid stack trace JSON: missing steps array");
+      }
+      state.trace = trace;
+      state.current = 0;
+      state.sourceRenderKey = "";
+      state.lastActiveLine = 0;
+      state.functionRenderKey = "";
+      state.selectedElementId = "";
+      state.jsonRenderKey = "";
+      state.diagnostics = traceDiagnosticsFor(trace);
+      if (el.detailPanel) {
+        el.detailPanel.scrollTop = 0;
+      }
+      loadBookmarks();
+      stopPlayback();
+      render();
+    }
+
+    function applyStartupOptions(options) {
+      if (!options) {
+        return;
+      }
+      if (["diff", "before", "after"].includes(options.viewMode)) {
+        state.viewMode = options.viewMode;
+        el.viewMode.value = options.viewMode;
+      }
+      if (THEME_MODES.includes(options.themeMode)) {
+        applyThemeMode(options.themeMode, false);
+      }
+      const speed = Number(options.speed);
+      if (Number.isFinite(speed)) {
+        state.speed = Math.max(0.25, Math.min(speed, 4));
+        el.speed.value = state.speed;
+        el.speedValue.textContent = state.speed + "x";
+      }
+      render();
+    }
+
+    el.traceFile.addEventListener("change", async (event) => {
+      const file = event.target.files && event.target.files[0];
+      if (!file) {
+        return;
+      }
+      const text = await file.text();
+      loadTraceJson(JSON.parse(text));
+    });
+
+    el.prevBtn.addEventListener("click", () => moveStep(-1));
+    el.nextBtn.addEventListener("click", () => moveStep(1));
+    el.prevMatchBtn.addEventListener("click", () => jumpMatches(-1));
+    el.nextMatchBtn.addEventListener("click", () => jumpMatches(1));
+    el.prevLineBtn.addEventListener("click", () => {
+      const target = findSourceLineStep(-1);
+      if (target !== null) {
+        setStep(target);
+      }
+    });
+    el.nextLineBtn.addEventListener("click", () => {
+      const target = findSourceLineStep(1);
+      if (target !== null) {
+        setStep(target);
+      }
+    });
+    el.prevEventBtn.addEventListener("click", () => {
+      const target = findEventStep(-1);
+      if (target !== null) {
+        setStep(target);
+      }
+    });
+    el.nextEventBtn.addEventListener("click", () => {
+      const target = findEventStep(1);
+      if (target !== null) {
+        setStep(target);
+      }
+    });
+    el.toggleBookmarkBtn.addEventListener("click", () => toggleBookmark());
+    el.prevBookmarkBtn.addEventListener("click", () => {
+      const target = findBookmarkStep(-1);
+      if (target !== null) {
+        setStep(target);
+      }
+    });
+    el.nextBookmarkBtn.addEventListener("click", () => {
+      const target = findBookmarkStep(1);
+      if (target !== null) {
+        setStep(target);
+      }
+    });
+    el.clearBookmarksBtn.addEventListener("click", clearBookmarks);
+    el.playBtn.addEventListener("click", togglePlayback);
+    el.copyExplainBtn.addEventListener("click", copyCurrentExplanation);
+    el.copyMarkdownBtn.addEventListener("click", copyCurrentMarkdown);
+    el.copyTraceMarkdownBtn.addEventListener("click", copyCurrentTraceMarkdown);
+    el.presentationBtn.addEventListener("click", togglePresentationMode);
+    el.toggleJsonBtn.addEventListener("click", toggleJson);
+    el.copyJsonBtn.addEventListener("click", copyCurrentJson);
+    el.detailTabs.addEventListener("click", (event) => {
+      const button = event.target.closest("[data-detail-tab]");
+      if (!button) {
+        return;
+      }
+      state.activeDetailTab = button.dataset.detailTab || "explain";
+      renderDetailTabs();
+    });
+    el.detailTabs.addEventListener("keydown", (event) => {
+      const tabs = Array.from(el.detailTabs.querySelectorAll("[data-detail-tab]"));
+      const currentIndex = tabs.findIndex((button) => button.dataset.detailTab === state.activeDetailTab);
+      if (!tabs.length || currentIndex < 0) {
+        return;
+      }
+      let nextIndex = -1;
+      if (event.key === "ArrowLeft") {
+        nextIndex = (currentIndex + tabs.length - 1) % tabs.length;
+      } else if (event.key === "ArrowRight") {
+        nextIndex = (currentIndex + 1) % tabs.length;
+      }
+      if (nextIndex >= 0) {
+        state.activeDetailTab = tabs[nextIndex].dataset.detailTab || "explain";
+        renderDetailTabs();
+        tabs[nextIndex].focus();
+        event.preventDefault();
+      }
+    });
+    el.timeline.addEventListener("input", (event) => setStep(Number(event.target.value)));
+    el.searchBox.addEventListener("input", (event) => {
+      state.query = event.target.value;
+      render();
+    });
+    el.filterMode.addEventListener("change", (event) => {
+      state.filterMode = event.target.value;
+      render();
+    });
+    el.viewMode.addEventListener("change", (event) => {
+      state.viewMode = event.target.value;
+      render();
+    });
+    el.themeMode.addEventListener("change", (event) => {
+      applyThemeMode(event.target.value);
+    });
+    el.functionSelect.addEventListener("change", (event) => {
+      jumpToFunction(event.target.value);
+    });
+    el.speed.addEventListener("input", (event) => {
+      state.speed = Number(event.target.value);
+      el.speedValue.textContent = state.speed + "x";
+      if (state.playing) {
+        startPlayback();
+      }
+    });
+    el.openSourceBtn.addEventListener("click", () => openSourceForStep(currentStep()));
+    el.metricSource.addEventListener("click", () => openSourceForStep(currentStep()));
+    el.sourceView.addEventListener("click", (event) => {
+      const lineEl = event.target.closest(".source-line");
+      if (!lineEl) {
+        return;
+      }
+      const step = currentStep();
+      postVsCodeMessage({
+        type: "openSource",
+        file: sourceFileForStep(step),
+        line: Number(lineEl.dataset.line || 1),
+        column: 1
+      });
+    });
+    el.eventRail.addEventListener("click", (event) => {
+      const dot = event.target.closest(".event-dot");
+      if (!dot) {
+        return;
+      }
+      setStep(Number(dot.dataset.step));
+    });
+    function handleStackSelection(event) {
+      const card = event.target.closest(".stack-card");
+      if (!card || !card.dataset.elementId) {
+        return;
+      }
+      state.selectedElementId = card.dataset.elementId;
+      render();
+    }
+    el.mainStackList.addEventListener("click", handleStackSelection);
+    el.altStackList.addEventListener("click", handleStackSelection);
+    el.mainStackList.addEventListener("scroll", handleStackScroll);
+    el.altStackList.addEventListener("scroll", handleStackScroll);
+    el.lifecyclePanel.addEventListener("click", (event) => {
+      if (event.target.id === "clearLifecycleBtn") {
+        state.selectedElementId = "";
+        render();
+        return;
+      }
+      const eventButton = event.target.closest(".lifecycle-event");
+      if (eventButton) {
+        setStep(Number(eventButton.dataset.step));
+      }
+    });
+
+    function isEditingText(target) {
+      return target && (
+        target.tagName === "INPUT" ||
+        target.tagName === "TEXTAREA" ||
+        target.tagName === "SELECT" ||
+        target.isContentEditable
+      );
+    }
+
+    document.addEventListener("keydown", (event) => {
+      if (event.defaultPrevented) {
+        return;
+      }
+
+      if (event.key === "Escape" && document.activeElement === el.searchBox) {
+        el.searchBox.value = "";
+        state.query = "";
+        el.searchBox.blur();
+        render();
+        event.preventDefault();
+        return;
+      }
+
+      if (isEditingText(event.target) || event.target.closest("button")) {
+        return;
+      }
+
+      if (event.key === "/") {
+        el.searchBox.focus();
+        el.searchBox.select();
+        event.preventDefault();
+      } else if (event.key === "ArrowLeft") {
+        if (event.shiftKey) {
+          const target = findSourceLineStep(-1);
+          if (target !== null) {
+            setStep(target);
+          }
+        } else {
+          moveStep(-1);
+        }
+        event.preventDefault();
+      } else if (event.key === "ArrowRight") {
+        if (event.shiftKey) {
+          const target = findSourceLineStep(1);
+          if (target !== null) {
+            setStep(target);
+          }
+        } else {
+          moveStep(1);
+        }
+        event.preventDefault();
+      } else if (event.key === "ArrowUp") {
+        const target = findEventStep(-1);
+        if (target !== null) {
+          setStep(target);
+        }
+        event.preventDefault();
+      } else if (event.key === "ArrowDown") {
+        const target = findEventStep(1);
+        if (target !== null) {
+          setStep(target);
+        }
+        event.preventDefault();
+      } else if (event.key.toLowerCase() === "b") {
+        toggleBookmark();
+        event.preventDefault();
+      } else if (event.key.toLowerCase() === "p") {
+        togglePresentationMode();
+        event.preventDefault();
+      } else if (event.key === "[") {
+        const target = findBookmarkStep(-1);
+        if (target !== null) {
+          setStep(target);
+        }
+        event.preventDefault();
+      } else if (event.key === "]") {
+        const target = findBookmarkStep(1);
+        if (target !== null) {
+          setStep(target);
+        }
+        event.preventDefault();
+      } else if (event.key === " ") {
+        togglePlayback();
+        event.preventDefault();
+      } else if (event.key === "Home") {
+        setStep(0);
+        event.preventDefault();
+      } else if (event.key === "End") {
+        setStep(steps().length - 1);
+        event.preventDefault();
+      } else if (event.key === "PageUp") {
+        setStep(state.current - 10);
+        event.preventDefault();
+      } else if (event.key === "PageDown") {
+        setStep(state.current + 10);
+        event.preventDefault();
+      }
+    });
+
+    async function loadTraceFromQuery() {
+      const params = new URLSearchParams(window.location.search);
+      const traceUrl = params.get("trace");
+      if (!traceUrl) {
+        render();
+        return;
+      }
+      try {
+        const response = await fetch(traceUrl);
+        if (!response.ok) {
+          throw new Error(response.status + " " + response.statusText);
+        }
+        loadTraceJson(await response.json());
+      } catch (error) {
+        el.jsonBox.textContent = "Failed to load trace: " + error.message;
+        render();
+      }
+    }
+
+    loadTraceFromQuery();
+  </script>
+</body>
+</html>

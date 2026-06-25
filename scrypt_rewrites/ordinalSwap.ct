@@ -1,0 +1,84 @@
+Contract OrdinalSwap:
+    Struct Script:
+        SuffixData: string
+        PartialHash: string
+        Size: number
+
+    Struct Output:
+        Value: number
+        LockingScript: Script
+
+    Struct CurrentTX:
+        Outputs: Output[3]
+
+    def swap(aliceSig: hex, ctx: CurrentTX, prevouts: hex, path: number):
+        if path == 1:
+            Delete(aliceSig)
+
+            # EN: The supplied prevouts bytes must hash to the transaction input digest.
+            # ZH: 传入的 prevouts 字节必须能哈希成当前交易的输入摘要。
+            prevouts_for_hash = prevouts.Clone()
+            EqualVerify(Sha256(prevouts_for_hash), BVM.inputsHash)
+
+            # EN: Input 0 is reserved for the outpoint being unlocked now.
+            # ZH: 输入 0 固定为当前正在解锁的 outpoint。
+            prevouts_for_first = prevouts.Clone()
+            first_outpoint = prevouts_for_first.Slice(0, 36)
+            current_outpoint = BVM.unlockingInput.Slice(0, 36)
+            EqualVerify(first_outpoint, current_outpoint)
+
+            # EN: Input 1 must match Bob's pre-agreed outpoint and amount.
+            # ZH: 输入 1 必须匹配 Bob 预先约定的 outpoint 和金额。
+            second_outpoint = prevouts.Slice(40, 36)
+            EqualVerify(second_outpoint, self.prevoutBob)
+
+            # EN: Output 0 sends the one-satoshi item to Bob's P2PKH address.
+            # ZH: 输出 0 把 1 聪资产发送到 Bob 的 P2PKH 地址。
+            out0_suffix = ctx.Outputs[0].LockingScript.SuffixData.Clone()
+            { out0_prefix, out0_suffix } = Split(out0_suffix, 3)
+            EqualVerify(out0_prefix, 0x76a914)
+            { out0_pkh, out0_tail } = Split(out0_suffix, 20)
+            EqualVerify(out0_tail, 0x88ac)
+            EqualVerify(out0_pkh, Hash160(self.bob))
+            out0_value_num = BinToNum(ctx.Outputs[0].Value.Clone())
+            NumEqualVerify(out0_value_num, 1)
+
+            # EN: Output 1 pays Alice the agreed value from Bob's side of the swap.
+            # ZH: 输出 1 向 Alice 支付 Bob 一侧约定的金额。
+            out1_suffix = ctx.Outputs[1].LockingScript.SuffixData.Clone()
+            { out1_prefix, out1_suffix } = Split(out1_suffix, 3)
+            EqualVerify(out1_prefix, 0x76a914)
+            { out1_pkh, out1_tail } = Split(out1_suffix, 20)
+            EqualVerify(out1_tail, 0x88ac)
+            EqualVerify(out1_pkh, Hash160(self.alice))
+            out1_value_num = BinToNum(ctx.Outputs[1].Value.Clone())
+            NumEqualVerify(out1_value_num, self.prevoutBobAmount)
+
+            # EN: Hash the three expected outputs and bind them to the current transaction.
+            # ZH: 哈希三路预期输出，并绑定到当前交易。
+            outputs_data = Push(0)
+            SetAlt(outputs_data)
+            for i in Range(2, -1, -1):
+                size = ctx.Outputs[i].LockingScript.Size.Clone()
+                if size != 0:
+                    outputs_data_temp = PartialHash(ctx.Outputs[i].LockingScript.SuffixData, ctx.Outputs[i].LockingScript.PartialHash, ctx.Outputs[i].LockingScript.Size)
+                    outputs_data_temp = Cat(ctx.Outputs[i].Value, outputs_data_temp)
+                    SetMain(outputs_data)
+                    outputs_data = Cat(outputs_data_temp, outputs_data)
+                    SetAlt(outputs_data)
+                    Keep(outputs_data)
+                else:
+                    Delete(ctx.Outputs[i].LockingScript.Size)
+                    Delete(ctx.Outputs[i].LockingScript.PartialHash)
+                    Delete(ctx.Outputs[i].LockingScript.SuffixData)
+                    Delete(ctx.Outputs[i].Value)
+
+            SetMain(outputs_data)
+            outputs_data = Sha256(outputs_data)
+            EqualVerify(outputs_data, BVM.outputsHash)
+        else:
+            # EN: Cancel is a simple Alice-signed branch; transaction-shape data is discarded.
+            # ZH: 取消分支只需要 Alice 签名，因此丢弃交易结构数据。
+            Delete(prevouts)
+            Delete(ctx)
+            CheckSigVerify(aliceSig, self.alice)

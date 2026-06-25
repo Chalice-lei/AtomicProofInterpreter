@@ -1,0 +1,14 @@
+Contract ASTParamArrayAccess:
+    Struct Script:
+        Size: hex4
+
+    Struct Output:
+        Value: hex4
+        LockingScript: Script
+
+    Struct PreTX:
+        Outputs: Output[2]
+
+    def main(pretx: PreTX):
+        EqualVerify(pretx.Outputs[1].LockingScript.Size, 0x03000000)
+        Return(BinToNum(pretx.Outputs[1].Value))

@@ -1,0 +1,22 @@
+# P2PKH (Pay-to-PubKey-Hash) 标准模板 — 库形态
+#
+# 等价 Bitcoin Script:
+#   scriptPubKey: OP_DUP OP_HASH160 <pubKeyHash> OP_EQUALVERIFY OP_CHECKSIG
+#   scriptSig:    <signature> <pubKey>
+#
+# 用法 (在用户合约内):
+#   import std.p2pkh
+#   Contract MyWallet:
+#       def main(signature: hex, pubKey: hex):
+#           ok = verifyP2PKH(signature, pubKey, self.pubKeyHash)
+#
+# 约定: pubKeyHash 是 20 字节 Hash160. 模板函数不直接访问 self;
+# 宿主合约可将自己的成员变量 self.pubKeyHash 作为参数传入. self.pubKeyHash
+# 由部署方在替换占位符时绑定.
+
+Library std.p2pkh:
+
+    def verifyP2PKH(signature: hex, pubKey: hex, pubKeyHash: hex):
+        EqualVerify(Hash160(pubKey.Clone()), pubKeyHash)
+        result = CheckSig(signature, pubKey)
+        return result

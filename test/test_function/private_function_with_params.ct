@@ -1,0 +1,14 @@
+# 测试带参数私有函数（数据处理与计算）
+Contract PrivateFunctionWithParamsTest:
+    # 带参数私有函数：处理输入并返回结果
+    def _calculate_sum(a: int, b: int, c: int):
+        d: int =  a + b + c
+        return d
+
+    # 公有函数（测试入口）：调用带参数私有函数
+    def test_private_with_params():
+        # 调用带参数私有函数并使用返回值
+        x = Push(10)
+        y = Push(20)
+        z = Push(30)
+        result =  _calculate_sum(x, y, z)

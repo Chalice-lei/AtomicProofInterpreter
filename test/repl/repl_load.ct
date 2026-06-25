@@ -1,0 +1,3 @@
+Contract ReplLoad:
+    def double(n: int):
+        Return(n * 2)

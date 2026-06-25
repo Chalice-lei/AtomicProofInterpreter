@@ -1,0 +1,19 @@
+# EN: Ten preimages are folded into one rolling digest instead of checked one by one.
+# ZH: 十个原像被折叠成一个滚动摘要，而不是逐项单独比对。
+Contract MultiPartyHashPuzzleOpt:
+
+    def unlock(preimages: hex[10]):
+        # EN: Each step binds the next preimage to everything already seen.
+        # ZH: 每一步都会把当前原像绑定到此前累计的结果上。
+        combinedHash = Push(0)
+        SetAlt(combinedHash)
+
+        for i in Range(9, -1, -1):
+            SetMain(combinedHash)
+            combinedHash = Sha256(Cat(combinedHash, preimages[i]))
+            SetAlt(combinedHash)
+
+        # EN: Only the final digest is compared with the stored commitment.
+        # ZH: 最后只需要把累计摘要与保存的承诺值比对。
+        SetMain(combinedHash)
+        EqualVerify(combinedHash, self.combinedHash)

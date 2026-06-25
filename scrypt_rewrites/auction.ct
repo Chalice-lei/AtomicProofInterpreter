@@ -1,0 +1,164 @@
+# EN: Each bid moves the auction state forward and stores the new bidder in the next script suffix.
+# ZH: 每次出价都会推进拍卖状态，并把新的出价者写入下一轮脚本后缀。
+# EN: The old bidder must be refunded while the new state output carries a higher value.
+# ZH: 上一轮出价者必须被退款，新的状态输出金额也必须更高。
+Contract Auction:
+
+    Struct Script:
+        SuffixData: string
+        PartialHash: string
+        Size: number
+
+    Struct Output:
+        Value: number
+        LockingScript: Script
+
+    Struct Input:
+        Data: {txid: hex32, vout: hex4, sequence: hex4}
+
+    Struct PreTX:
+        VLIO: string
+        Inputs: Input[3]
+        UnlockingScriptHash: string
+        Outputs: Output[3]
+
+    Struct CurrentTX:
+        Outputs: Output[3]
+
+    def main(sig: hex, newBidder: hex, ctx: CurrentTX, pretx: PreTX, path: number):
+        if path == 1:
+            Delete(sig)
+
+            # EN: The current input tells us which previous output held the state being spent.
+            # ZH: 当前输入会指出哪一个上一轮输出正在被花费。
+            utxoData: {txid: hex32, vout: hex4, sequence: hex4}
+            utxoData = Push(BVM.unlockingInput)
+            vout = BinToNum(utxoData.vout)
+            vout_copy = vout.Clone()
+            Delete(utxoData.sequence)
+            Delete(utxoData.txid)
+
+            # EN: The previous bidder is encoded in the suffix of the spent locking script.
+            # ZH: 上一轮出价者保存在被花费锁定脚本的后缀中。
+            code_data = pretx.Outputs[vout_copy].LockingScript.SuffixData.Clone()
+            pre_bidder = code_data.Slice(1, 33)
+            SetAlt(pre_bidder)
+
+            # EN: The spent output value is treated as the bid that must be beaten.
+            # ZH: 被花费输出的金额就是本轮必须超过的出价。
+            vout_copy = vout.Clone()
+            pre_value = pretx.Outputs[vout_copy].Value.Clone()
+            SetAlt(pre_value)
+
+            # EN: Store the previous script identity so output 0 can be checked as the continuation.
+            # ZH: 保存上一轮脚本标识，稍后用于确认输出 0 是状态延续。
+            vout_copy = vout.Clone()
+            pre_code_size = pretx.Outputs[vout_copy].LockingScript.Size.Clone()
+            SetAlt(pre_code_size)
+            pre_code_partialhash = pretx.Outputs[vout].LockingScript.PartialHash.Clone()
+            SetAlt(pre_code_partialhash)
+
+            # EN: Recompute the previous txid from the supplied transaction pieces.
+            # ZH: 根据传入的交易片段重新计算上一笔交易的 txid。
+            tx_data = Push(0)
+            SetAlt(tx_data)
+            for i in Range(2, -1, -1):
+                size_copy = pretx.Outputs[i].LockingScript.Size.Clone()
+                if size_copy != 0:
+                    tx_data_temp = PartialHash(pretx.Outputs[i].LockingScript.SuffixData, pretx.Outputs[i].LockingScript.PartialHash, pretx.Outputs[i].LockingScript.Size)
+                    tx_data_temp = Cat(pretx.Outputs[i].Value, tx_data_temp)
+                    SetMain(tx_data)
+                    tx_data = Cat(tx_data_temp, tx_data)
+                    SetAlt(tx_data)
+                    Keep(tx_data)
+                else:
+                    Delete(pretx.Outputs[i].LockingScript.Size)
+                    Delete(pretx.Outputs[i].LockingScript.PartialHash)
+                    Delete(pretx.Outputs[i].LockingScript.SuffixData)
+                    Delete(pretx.Outputs[i].Value)
+
+            SetMain(tx_data)
+            tx_data = Sha256(tx_data)
+            tx_data = Cat(pretx.UnlockingScriptHash, tx_data)
+            SetAlt(tx_data)
+            tx_input_data = Push(0)
+            for i in Range(2, -1, -1):
+                tx_input_data = Cat(pretx.Inputs[i].Data, tx_input_data)
+            tx_input_hash = Sha256(tx_input_data)
+            SetMain(tx_data)
+            tx_data = Cat(tx_input_hash, tx_data)
+            tx_data = Cat(pretx.VLIO, tx_data)
+            txid = Hash256(tx_data)
+            preTXID = BVM.unlockingInput.Slice(0, 32)
+            EqualVerify(txid, preTXID)
+
+            # EN: Output 0 must reuse the same script identity as the spent state.
+            # ZH: 输出 0 必须复用被花费状态的脚本标识。
+            out0_size = ctx.Outputs[0].LockingScript.Size.Clone()
+            SetMain(pre_code_size)
+            EqualVerify(pre_code_size, out0_size)
+            out0_partialhash = ctx.Outputs[0].LockingScript.PartialHash.Clone()
+            SetMain(pre_code_partialhash)
+            EqualVerify(pre_code_partialhash, out0_partialhash)
+
+            # EN: The next state records `newBidder` and raises the locked value.
+            # ZH: 下一状态记录 `newBidder`，并提高锁定金额。
+            out0_suffix = ctx.Outputs[0].LockingScript.SuffixData.Clone()
+            out0_suffix_bidder = out0_suffix.Slice(1, 33)
+            EqualVerify(out0_suffix_bidder, newBidder)
+
+            SetMain(pre_value)
+            pre_value_for_compare = pre_value.Clone()
+            new_bid_num = BinToNum(ctx.Outputs[0].Value.Clone())
+            pre_value_num = BinToNum(pre_value_for_compare)
+            NumEqualVerify(GreaterThan(new_bid_num, pre_value_num), 1)
+
+            # EN: Output 1 returns the old value to the previous bidder's P2PKH address.
+            # ZH: 输出 1 把旧金额退回上一轮出价者的 P2PKH 地址。
+            out1_suffix = ctx.Outputs[1].LockingScript.SuffixData.Clone()
+            { out1_prefix, out1_suffix } = Split(out1_suffix, 3)
+            EqualVerify(out1_prefix, 0x76a914)
+            { out1_pkh, out1_tail } = Split(out1_suffix, 20)
+            EqualVerify(out1_tail, 0x88ac)
+            SetMain(pre_bidder)
+            EqualVerify(out1_pkh, Hash160(pre_bidder))
+            out1_value = ctx.Outputs[1].Value.Clone()
+            EqualVerify(out1_value, pre_value)
+
+            # EN: Rebuild the three current outputs before comparing the transaction output hash.
+            # ZH: 先重建当前三路输出，再比对交易输出哈希。
+            outputs_data = Push(0)
+            SetAlt(outputs_data)
+            for i in Range(2, -1, -1):
+                size_copy = ctx.Outputs[i].LockingScript.Size.Clone()
+                if size_copy != 0:
+                    out_data_temp = PartialHash(ctx.Outputs[i].LockingScript.SuffixData, ctx.Outputs[i].LockingScript.PartialHash, ctx.Outputs[i].LockingScript.Size)
+                    out_data_temp = Cat(ctx.Outputs[i].Value, out_data_temp)
+                    SetMain(outputs_data)
+                    outputs_data = Cat(out_data_temp, outputs_data)
+                    SetAlt(outputs_data)
+                    Keep(outputs_data)
+                else:
+                    Delete(ctx.Outputs[i].LockingScript.Size)
+                    Delete(ctx.Outputs[i].LockingScript.PartialHash)
+                    Delete(ctx.Outputs[i].LockingScript.SuffixData)
+                    Delete(ctx.Outputs[i].Value)
+            SetMain(outputs_data)
+            outputs_data = Sha256(outputs_data)
+            EqualVerify(outputs_data, BVM.outputsHash)
+
+        else:
+            # EN: After the deadline, only the auctioneer signature is needed to close.
+            # EN: The current input must be non-final so the transaction locktime is enforced.
+            # ZH: 截止时间过后，只需要拍卖方签名即可关闭。
+            # ZH: 当前输入必须是非 final sequence，交易 locktime 才会被共识执行。
+            Delete(newBidder)
+            Delete(pretx)
+            Delete(ctx)
+            inputSequence = BVM.unlockingInput.Slice(36, 40)
+            NumEqualVerify(Equal(inputSequence, 0xffffffff), 0)
+            NumEqualVerify(GreaterOrEqual(BVM.locktime, self.auctionDeadline), 1)
+            CheckSigVerify(sig, self.auctioneer)
+
+        Return 1
+        Push(self.bidder)

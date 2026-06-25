@@ -1,0 +1,37 @@
+Contract NumericComparisonTest:
+    def test_all_numeric_comparison_functions():
+        a: int = 5
+        b: int = 5
+        c: int = 3
+
+        # 测试NumEqual
+        # NumEqual(a, b)
+        # NumEqual(a, c)
+
+        # 测试NumEqualVerify（成功案例）
+        # NumEqualVerify(a, b)  # 无异常
+
+        # 测试NumEqualVerify（失败案例）
+        # NumEqualVerify(a, c)
+
+        # 测试NumNotEqual
+        # NumNotEqual(a, b)
+        # NumNotEqual(a, c)
+
+        # 测试LessThan
+        # LessThan(c, a)
+        # LessThan(a, c)
+
+        # 测试GreaterThan
+        # GreaterThan(a, c)
+        # GreaterThan(c, a)
+
+        # 测试LessOrEqual
+        # LessOrEqual(c, a)
+        # LessOrEqual(a, b)
+        # LessOrEqual(a, c)
+
+        # 测试GreaterOrEqual
+        GreaterOrEqual(a, c)
+        GreaterOrEqual(a, b)
+        GreaterOrEqual(c, a)

@@ -1,0 +1,13 @@
+# 测试使用变量进行赋值
+Contract AssignmentVariableTest:
+    def test_variable_assignment():
+        # 基础变量定义
+        a: int = -5
+        # 用变量给新变量赋值
+        b: int
+        b = a
+
+    # def test_basic_assignment():
+        # a: int = 5
+        # a = 15  # 重新赋值
+        # a = a + 5  # 基于当前值赋值

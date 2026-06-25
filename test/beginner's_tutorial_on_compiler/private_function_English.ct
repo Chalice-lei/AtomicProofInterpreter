@@ -1,0 +1,13 @@
+Contract Example:
+    # Private function: starts with underscore
+    def _calculate_sum(a: int, b: int, c: int):
+        d: int = a + b + c
+        return d
+        # Private functions can compute results, results remain on the stack
+    
+    # Public function: call private function
+    def main():
+        x = Push(10)
+        y = Push(20)
+        z = Push(30)
+        result = _calculate_sum(x, y, z)  # Call private function, result is on the stack

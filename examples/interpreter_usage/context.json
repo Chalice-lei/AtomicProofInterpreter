@@ -1,0 +1,23 @@
+{
+  "bvm": {
+    "unlockingInput": "0x010203",
+    "checkSigResult": true
+  },
+  "self": {
+    "pubKeyHash": "0xa6bb94c8792c395785787280dc188d114e1f339b",
+    "minAmount": 40
+  },
+  "params": {
+    "pretx": {
+      "Outputs": [
+        {},
+        {
+          "Value": "0x2a000000",
+          "LockingScript": {
+            "Size": "0x03000000"
+          }
+        }
+      ]
+    }
+  }
+}

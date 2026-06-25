@@ -1,0 +1,5 @@
+Contract ASTMinimalReturn:
+    def main(input: int):
+        x: int = input + 1
+        x = x + 1
+        Return(x)

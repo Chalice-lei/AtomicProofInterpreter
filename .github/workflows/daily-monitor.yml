@@ -1,0 +1,40 @@
+name: Daily Project Monitor
+
+on:
+  schedule:
+    - cron: "0 1 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: read
+  pull-requests: read
+  security-events: read
+  actions: read
+
+jobs:
+  monitor:
+    name: Monitor AtomicProofCompiler
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake g++ make git python3
+
+      - name: Run daily monitor
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          python3 scripts/daily-monitor.py \
+            --since-hours 24 \
+            --output build/monitoring/daily-monitoring-report.md \
+            --json-output build/monitoring/daily-monitoring-report.json

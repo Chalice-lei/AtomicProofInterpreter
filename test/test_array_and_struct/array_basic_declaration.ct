@@ -1,0 +1,17 @@
+# 测试基本类型数组的声明和初始化
+Contract ArrayBasicDeclarationTest:
+    def test_basic_array():
+        # 声明int类型空数组（后续赋值）
+        # int_arr: int[4]
+
+        # 声明并初始化固定长度int数组
+        int_arr: int[4] = [10, 20, 30, 40]
+        
+        # 声明string类型数组
+        # str_arr: string[2] = ["first", "second"]
+        
+        # 声明bool类型数组
+        # bool_arr: bool[3] = [1, 0, 0]
+
+        # 声明hex类型数组
+        # hex_arr: hex[3] = [0x1234, 0x5678, 0x9012]

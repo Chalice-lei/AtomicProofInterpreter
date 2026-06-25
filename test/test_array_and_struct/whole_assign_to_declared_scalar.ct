@@ -1,0 +1,14 @@
+# 验证：显式普通类型变量（int）接收整体数组/整体结构体
+Contract WholeAssignToDeclaredScalarTest:
+    Struct Pair:
+        x: int
+        y: int
+
+    def test_assign_array_to_int():
+        arr: uint64[2]
+        s: int = 0
+        s = arr
+
+    def test_assign_struct_to_int(data: Pair):
+        s: int = 0
+        s = data

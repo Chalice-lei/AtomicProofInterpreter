@@ -1,0 +1,5 @@
+# 测试等于运算符：整数与固定值比较
+Contract OperatorEqWithLiteralTest:
+    def test_eq_literal(a: int, b: int, c: int, d: int):
+        # is_zero: bool = a == 0
+        is_ten: bool = d == 10

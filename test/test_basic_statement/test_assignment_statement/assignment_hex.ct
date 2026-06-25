@@ -1,0 +1,7 @@
+# 测试赋值给hex类型变量
+Contract AssignmentHexTest:
+    def test_assignment_hex():
+        # 赋值给hex类型变量
+        hex_code_1: hex = "0xabc123"
+        hex_code_2: hex 
+        hex_code_2 = hex_code_1

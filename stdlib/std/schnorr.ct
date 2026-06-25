@@ -1,0 +1,106 @@
+# Schnorr 签名验证（离散对数版） — 库形态
+#
+# 在乘法群 (Z/pZ)* 上的经典 Schnorr identification / signature：
+#
+#   公钥：y = g^x mod p
+#   签名 (R, s)，其中
+#       R = g^k mod p
+#       e = SHA-256(R || msg) 解读为整数（fromLEUnsigned）
+#       s = k + x*e (mod q)
+#   验证：g^s mod p == (R * y^e) mod p
+#
+# 编译产物只用 BSV 标准 opcode：OP_CAT / OP_SHA256 / OP_BIN2NUM / OP_MUL /
+# OP_MOD / OP_DIV / OP_NUMEQUAL（及衍生），与 sCrypt 把同类纯 .ct 库编译为
+# Bitcoin Script 同形——无任何自定义指令。
+#
+# **指数位宽与 modPow 展开次数**：本文件用 256 次平方-乘展开两段独立的
+# modPow（一段算 g^s mod p、一段算 y^e mod p），可承载 ≤256 位指数（即子群
+# 阶 q ≤ 2^256，标准 Schnorr 设置）。256 迭代版编译产物约 17.5 KB / 17500 ops；
+# 想换更小演示量级把两处 `Range(0, 256)` 同步调整即可。
+#
+# **库设计约束**：当前 .ct 库 inliner 不支持"库函数体内调用其他库函数"，
+# 故 modPow 必须**直接内联到 schnorrVerify 函数体**，不抽辅助函数。
+# 库内只暴露最终的 verify 入口。
+#
+# 用法（在用户合约内）：
+#   import std.schnorr
+#   Contract Foo:
+#       def main(msg: hex, R: hex, s: hex):
+#           schnorrVerify(msg, R, s, self.pubKey, self.generator, self.modulus)
+
+Library std.schnorr:
+
+    # 入参（hex 字节串，按小端无符号大整数解释）：
+    #     msg, R, s, pubKey (= y), generator (= g), modulus (= p)
+    # 验证 (g^s) mod p == (R * y^e) mod p；e = fromLEUnsigned(SHA-256(R || msg))。
+    # 验证失败时通过 NumEqualVerify 终止脚本。
+    def schnorrVerify(msg: hex, R: hex, s: hex, pubKey: hex, generator: hex, modulus: hex):
+        # ---- 1. 计算 e = fromLEUnsigned(SHA-256(R || msg)) ----
+        R_for_hash = R.Clone()
+        e_bytes = Sha256(Cat(R_for_hash, msg))
+        e_int = BinToNum(Cat(e_bytes, 0x00))
+
+        # ---- 2. 把所有 hex 输入转成大整数 ----
+        s_int = BinToNum(Cat(s, 0x00))
+        R_int = BinToNum(Cat(R, 0x00))
+        y_int = BinToNum(Cat(pubKey, 0x00))
+        g_int = BinToNum(Cat(generator, 0x00))
+        p_int = BinToNum(Cat(modulus, 0x00))
+
+        # ---- 3. lhs = g^s mod p（平方-乘，展开 32 次，演示级强度）----
+        # 用 factor = bit*b + (1-bit) 替代 if-then 实现无分支条件乘
+        gs_result = 1
+        gs_e = s_int
+        gs_b = g_int
+        gs_p = p_int.Clone()
+        for i_gs in Range(0, 256):
+            gs_bit = Mod(gs_e.Clone(), 2)
+            gs_e = Div(gs_e, 2)
+            gs_bit2 = gs_bit.Clone()
+            gs_bm = gs_b.Clone()
+            gs_part = Mul(gs_bit2, gs_bm)
+            gs_omb = Sub(1, gs_bit)
+            gs_factor = Add(gs_part, gs_omb)
+            gs_pc1 = gs_p.Clone()
+            gs_rmul = Mul(gs_result, gs_factor)
+            gs_result = Mod(gs_rmul, gs_pc1)
+            gs_bc = gs_b.Clone()
+            gs_bsq = Mul(gs_b, gs_bc)
+            gs_pc2 = gs_p.Clone()
+            gs_b = Mod(gs_bsq, gs_pc2)
+        Pop(gs_b)
+        Pop(gs_e)
+        Pop(gs_p)
+        lhs = gs_result
+
+        # ---- 4. y_pow_e = y^e mod p（同样 32 次平方-乘）----
+        ye_result = 1
+        ye_e = e_int
+        ye_b = y_int
+        ye_p = p_int.Clone()
+        for i_ye in Range(0, 256):
+            ye_bit = Mod(ye_e.Clone(), 2)
+            ye_e = Div(ye_e, 2)
+            ye_bit2 = ye_bit.Clone()
+            ye_bm = ye_b.Clone()
+            ye_part = Mul(ye_bit2, ye_bm)
+            ye_omb = Sub(1, ye_bit)
+            ye_factor = Add(ye_part, ye_omb)
+            ye_pc1 = ye_p.Clone()
+            ye_rmul = Mul(ye_result, ye_factor)
+            ye_result = Mod(ye_rmul, ye_pc1)
+            ye_bc = ye_b.Clone()
+            ye_bsq = Mul(ye_b, ye_bc)
+            ye_pc2 = ye_p.Clone()
+            ye_b = Mod(ye_bsq, ye_pc2)
+        Pop(ye_b)
+        Pop(ye_e)
+        Pop(ye_p)
+        y_pow_e = ye_result
+
+        # ---- 5. rhs = (R * y_pow_e) mod p ----
+        product = Mul(R_int, y_pow_e)
+        rhs = Mod(product, p_int)
+
+        # ---- 6. 验证 lhs == rhs ----
+        NumEqualVerify(lhs, rhs)

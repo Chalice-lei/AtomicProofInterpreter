@@ -1,0 +1,16 @@
+Contract Example:
+    def process_data():
+        # 公有函数可以访问成员变量
+        owner: hex = self.owner
+        
+        # 公有函数会保留在副栈中的变量
+        # 这意味着副栈中的变量可以在后续公有函数中继续使用
+        temp = Push(10)
+        SetAlt(temp)
+        Keep(temp)
+
+    def main(input: int):
+        SetMain(temp)
+        result1 = temp.Clone() + input.Clone()
+        result2 = temp - input
+

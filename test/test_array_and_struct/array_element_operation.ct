@@ -1,0 +1,11 @@
+# 测试数组元素的访问
+Contract ArrayElementOperationTest:
+    def test_element_access_modify():
+        # 初始化数组
+        nums: int[5] = [11, 22, 33, 44, 55]
+        
+        # 访问数组元素
+        first: int = nums[0]
+        third: int = nums[2]
+        index: int = 4
+        last: int = nums[index]

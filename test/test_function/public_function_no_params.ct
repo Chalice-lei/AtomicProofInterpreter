@@ -1,0 +1,5 @@
+# 测试无参数公有函数（作为合约入口，提供状态查询）
+Contract PublicFunctionNoParamsTest:
+    # 无参数公有函数：返回合约状态
+    def get_version():
+        ver: string = self.version

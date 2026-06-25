@@ -1,0 +1,14 @@
+Contract ASTLValueAssignment:
+    Struct Script:
+        Size: hex4
+
+    Struct Output:
+        Value: hex4
+        LockingScript: Script
+
+    def main():
+        output: Output
+        output.Value = 0x2a000000
+        output.LockingScript.Size = 0x03000000
+
+        Return(BinToNum(output.Value) + BinToNum(output.LockingScript.Size))

@@ -1,0 +1,15 @@
+# 测试结构体与内置方法的混合链式调用
+Contract ChainCallMixedTest:
+    Struct Data:
+        num: int
+        str: string
+
+    def test_mixed_chain(data: Data):
+        data.num = Push(10)
+        data.str = Push("hello")
+
+        # 混合链式调用
+        num_cloned = data.num.clone()
+        # str_cloned = data.str.clone()
+        # str_sliced = str_cloned.slice(-1, 2)
+        str_sliced = data.str.slice(-1, 2)

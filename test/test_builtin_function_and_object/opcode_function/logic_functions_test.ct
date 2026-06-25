@@ -1,0 +1,15 @@
+Contract LogicFunctionsTest:
+    def test_all_logic_functions():
+        a: bool = 1
+        b: bool = 0
+
+        # 测试逻辑与（And）
+        # NumEqualVerify(And(a, a), 1)   # 真与真为真
+        # NumEqualVerify(And(a, b), 0)   # 真与假为假
+        # NumEqualVerify(And(b, b), 0)   # 假与假为假
+           
+        # 测试逻辑或（Or）
+        NumEqualVerify(Or(a, a), 1)    # 真或真为真
+        NumEqualVerify(Or(a, b), 1)    # 真或假为真
+        NumEqualVerify(Or(b, b), 0)    # 假或假为假
+        

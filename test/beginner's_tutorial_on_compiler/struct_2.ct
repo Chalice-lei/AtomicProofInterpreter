@@ -1,0 +1,22 @@
+Contract UserManagement:
+    Struct UserInfo:
+        name: string
+        age: int
+        pubkey: hex
+    
+    Struct Address:
+        street: string
+        city: string
+    
+    Struct Person:
+        name: string
+        address: Address  # 嵌套结构体
+    
+    def process_user(user: UserInfo, person: Person):
+        # 访问结构体字段
+        user_name: string = user.name
+        user_age: int = user.age
+        user_key: hex = user.pubkey
+        
+        # 嵌套结构体字段访问
+        city: string = person.address.city

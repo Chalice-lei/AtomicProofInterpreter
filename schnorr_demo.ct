@@ -1,0 +1,19 @@
+# schnorr_demo.ct — std.schnorr 库的最小演示合约
+#
+# 通过 stdlib/std/schnorr.ct 提供的 schnorrVerify 校验
+# 离散对数 Schnorr 签名 (R, s) 对消息 msg 与公钥 self.pubKey 是否合法。
+# 群参数 self.generator (g) 与 self.modulus (p) 由部署侧绑定。
+#
+# 编译期约定（库内部 modPow 展开 256 次平方-乘）：
+#     s, e ≤ 256 位（即子群阶 q ≤ 2^256）
+#     p 与 y、R 仅受 BSV 大数运算位宽约束
+#
+# 编译产物只用 BSV 标准 opcode（OP_CAT / OP_SHA256 / OP_BIN2NUM /
+# OP_MUL / OP_MOD / OP_DIV / OP_NUMEQUALVERIFY 等），无任何自定义指令。
+
+import std.schnorr
+
+Contract SchnorrDemo:
+
+    def main(msg: hex, R: hex, s: hex):
+        schnorrVerify(msg, R, s, self.pubKey, self.generator, self.modulus)

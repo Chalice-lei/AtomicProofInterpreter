@@ -1,0 +1,14 @@
+# Debugger regression: stepping into private functions and function breakpoints.
+# Suggested checks:
+#   break _sum_pair
+#   step/next around the call to _sum_pair
+# Expected: debugger should show private function frames and source lines.
+Contract DebugPrivateFunctionStep:
+    def _sum_pair(x: int, y: int):
+        summed: int = x + y
+        return summed
+
+    def test_private_step(a: int, b: int):
+        before: int = a + 1
+        after: int = _sum_pair(before, b) # step into should enter _sum_pair
+        Return(after)

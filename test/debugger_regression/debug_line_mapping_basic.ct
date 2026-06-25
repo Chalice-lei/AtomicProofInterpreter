@@ -1,0 +1,11 @@
+# Debugger regression: source line to PC mapping for simple statements.
+# Suggested checks:
+#   apc debug_line_mapping_basic.ct -d --debug-output /tmp/line_mapping.debug
+#   pcToSource and lineToPC should not be empty.
+#   In --debug mode, breakpoints on the marked lines should resolve.
+Contract DebugLineMappingBasic:
+    def test_line_mapping(a: int, b: int, c: int):
+        first: int = a + b          # break here: expression emits OP_ADD
+        second: int = first + c     # break here: should map to a later PC
+        third: int = second + 1     # break here: literal + variable
+        Return(third)

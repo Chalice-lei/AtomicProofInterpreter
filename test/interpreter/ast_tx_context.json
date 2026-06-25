@@ -1,0 +1,23 @@
+{
+  "bvm": {
+    "version": 1,
+    "locktime": 0,
+    "inputCount": 1,
+    "outputCount": 2,
+    "unlockingInput": "0x010203",
+    "outputsHash": "0x000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"
+  },
+  "params": {
+    "pretx": {
+      "Outputs": [
+        null,
+        {
+          "LockingScript": {
+            "Size": "0x03000000"
+          },
+          "Value": "0x2a000000"
+        }
+      ]
+    }
+  }
+}

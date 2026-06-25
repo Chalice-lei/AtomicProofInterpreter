@@ -1,0 +1,28 @@
+Contract ASTDerivedTXIDContext:
+    Struct Script:
+        SuffixData: hex
+
+    Struct Output:
+        Value: hex4
+        LockingScript: Script
+
+    Struct Input:
+        Data: hex
+
+    Struct PreTX:
+        VLIO: hex
+        Inputs: Input[1]
+        UnlockingScriptHash: hex
+        Outputs: Output[1]
+        TXData: hex
+        TXID: hex
+
+    def main(pretx: PreTX):
+        outputData = Cat(pretx.Outputs[0].Value, Sha256(pretx.Outputs[0].LockingScript.SuffixData))
+        outputsHash = Sha256(outputData)
+        EqualVerify(BVM.outputsHash, outputsHash.Clone())
+
+        txData = Cat(pretx.VLIO, Cat(BVM.inputsHash, Cat(pretx.UnlockingScriptHash, outputsHash)))
+        EqualVerify(pretx.TXData, txData.Clone())
+        EqualVerify(pretx.TXID, Hash256(txData))
+        Return(Size(pretx.TXID))

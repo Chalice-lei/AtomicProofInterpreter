@@ -1,0 +1,12 @@
+# 测试clone函数的基本功能
+Contract CloneFunctionTest:
+    # 测试1: 基本的clone操作
+    def test_clone():
+        original = Push(100)
+        
+        # 克隆变量
+        cloned = original.clone()
+        copy = original.clone()
+        
+        # 原变量和克隆都可用
+        # result: int = original + cloned

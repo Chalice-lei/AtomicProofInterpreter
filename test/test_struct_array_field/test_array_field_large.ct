@@ -1,0 +1,21 @@
+Contract ArrayFieldLargeTest:
+    Struct Data:
+        id: int
+        values: uint64[5]  # 更大的数组，5个元素，每个8字节（64位）
+        status: int
+        
+    def test_large_array_field(data: Data):
+        # 测试大数组的访问
+        val1: int = data.values[0]
+        val2: int = data.values[1] 
+        val3: int = data.values[2]
+        val4: int = data.values[3]
+        val5: int = data.values[4]
+        
+        # 测试混合访问
+        id_val: int = data.id
+        status_val: int = data.status
+        
+        # 测试重复访问（应该不会重复拆分）
+        # val1_again: int = data.values[0]
+        # val5_again: int = data.values[4]

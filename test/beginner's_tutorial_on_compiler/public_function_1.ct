@@ -1,0 +1,4 @@
+Contract Example:
+    def verify(sig: hex, pubKey: hex):
+        # 公有函数的函数体
+        result = CheckSig(sig, pubKey)

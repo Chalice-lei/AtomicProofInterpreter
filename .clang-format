@@ -1,0 +1,118 @@
+# // clang-format 配置 - 需要安装 C/C++ 扩展和 clang-format
+# "C_Cpp.clang_format_style": "file", // 使用项目根目录的 .clang-format 文件
+# "editor.formatOnSave": true, // 保存时自动格式化
+# "files.autoSave": "afterDelay", // 可选，自动保存
+# "[cpp]": {
+#     "editor.defaultFormatter": "ms-vscode.cpptools", // 使用 C/C++ 扩展的格式化器
+#     "editor.formatOnSave": true // 仅C++启用
+# },
+
+# 基础配置
+Language: Cpp
+Standard: c++20
+ColumnLimit: 80
+IndentWidth: 4
+TabWidth: 4
+UseTab: Never
+AccessModifierOffset: -4
+
+# 指针与引用
+PointerAlignment: Left
+ReferenceAlignment: Left
+DerivePointerAlignment: false
+
+# 空格控制
+SpaceBeforeParens: ControlStatements
+SpaceInEmptyParentheses: false
+SpacesInAngles: false
+SpaceAfterCStyleCast: false
+SpaceAfterLogicalNot: false
+SpaceAfterTemplateKeyword: true
+SpaceBeforeAssignmentOperators: true
+SpaceBeforeCpp11BracedList: false
+SpaceBeforeInheritanceColon: true
+SpaceBeforeRangeBasedForLoopColon: true
+SpaceBeforeSquareBrackets: false
+SpacesInContainerLiterals: false
+SpacesInLineCommentPrefix:
+  Minimum: 1
+  Maximum: -1
+SpacesInParens: Never
+
+# 命名规范
+FixNamespaceComments: true
+AllowShortFunctionsOnASingleLine: None
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+
+# 缩进规则
+IndentCaseLabels: true
+IndentPPDirectives: None
+NamespaceIndentation: Inner
+IndentAccessModifiers: false
+IndentExternBlock: AfterExternBlock
+ConstructorInitializerIndentWidth: 4
+
+# 大括号换行规则
+BreakBeforeBraces: Custom
+BraceWrapping:
+  AfterClass: true
+  AfterFunction: true
+  AfterNamespace: true
+  AfterStruct: true
+  AfterUnion: true
+  BeforeElse: false
+  BeforeWhile: false
+  IndentBraces: false
+  SplitEmptyFunction: false
+  SplitEmptyRecord: false
+  SplitEmptyNamespace: false
+
+# 包含文件
+IncludeBlocks: Regroup
+IncludeCategories:
+  - Regex: '^<.*\.h>'
+    Priority: 1
+  - Regex: '^<.*'
+    Priority: 2
+  - Regex: '^".*"'
+    Priority: 3
+  - Regex: '.*'
+    Priority: 4
+IncludeIsMainRegex: '([-_](test|unittest))?$'
+SortIncludes: CaseSensitive
+
+# 注释风格
+ReflowComments: true
+SpacesBeforeTrailingComments: 1
+CommentPragmas: '^ IWYU pragma:'
+
+# 其他重要设置
+AlignAfterOpenBracket: BlockIndent
+AlignConsecutiveAssignments: false
+AlignConsecutiveDeclarations: false
+AlignEscapedNewlines: Right
+AlignOperands: Align
+AllowAllArgumentsOnNextLine: true
+AllowAllParametersOfDeclarationOnNextLine: false
+AlwaysBreakAfterDefinitionReturnType: None
+AlwaysBreakTemplateDeclarations: Yes
+BinPackArguments: false
+BinPackParameters: false
+BreakBeforeBinaryOperators: None
+BreakConstructorInitializers: BeforeColon
+BreakInheritanceList: BeforeColon
+BreakStringLiterals: true
+CompactNamespaces: false
+Cpp11BracedListStyle: true
+EmptyLineAfterAccessModifier: Never
+EmptyLineBeforeAccessModifier: LogicalBlock
+KeepEmptyLinesAtTheStartOfBlocks: false
+MaxEmptyLinesToKeep: 1
+PenaltyBreakAssignment: 100
+PenaltyBreakBeforeFirstCallParameter: 100
+PenaltyBreakComment: 300
+PenaltyBreakString: 1000
+PenaltyExcessCharacter: 1000000
+PenaltyReturnTypeOnItsOwnLine: 200
+SortUsingDeclarations: true

@@ -1,0 +1,13 @@
+Contract Example:
+    # 私有函数：以下划线开头
+    def _calculate_sum(a: int, b: int, c: int):
+        d: int = a + b + c
+        return d
+        # 私有函数可以计算结果，结果会留在栈上
+    
+    # 公有函数：调用私有函数
+    def main():
+        x = Push(10)
+        y = Push(20)
+        z = Push(30)
+        result = _calculate_sum(x, y, z)  # 调用私有函数，结果在栈上

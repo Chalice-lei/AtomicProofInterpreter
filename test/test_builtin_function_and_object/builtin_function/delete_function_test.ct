@@ -1,0 +1,18 @@
+# 测试Delete函数的基本功能和各种场景
+Contract DeleteFunctionTest:
+    Struct Person:
+        name: string
+        age: int
+    
+    def test_delete(person: Person):
+        # 测试1: 删除单个变量
+        x = Push(100)
+        Delete(x)
+    
+        # 测试2: 批量删除多个变量
+        a = Push(10)
+        b = Push(20)
+        Delete(a, b)
+        
+        # 测试3: 删除结构体
+        Delete(person)

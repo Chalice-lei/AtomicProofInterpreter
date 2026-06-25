@@ -1,0 +1,15 @@
+# 测试带参数构造函数的动态初始化逻辑
+Contract ConstructorWithParamsTest:
+    # 带参数的构造函数
+    def __init__(init_id: int, init_owner: string, init_threshold: int):
+        # 使用参数初始化状态变量
+        self.id = init_id
+        self.owner = init_owner
+        self.threshold = init_threshold
+
+    # 用于验证初始化结果的公有函数（测试辅助）
+    def verify_params():
+        # 访问构造函数通过参数初始化的变量
+        current_id: int = self.id
+        current_owner: string = self.owner
+        current_threshold: int = self.threshold

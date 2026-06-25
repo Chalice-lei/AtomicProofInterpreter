@@ -1,0 +1,13 @@
+Contract WithinFunctionTest:
+    def test_within():
+        a: int = 3
+        b: int = 7
+        c: int = 5
+        x: int = 2
+        y: int = 8
+
+        NumEqualVerify(Within(a, b, c), 1) # 在范围内
+        NumEqualVerify(Within(a, b, a), 1) # 等于最小值
+        NumEqualVerify(Within(a, b, b), 0) # 等于最大值
+        NumEqualVerify(Within(a, b, x), 0) # 小于最小值
+        NumEqualVerify(Within(a, b, y), 0) # 大于最大值

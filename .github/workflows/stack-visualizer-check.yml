@@ -1,0 +1,65 @@
+name: Stack Visualizer Check
+
+on:
+  push:
+    paths:
+      - "tools/vscode_stack_visualizer/**"
+      - "examples/stack_traces/**"
+      - ".github/workflows/stack-visualizer-check.yml"
+  pull_request:
+    paths:
+      - "tools/vscode_stack_visualizer/**"
+      - "examples/stack_traces/**"
+      - ".github/workflows/stack-visualizer-check.yml"
+  workflow_dispatch:
+    inputs:
+      browser_smoke:
+        description: "Run browser smoke test"
+        required: false
+        default: false
+        type: boolean
+      extension_smoke:
+        description: "Run VS Code Extension Host smoke test"
+        required: false
+        default: false
+        type: boolean
+
+jobs:
+  check:
+    name: Check visualizer and VS Code extension
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Run stack visualizer checks
+        working-directory: tools/vscode_stack_visualizer
+        run: npm run check
+
+      - name: Install smoke dependencies
+        if: github.event_name == 'workflow_dispatch' && (inputs.browser_smoke || inputs.extension_smoke)
+        working-directory: tools/vscode_stack_visualizer
+        run: npm ci --ignore-scripts
+
+      - name: Run browser smoke test
+        if: github.event_name == 'workflow_dispatch' && inputs.browser_smoke
+        working-directory: tools/vscode_stack_visualizer
+        run: npm run browser-smoke
+
+      - name: Install Xvfb
+        if: github.event_name == 'workflow_dispatch' && inputs.extension_smoke
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb
+
+      - name: Run VS Code Extension Host smoke test
+        if: github.event_name == 'workflow_dispatch' && inputs.extension_smoke
+        working-directory: tools/vscode_stack_visualizer
+        run: xvfb-run -a npm run extension-smoke

@@ -1,0 +1,10 @@
+{
+  "currenttx": {
+    "outputs": [
+      {
+        "value": "0x2a000000",
+        "lockingScript": "0xaabbcc"
+      }
+    ]
+  }
+}

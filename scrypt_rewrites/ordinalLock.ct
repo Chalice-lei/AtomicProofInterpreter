@@ -1,0 +1,75 @@
+# EN: A listed ordinal can be purchased permissionlessly if outputs pay the item and price correctly.
+# ZH: 已上架的 ordinal 可以被任意人购买，只要输出正确支付资产和价格。
+# EN: The seller can also cancel the listing with a matching signature.
+# ZH: 卖家也可以用匹配签名取消上架。
+Contract OrdinalLock:
+
+    Struct Script:
+        SuffixData: string
+        PartialHash: string
+        Size: number
+
+    Struct Output:
+        Value: number
+        LockingScript: Script
+
+    Struct CurrentTX:
+        Outputs: Output[3]
+
+    # EN: `path == 1` purchases the ordinal; any other path cancels with the seller signature.
+    # ZH: `path == 1` 表示购买 ordinal；其他路径表示卖家签名取消。
+    def main(dest: hex, sig: hex, pubkey: hex, ctx: CurrentTX, path: number):
+        if path == 1:
+            Delete(sig)
+            Delete(pubkey)
+
+            # EN: Output 0 sends the one-satoshi ordinal to the buyer-supplied address hash.
+            # ZH: 输出 0 把 1 聪 ordinal 发送给买家提供的地址哈希。
+            out0_suffix = ctx.Outputs[0].LockingScript.SuffixData.Clone()
+            { out0_prefix, out0_suffix } = Split(out0_suffix, 3)
+            EqualVerify(out0_prefix, 0x76a914)
+            { out0_pkh, out0_tail } = Split(out0_suffix, 20)
+            EqualVerify(out0_pkh, dest)
+            EqualVerify(out0_tail, 0x88ac)
+            out0_value = BinToNum(ctx.Outputs[0].Value.Clone())
+            NumEqualVerify(out0_value, 1)
+
+            # EN: Output 1 pays the configured price to the seller address hash.
+            # ZH: 输出 1 必须把配置价格支付给卖家地址哈希。
+            out1_suffix = ctx.Outputs[1].LockingScript.SuffixData.Clone()
+            { out1_prefix, out1_suffix } = Split(out1_suffix, 3)
+            EqualVerify(out1_prefix, 0x76a914)
+            { out1_pkh, out1_tail } = Split(out1_suffix, 20)
+            EqualVerify(out1_pkh, self.seller)
+            EqualVerify(out1_tail, 0x88ac)
+            out1_value = BinToNum(ctx.Outputs[1].Value.Clone())
+            NumEqualVerify(out1_value, self.price)
+
+            # EN: Bind the two required outputs and optional change to the current transaction.
+            # ZH: 绑定两个必需输出以及可选找零输出到当前交易。
+            outputs_data = Push(0)
+            SetAlt(outputs_data)
+            for i in Range(2, -1, -1):
+                size = ctx.Outputs[i].LockingScript.Size.Clone()
+                if size != 0:
+                    output_script = PartialHash(ctx.Outputs[i].LockingScript.SuffixData, ctx.Outputs[i].LockingScript.PartialHash, ctx.Outputs[i].LockingScript.Size)
+                    output = Cat(ctx.Outputs[i].Value, output_script)
+                    SetMain(outputs_data)
+                    outputs_data = Cat(output, outputs_data)
+                    SetAlt(outputs_data)
+                    Keep(outputs_data)
+                else:
+                    Delete(ctx.Outputs[i].LockingScript.Size)
+                    Delete(ctx.Outputs[i].LockingScript.PartialHash)
+                    Delete(ctx.Outputs[i].LockingScript.SuffixData)
+                    Delete(ctx.Outputs[i].Value)
+            SetMain(outputs_data)
+            outputs_data = Sha256(outputs_data)
+            EqualVerify(outputs_data, BVM.outputsHash)
+        else:
+            # EN: Cancel does not constrain outputs; ownership is proven by the seller key.
+            # ZH: 取消分支不约束输出，只验证卖家密钥所有权。
+            Delete(dest)
+            Delete(ctx)
+            EqualVerify(Hash160(pubkey.Clone()), self.seller)
+            CheckSigVerify(sig, pubkey)

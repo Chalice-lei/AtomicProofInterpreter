@@ -1,0 +1,11 @@
+# Test for loop traversing basic type array
+Contract ForLoopArrayTraversalTest:
+    def test_array_traversal():
+        # Define test array
+        nums: int[5] = [3, 7, 2, 8, 1]
+        array_sum: int = 0
+        
+        # Traverse all array elements (by index)
+        for i in Range(5):
+            # Accumulate array elements
+            array_sum = array_sum + nums[i]

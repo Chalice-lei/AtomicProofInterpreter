@@ -1,0 +1,21 @@
+Contract DoubleOperandArithTest:
+    def test_all_double_operand_functions():
+        a: int = 10
+        b: int = 2
+        c: int = 3
+        d: int = 0
+
+        # 测试Add
+        # NumEqualVerify(Add(a, b), 12)
+
+        # 测试Sub
+        # NumEqualVerify(Sub(a, b), 8)
+
+        # 测试Mul
+        # NumEqualVerify(Mul(a, b), 20)
+
+        # 测试Div
+        # NumEqualVerify(Div(a, b), 5)
+
+        # 测试Mod
+        NumEqualVerify(Mod(a, c), 1)

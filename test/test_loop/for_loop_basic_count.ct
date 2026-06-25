@@ -1,0 +1,14 @@
+# 测试基于计数的for循环（固定次数迭代）
+Contract ForLoopBasicCountTest:
+    def test_basic_count_loop():
+      # 初始化变量
+      acc: int = 0
+
+      for i in range(3):
+         acc = acc + i
+      
+      # for i in range(1, 4):
+         # acc = acc + i
+
+      # for i in range(1, 4, 2):
+         # acc = acc + i

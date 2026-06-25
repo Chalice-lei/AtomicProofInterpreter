@@ -1,0 +1,6 @@
+# 测试减法运算符：变量与整数相减
+Contract OperatorSubWithLiteralTest:
+    def test_sub_literal(a: int, b: int, c: int, d: int):
+        # 参数 - 整数
+        diff_var1: int = 200 - a 
+        # diff_var2: int = d - 200

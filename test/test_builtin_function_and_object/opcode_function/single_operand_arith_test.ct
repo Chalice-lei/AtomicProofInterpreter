@@ -1,0 +1,27 @@
+Contract SingleOperandArithTest:
+    def test_all_single_operand_functions():
+        a: int = 5
+        b: int = -5
+        c: int = 0
+
+        # 测试Inc
+        # NumEqualVerify(Inc(a), 6)
+
+        # 测试Dec
+        # NumEqualVerify(Dec(a), 4)
+
+        # 测试Neg
+        # NumEqualVerify(Neg(a), -5)
+
+        # 测试Abs
+        # NumEqualVerify(Abs(b), 5)
+
+        # 测试Not
+        # NumEqualVerify(Not(a), 0)
+        # NumEqualVerify(Not(b), 0)
+        # NumEqualVerify(Not(c), 1)
+
+        # 测试ZeroNotEqual
+        NumEqualVerify(ZeroNotEqual(a), 1)
+        NumEqualVerify(ZeroNotEqual(b), 1)
+        NumEqualVerify(ZeroNotEqual(c), 0)

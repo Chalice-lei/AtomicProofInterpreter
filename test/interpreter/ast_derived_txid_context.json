@@ -1,0 +1,19 @@
+{
+  "pretx": {
+    "vlio": "0x0100000000000000",
+    "unlockingScript": "0xaaaa",
+    "inputs": [
+      {
+        "txid": "0x000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+        "vout": 1,
+        "sequence": "0xffffffff"
+      }
+    ],
+    "outputs": [
+      {
+        "value": "0x2a000000",
+        "lockingScript": "0xaabbcc"
+      }
+    ]
+  }
+}

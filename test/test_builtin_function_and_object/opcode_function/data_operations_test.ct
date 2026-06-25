@@ -1,0 +1,12 @@
+Contract DataOperationsTest:
+    def test_data_functions():
+        # 测试Cat
+        s1: string = "hello"
+        s2: string = "world"
+        EqualVerify(Cat(s1, s2), "helloworld")
+
+        # 测试Spilt
+        # str_data = "helloworld"
+        # {str1, str2} = Split(str_data, 5)
+        # EqualVerify(str1, "hello")
+        # EqualVerify(str2, "world")

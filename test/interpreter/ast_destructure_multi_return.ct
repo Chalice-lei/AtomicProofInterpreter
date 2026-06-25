@@ -1,0 +1,10 @@
+Contract ASTDestructureMultiReturn:
+    def _lower_pair(a: int, b: int) -> {int, int}:
+        d = b + 2
+        return {a, d}
+
+    def main():
+        input_a = Push(5)
+        input_b = Push(5)
+        {first, second} = _lower_pair(input_a, input_b)
+        Return(first + second)

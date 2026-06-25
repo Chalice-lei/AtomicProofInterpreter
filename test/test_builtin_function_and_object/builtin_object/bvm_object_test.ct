@@ -1,0 +1,17 @@
+# 测试BVM对象的元数据访问
+Contract BVMObjectTest:
+    def test_bvm_metadata():
+        # 访问BVM内置属性
+        version = BVM.version
+        locktime = BVM.locktime
+        inputCount = BVM.inputCount
+        outputCount = BVM.outputCount
+        inputsHash = BVM.inputsHash
+        unlockingInput = BVM.unlockingInput
+        outputsHash = BVM.outputsHash
+
+        # 模拟交易ID验证场景
+        tx_data: hex = 0x01020304
+        txid = Hash256(tx_data)
+        meta_txid = Split(BVM.unlockingInput, 32)  # 从解锁输入提取交易ID
+        EqualVerify(txid, meta_txid)  # 验证一致性

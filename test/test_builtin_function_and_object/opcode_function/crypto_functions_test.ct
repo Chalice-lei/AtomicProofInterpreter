@@ -1,0 +1,30 @@
+# 测试加密哈希类内置函数
+Contract CryptoFunctionsTest:
+    def test_all_crypto_functions():
+        # 测试Rmd160
+        input_bytes: hex = 0x1234567890
+        # rmd_result = Rmd160(input_bytes)
+        # NumEqualVerify(Size(rmd_result), 20) 
+
+        # 测试Sha1
+        # sha1_result = Sha1(input_bytes)
+        # NumEqualVerify(Size(sha1_result), 20)
+
+        # 测试Sha256
+        # sha256_result = Sha256(input_bytes)
+        # NumEqualVerify(Size(sha256_result), 32)
+
+        # 测试Hash160 (SHA256+RIPEMD160)
+        # hash160_result = Hash160(input_bytes)
+        # NumEqualVerify(Size(hash160_result), 20)
+
+        # 测试Hash256 (双重SHA256)
+        hash256_result = Hash256(input_bytes)
+        NumEqualVerify(Size(hash256_result), 20)
+
+        # 测试PartialHash
+        p1: hex = 0x1234
+        p2: hex = 0x5678
+        p3: hex = 0x9012
+        partial_result = PartialHash(p1, p2, p3)
+        EqualVerify(partial_result, PartialHash(Cat(p1, Cat(p2, p3)), "", ""))

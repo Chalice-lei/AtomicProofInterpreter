@@ -1,0 +1,148 @@
+# EN: The `path` value chooses whether the next counter is incremented, decremented, or reset.
+# ZH: `path` 决定下一轮计数是递增、递减还是清零。
+Contract Counter2:
+
+    Struct Script:
+        SuffixData: string
+        PartialHash: string
+        Size: number
+
+    Struct Output:
+        Value: number
+        LockingScript: Script
+
+    Struct Input:
+        Data: {txid: hex32, vout: hex4, sequence: hex4}
+
+    Struct PreTX:
+        VLIO: string
+        Inputs: Input[3]
+        UnlockingScriptHash: string
+        Outputs: Output[3]
+
+    Struct CurrentTX:
+        Outputs: Output[3]
+
+    def getCountFromPreTX(pretx: PreTX):
+        utxoData: {txid: hex32, vout: hex4, sequence: hex4}
+        utxoData = Push(BVM.unlockingInput)
+        vout = BinToNum(utxoData.vout)
+        vout_copy = vout.Clone()
+        Delete(utxoData.sequence)
+        Delete(utxoData.txid)
+
+        code_data = pretx.Outputs[vout_copy].LockingScript.SuffixData.Clone()
+        pre_count = BinToNum(code_data.Slice(1, 8))
+        SetAlt(pre_count)
+
+        vout_copy = vout.Clone()
+        pre_code_partialhash = pretx.Outputs[vout_copy].LockingScript.PartialHash.Clone()
+        SetAlt(pre_code_partialhash)
+        pre_code_size = pretx.Outputs[vout_copy].LockingScript.Size.Clone()
+        SetAlt(pre_code_size)
+
+        # EN: Rebuild the previous outputs exactly as they were hashed into the prior txid.
+        # ZH: 按上一笔交易的哈希方式重新拼出全部输出。
+        tx_data = Push(0)
+        SetAlt(tx_data)
+        for i in Range(2, -1, -1):
+            size_copy = pretx.Outputs[i].LockingScript.Size.Clone()
+            if size_copy != 0:
+                tx_data_temp = PartialHash(pretx.Outputs[i].LockingScript.SuffixData, pretx.Outputs[i].LockingScript.PartialHash, pretx.Outputs[i].LockingScript.Size)
+                tx_data_temp = Cat(pretx.Outputs[i].Value, tx_data_temp)
+                SetMain(tx_data)
+                tx_data = Cat(tx_data_temp, tx_data)
+                SetAlt(tx_data)
+                Keep(tx_data)
+            else:
+                Delete(pretx.Outputs[i].LockingScript.Size)
+                Delete(pretx.Outputs[i].LockingScript.PartialHash)
+                Delete(pretx.Outputs[i].LockingScript.SuffixData)
+                Delete(pretx.Outputs[i].Value)
+
+        # EN: The output digest is joined with the unlocking-script digest.
+        # ZH: 输出摘要还需要与解锁脚本摘要拼接。
+        SetMain(tx_data)
+        tx_data = Sha256(tx_data)
+        tx_data = Cat(pretx.UnlockingScriptHash, tx_data)
+        SetAlt(tx_data)
+        # EN: Add the input digest and header bytes to finish rebuilding the txid preimage.
+        # ZH: 继续加入输入摘要和头部字节，完成 txid 原像重建。
+        tx_input_data = Push(0)
+        for i in Range(2, -1, -1):
+            tx_input_data = Cat(pretx.Inputs[i].Data, tx_input_data)
+        tx_input_hash = Sha256(tx_input_data)
+        SetMain(tx_data)
+        tx_data = Cat(tx_input_hash, tx_data)
+        tx_data = Cat(pretx.VLIO, tx_data)
+        # EN: The rebuilt txid must be the outpoint referenced by this spend.
+        # ZH: 重建出的 txid 必须等于当前花费引用的 outpoint。
+        txid = Hash256(tx_data)
+        preTXID = BVM.unlockingInput.Slice(0, 32)
+        EqualVerify(txid, preTXID)
+
+    def verifyCurrentTX(ctx: CurrentTX, path: number):
+        # EN: Find the continuation output, then compare its counter value with the selected transition.
+        # ZH: 找到延续输出，再按所选路径比较其中的计数值。
+        SetAlt(path)
+        time = Push(3)
+        SetAlt(time)
+        outputs_data = Push(0)
+        SetAlt(outputs_data)
+        for i in Range(2, -1, -1):
+            size = ctx.Outputs[i].LockingScript.Size.Clone()
+            size_copy = size.Clone()
+            if size_copy != 0:
+                SetMain(outputs_data)
+                SetMain(time)
+                SetMain(pre_code_size)
+                pre_code_size_copy = pre_code_size.Clone()
+                if size == pre_code_size_copy:
+                    # EN: A valid continuation keeps the same script identity.
+                    # ZH: 有效延续必须保持相同的脚本标识。
+                    SetMain(pre_code_partialhash)
+                    pre_code_partialhash_copy = pre_code_partialhash.Clone()
+                    code_partialhash = ctx.Outputs[i].LockingScript.PartialHash.Clone()
+                    EqualVerify(pre_code_partialhash_copy, code_partialhash)
+                    code_suffixdata = ctx.Outputs[i].LockingScript.SuffixData.Clone()
+                    ctx_count = BinToNum(code_suffixdata.Slice(1, 8))
+                    SetMain(pre_count)
+                    pre_count_copy = pre_count.Clone()
+                    SetMain(path)
+                    if path.Clone() == 0:
+                        EqualVerify(pre_count_copy + 1, ctx_count)
+                    else:
+                        if path.Clone() == 1:
+                            EqualVerify(pre_count_copy - 1, ctx_count)
+                        else:
+                            Delete(pre_count_copy)
+                            EqualVerify(0, ctx_count)
+                    SetAlt(path)
+                    SetAlt(pre_count)
+                    SetAlt(pre_code_partialhash)
+                    time = time - 1
+                    SetAlt(pre_code_size)
+                    SetAlt(time)
+                    Keep(time)
+                else:
+                    SetAlt(pre_code_size)
+                    SetAlt(time)
+                SetAlt(outputs_data)
+                outputs_data_temp = PartialHash(ctx.Outputs[i].LockingScript.SuffixData, ctx.Outputs[i].LockingScript.PartialHash, ctx.Outputs[i].LockingScript.Size)
+                outputs_data_temp = Cat(ctx.Outputs[i].Value, outputs_data_temp)
+                SetMain(outputs_data)
+                outputs_data = Cat(outputs_data_temp, outputs_data)
+                SetAlt(outputs_data)
+                Keep(outputs_data)
+            else:
+                Delete(size)
+                Delete(ctx.Outputs[i].LockingScript.Size)
+                Delete(ctx.Outputs[i].LockingScript.PartialHash)
+                Delete(ctx.Outputs[i].LockingScript.SuffixData)
+                Delete(ctx.Outputs[i].Value)
+        SetMain(outputs_data)
+        outputs_data = Sha256(outputs_data)
+        EqualVerify(outputs_data, BVM.outputsHash)
+        SetMain(time)
+        Return (time < 3 == 1)
+        Push(self.count)

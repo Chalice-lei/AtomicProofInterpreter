@@ -1,0 +1,7 @@
+# 测试大于等于运算符：两个整数直接比较
+Contract OperatorGeTwoOperandsTest:
+    def test_ge_two(a: int, b: int, c: int, d: int):
+        # 比较前两个参数
+        # is_ge1: bool = a >= b
+        # 比较后两个参数
+        is_ge2: bool = c >= d

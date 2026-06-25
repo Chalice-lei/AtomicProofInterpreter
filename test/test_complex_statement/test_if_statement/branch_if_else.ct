@@ -1,0 +1,10 @@
+# 测试if-else双分支语句
+Contract BranchIfElseTest:
+    def test_if_else(num: int):
+        result: string
+
+        # 二选一的分支逻辑
+        if Mod(num, 2) == 0:
+            result = "even"
+        else:
+            result = "odd"

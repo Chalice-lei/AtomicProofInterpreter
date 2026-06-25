@@ -1,0 +1,18 @@
+Contract ArrayFieldBasicTest:
+    Struct Point:
+        coords: uint64[2]  # 坐标数组，每个元素8字节（64位）
+        x: int
+        y: int
+
+    def test_basic_array_field(point: Point):
+        # 测试基本数组字段访问
+        first_coord: int = point.coords[0]
+        second_coord: int = point.coords[1]
+        
+        # 测试混合访问（数组字段和普通字段）
+        x_val: int = point.x
+        y_val: int = point.y
+        
+        # 测试重复访问数组元素（应该不会重复拆分）
+        # first_again: int = point.coords[0]
+        # second_again: int = point.coords[1]

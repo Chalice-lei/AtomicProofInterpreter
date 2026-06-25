@@ -1,0 +1,12 @@
+# 测试结构体字段访问
+Contract StructFieldAccessTest:
+    Struct Data:
+        value: int
+        label: string
+
+    def test_struct_field_access():
+        # 访问参数结构体的字段
+        # val: int = data.value
+        # lab: string = data.label
+        data: Data
+        data.value = 5

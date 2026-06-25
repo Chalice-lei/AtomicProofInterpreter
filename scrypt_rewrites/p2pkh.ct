@@ -1,0 +1,19 @@
+Contract P2PKH:
+    # EN: Lock to a 20-byte public-key hash stored in `self.pubKeyHash`.
+    # ZH: 使用 `self.pubKeyHash` 中保存的 20 字节公钥哈希进行锁定。
+
+    # EN: The spender supplies a signature and the full public key.
+    # ZH: 花费方需要提供签名和完整公钥。
+    def verify(sig: hex, pubKey: hex):
+        # EN: Clone the key before hashing so the original remains available for signature verification.
+        # ZH: 哈希前先克隆公钥，原始公钥稍后还要用于验签。
+        pubKey_copy = pubKey.Clone()
+
+        # EN: The derived hash must match the hash embedded in this instance.
+        # ZH: 计算出的哈希必须匹配当前实例中嵌入的哈希。
+        pubKeyHash = Hash160(pubKey_copy)
+        EqualVerify(pubKeyHash, self.pubKeyHash)
+
+        # EN: `CheckSig` leaves the boolean result for the spending path.
+        # ZH: `CheckSig` 会把验签布尔结果留给花费路径。
+        result = CheckSig(sig, pubKey)

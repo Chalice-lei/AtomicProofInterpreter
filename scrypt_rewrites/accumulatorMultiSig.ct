@@ -1,0 +1,27 @@
+# EN: Three public-key slots are available, and `masks` selects which slots join this spend.
+# ZH: 这里预留三个公钥槽位，`masks` 用来选择本次参与花费的槽位。
+Contract AccumulatorMultiSig:
+
+    def main(sigs: hex[3], pubKeys: hex[3], masks: bool[3]):
+
+        # EN: Keep a running total off the main stack while each selected slot is checked.
+        # ZH: 逐个检查被选中的槽位，并把累计数量暂存在副栈。
+        total = Push(0)
+        SetAlt(total)
+        for i in Range(2, -1, -1):
+            if masks[i] == 1:
+                SetMain(total)
+                if And(Equal(Hash160(pubKeys[i].Clone()), self.addr[i]), CheckSig(sigs[i], pubKeys[i])):
+                    total = total + 1
+                    SetAlt(total)
+                else:
+                    total = total + 0
+                    SetAlt(total)
+            else:
+                Delete(pubKeys[i])
+                Delete(sigs[i])
+
+        # EN: The final count must meet the configured threshold.
+        # ZH: 最终通过验证的数量必须达到预设门限。
+        SetMain(total)
+        NumEqualVerify(GreaterOrEqual(total, self.threshold), 1)

@@ -1,0 +1,14 @@
+# 测试结构体数组的声明和元素访问
+Contract ArrayStructArrayTest:
+    # 定义结构体
+    Struct Item:
+        id: int
+        name: string
+
+    def test_struct_array():
+        # 声明并初始化结构体数组
+        items: Item[2] = [{1, "item_one"}, {2, "item_two"}]
+        
+        # 直接访问结构体数组的字段
+        # first_id: int = items[0].id
+        # second_name: string = items[1].name

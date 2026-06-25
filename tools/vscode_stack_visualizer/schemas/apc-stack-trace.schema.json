@@ -1,0 +1,429 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://atomicproof.dev/schemas/apc-stack-trace.schema.json",
+  "title": "AtomicProof Stack Trace",
+  "type": "object",
+  "required": [
+    "format",
+    "steps"
+  ],
+  "properties": {
+    "version": {
+      "type": "string"
+    },
+    "format": {
+      "const": "apc-stack-trace"
+    },
+    "stackOrder": {
+      "type": "string"
+    },
+    "top": {
+      "type": "string"
+    },
+    "source": {
+      "type": "object",
+      "properties": {
+        "file": {
+          "type": "string"
+        },
+        "lines": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "bytecode": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "debugInfo": {
+      "type": "object",
+      "properties": {
+        "sourceFile": {
+          "type": "string"
+        },
+        "contractName": {
+          "type": "string"
+        },
+        "lineToPC": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "type": "integer"
+            }
+          }
+        },
+        "functions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/functionInfo"
+          }
+        }
+      }
+    },
+    "lifecycle": {
+      "$ref": "#/$defs/lifecycle"
+    },
+    "steps": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/step"
+      }
+    }
+  },
+  "$defs": {
+    "sourceLocation": {
+      "type": "object",
+      "properties": {
+        "file": {
+          "type": "string"
+        },
+        "line": {
+          "type": "integer"
+        },
+        "column": {
+          "type": "integer"
+        },
+        "endLine": {
+          "type": "integer"
+        },
+        "endColumn": {
+          "type": "integer"
+        }
+      }
+    },
+    "functionInfo": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "startPC": {
+          "type": "integer"
+        },
+        "endPC": {
+          "type": "integer"
+        },
+        "isPublic": {
+          "type": "boolean"
+        },
+        "location": {
+          "$ref": "#/$defs/sourceLocation"
+        }
+      }
+    },
+    "stackElement": {
+      "type": "object",
+      "required": [
+        "hex"
+      ],
+      "properties": {
+        "index": {
+          "type": "integer"
+        },
+        "depth": {
+          "type": "integer"
+        },
+        "hex": {
+          "type": "string"
+        },
+        "byteLength": {
+          "type": "integer"
+        },
+        "int": {
+          "type": "integer"
+        },
+        "intString": {
+          "type": "string"
+        },
+        "ascii": {
+          "type": "string"
+        },
+        "elementId": {
+          "type": "string"
+        },
+        "originStep": {
+          "type": "integer"
+        },
+        "originStack": {
+          "enum": [
+            "main",
+            "alt"
+          ]
+        }
+      },
+      "additionalProperties": true
+    },
+    "stackEffect": {
+      "type": "object",
+      "properties": {
+        "pushed": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/stackElement"
+          }
+        },
+        "popped": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/stackElement"
+          }
+        },
+        "sizeBefore": {
+          "type": "integer"
+        },
+        "sizeAfter": {
+          "type": "integer"
+        },
+        "reordered": {
+          "type": "boolean"
+        }
+      }
+    },
+    "effects": {
+      "type": "object",
+      "properties": {
+        "mainStack": {
+          "$ref": "#/$defs/stackEffect"
+        },
+        "altStack": {
+          "$ref": "#/$defs/stackEffect"
+        },
+        "moves": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "from": {
+                "enum": [
+                  "main",
+                  "alt"
+                ]
+              },
+              "to": {
+                "enum": [
+                  "main",
+                  "alt"
+                ]
+              },
+              "element": {
+                "$ref": "#/$defs/stackElement"
+              },
+              "elementId": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    },
+    "step": {
+      "type": "object",
+      "required": [
+        "step",
+        "pc"
+      ],
+      "properties": {
+        "step": {
+          "type": "integer"
+        },
+        "pc": {
+          "type": "integer"
+        },
+        "instruction": {
+          "type": "string"
+        },
+        "opcode": {
+          "type": "string"
+        },
+        "operand": {
+          "type": "string"
+        },
+        "source": {
+          "$ref": "#/$defs/sourceLocation"
+        },
+        "sourceFile": {
+          "type": "string"
+        },
+        "sourceLine": {
+          "type": "integer"
+        },
+        "functionName": {
+          "type": "string"
+        },
+        "mainStackBefore": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/stackElement"
+          }
+        },
+        "mainStackAfter": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/stackElement"
+          }
+        },
+        "altStackBefore": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/stackElement"
+          }
+        },
+        "altStackAfter": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/stackElement"
+          }
+        },
+        "mainStack": {
+          "$ref": "#/$defs/stackPair"
+        },
+        "altStack": {
+          "$ref": "#/$defs/stackPair"
+        },
+        "effects": {
+          "$ref": "#/$defs/effects"
+        },
+        "error": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": true
+    },
+    "stackPair": {
+      "type": "object",
+      "properties": {
+        "before": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/stackElement"
+          }
+        },
+        "after": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/stackElement"
+          }
+        }
+      }
+    },
+    "lifecycleEvent": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "enum": [
+            "initial",
+            "push",
+            "move",
+            "pop"
+          ]
+        },
+        "step": {
+          "type": "integer"
+        },
+        "pc": {
+          "type": "integer"
+        },
+        "opcode": {
+          "type": "string"
+        },
+        "sourceFile": {
+          "type": "string"
+        },
+        "sourceLine": {
+          "type": "integer"
+        },
+        "stack": {
+          "enum": [
+            "main",
+            "alt"
+          ]
+        },
+        "from": {
+          "enum": [
+            "main",
+            "alt"
+          ]
+        },
+        "to": {
+          "enum": [
+            "main",
+            "alt"
+          ]
+        }
+      },
+      "additionalProperties": true
+    },
+    "lifecycleElement": {
+      "type": "object",
+      "required": [
+        "elementId",
+        "hex",
+        "originStep"
+      ],
+      "properties": {
+        "elementId": {
+          "type": "string"
+        },
+        "hex": {
+          "type": "string"
+        },
+        "originStep": {
+          "type": "integer"
+        },
+        "originStack": {
+          "enum": [
+            "main",
+            "alt"
+          ]
+        },
+        "lastStep": {
+          "type": "integer"
+        },
+        "lastStack": {
+          "enum": [
+            "main",
+            "alt"
+          ]
+        },
+        "consumed": {
+          "type": "boolean"
+        },
+        "consumedAt": {
+          "type": "integer"
+        },
+        "events": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/lifecycleEvent"
+          }
+        }
+      },
+      "additionalProperties": true
+    },
+    "lifecycle": {
+      "type": "object",
+      "properties": {
+        "idFormat": {
+          "type": "string"
+        },
+        "matching": {
+          "type": "string"
+        },
+        "elements": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/lifecycleElement"
+          }
+        }
+      },
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": true
+}

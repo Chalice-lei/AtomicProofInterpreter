@@ -1,0 +1,9 @@
+Contract Test:
+    def main():
+        a: int = 1
+        user_input = Push("helloworld")
+        user_output = Push("helloworld")
+        text = Push("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+        num = Push(300)
+        hex1 = Push(0x1234)
+        input_size = Size(Cat(user_input, user_output))

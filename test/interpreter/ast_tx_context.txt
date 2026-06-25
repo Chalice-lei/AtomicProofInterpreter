@@ -1,0 +1,11 @@
+# Legacy BVM transaction metadata keys are mapped to BVM fields.
+version: 1
+locktime: 0
+inputCount: 1
+outputCount: 2
+unlockingInput: 0x010203
+outputsHash: 0x000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f
+
+# Dotted paths are mapped to typed function parameters for the ast command.
+pretx.Outputs[1].LockingScript.Size: 0x03000000
+pretx.Outputs[1].Value: 0x2a000000

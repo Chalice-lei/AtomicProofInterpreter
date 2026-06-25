@@ -1,0 +1,26 @@
+Contract InterpreterUsageExample:
+    Struct Script:
+        Size: hex4
+
+    Struct Output:
+        Value: hex4
+        LockingScript: Script
+
+    Struct PreTX:
+        Outputs: Output[2]
+
+    def verify(sig: hex, pubKey: hex, pretx: PreTX):
+        pubKeyHash = Hash160(pubKey.Clone())
+        EqualVerify(pubKeyHash, self.pubKeyHash)
+
+        EqualVerify(BVM.unlockingInput.Slice(0, 2), 0x0102)
+        EqualVerify(pretx.Outputs[1].LockingScript.Size, 0x03000000)
+
+        amount = BinToNum(pretx.Outputs[1].Value)
+        nonce = BinToNum(BVM.unlockingInput.Slice(2, 1))
+        minAmount = self.minAmount
+
+        if amount + nonce >= minAmount:
+            Return(CheckSig(sig, pubKey))
+        else:
+            Return(0)

@@ -1,0 +1,11 @@
+# 测试结构体的定义及变量声明
+Contract StructDefinitionTest:
+    # 定义结构体（单个成员）
+    # Struct Data:
+        # x: int
+
+    # 定义结构体（多个成员）
+    Struct User:
+        id: int
+        name: string
+        active: bool

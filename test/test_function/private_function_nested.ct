@@ -1,0 +1,21 @@
+# 测试私有函数之间的嵌套调用
+Contract PrivateFunctionNestedTest:
+    # 基础私有函数：加法
+    def _add(a: int, b: int):
+        final_value = a + b
+        Keep(final_value)
+
+    # 私有函数：调用其他私有函数（嵌套）
+    def _multiply_and_add(x: int, y: int, z: int):
+        product: int = x * y
+        # 调用另一个私有函数
+        final_value = _add(product, z)
+        Keep(final_value)
+
+    # 公有函数（测试入口）：触发嵌套调用
+    def test_nested_private():
+        # 调用嵌套了其他私有函数的私有函数
+        x = Push(3)
+        y = Push(4)
+        z = Push(5)
+        final_value = _multiply_and_add(x, y, z)  # 3 * 4 + 5 = 17

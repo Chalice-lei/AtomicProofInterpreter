@@ -1,0 +1,13 @@
+# 验证：把“整体数组/整体结构体”赋给普通变量后会发生什么
+Contract WholeAssignToScalarTest:
+    Struct Pair:
+        x: int
+        y: int
+
+    def test_whole_array_assign():
+        # uint64[] 会被注册为“整体数组元素”
+        arr: uint64[2]
+        # 普通变量（未声明类型）承接整体数组
+        any_var = arr
+        # 使用十进制索引，避免十六进制索引标签差异干扰结论
+        first = any_var[0]

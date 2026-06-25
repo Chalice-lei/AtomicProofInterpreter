@@ -1,0 +1,16 @@
+# EN: A commit-reveal coin toss where both sides must reveal the bytes they committed to.
+# ZH: 承诺揭示式抛硬币：双方都必须揭示此前承诺过的字节串。
+Contract CoinToss:
+
+    def toss(aliceNonce: hex, bobNonce: hex, sig: hex):
+        # EN: Reject immediately if either reveal does not match its stored hash.
+        # ZH: 任意一方揭示值与保存的哈希不匹配时立即拒绝。
+        EqualVerify(Hash256(aliceNonce.Clone()), self.aliceHash)
+        EqualVerify(Hash256(bobNonce.Clone()), self.bobHash)
+
+        # EN: Equal reveals, or Alice's sentinel reveal, route the spend to Bob.
+        # ZH: 双方揭示相同，或 Alice 揭示哨兵值时，由 Bob 签名通过。
+        if Or(Equal(aliceNonce.Clone(), bobNonce), Equal(aliceNonce, self.N)) == 1:
+            CheckSigVerify(sig, self.bob)
+        else:
+            CheckSigVerify(sig, self.alice)

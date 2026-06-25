@@ -1,0 +1,19 @@
+# Debugger regression: source mapping and variable visibility across scopes.
+# Suggested checks:
+#   break on the if body, else body, loop body, and final Return.
+#   locals/info variables should reflect current scope without losing outer vars.
+Contract DebugBranchLoopScope:
+    def test_branch_loop(flag: int):
+        acc: int = 0
+
+        if flag > 0:
+            branch_value: int = 1
+            acc = acc + branch_value
+        else:
+            fallback: int = 2
+            acc = acc + fallback
+
+        for i in Range(3):
+            acc = acc + i
+
+        Return(acc)

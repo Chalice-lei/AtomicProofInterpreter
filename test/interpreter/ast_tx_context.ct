@@ -1,0 +1,15 @@
+Contract ASTTxContext:
+    Struct Script:
+        Size: hex4
+
+    Struct Output:
+        Value: hex4
+        LockingScript: Script
+
+    Struct PreTX:
+        Outputs: Output[2]
+
+    def main(pretx: PreTX):
+        EqualVerify(BVM.unlockingInput.Slice(0, 2), 0x0102)
+        EqualVerify(pretx.Outputs[1].LockingScript.Size, 0x03000000)
+        Return(BinToNum(pretx.Outputs[1].Value) + BinToNum(BVM.unlockingInput.Slice(2, 1)))

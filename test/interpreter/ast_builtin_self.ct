@@ -1,0 +1,5 @@
+Contract ASTBuiltinSelf:
+    def verify(sig: hex, pubKey: hex):
+        pubKeyHash = Hash160(pubKey.Clone())
+        EqualVerify(pubKeyHash, self.pubKeyHash)
+        Return(CheckSig(sig, pubKey))

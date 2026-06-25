@@ -1,0 +1,6 @@
+# 测试乘法运算符：变量与整数相乘
+Contract OperatorMulWithLiteralTest:
+    def test_mul_literal(a: int, b: int, c: int, d: int):
+        # 参数 * 整数
+        # prod_var1: int = 2 * a
+        prod_var2: int = d * 2
