@@ -10,6 +10,7 @@
 
 #include "src/compiler/bytecode_pipeline.h"
 #include "src/compiler/frontend_pipeline.h"
+#include "src/compiler_repl/repl_frontend.h"
 #include "src/config/config_manager.h"
 #include "src/error/error_manager.h"
 #include "src/log/logger.h"
@@ -57,6 +58,7 @@ struct CommandLineArgs
     bool runBytecode{false};
     bool runAST{false};
     bool replMode{false};
+    bool compilerReplMode{false};
     bool runtimeSelfTest{false};
     bool astSelfTest{false};
     std::string debugOutputFile{""};
@@ -78,6 +80,7 @@ enum class CommandLineMode
     Debug,
     DebugServer,
     Shell,
+    CompilerRepl,
     Test
 };
 
@@ -173,6 +176,9 @@ CommandLineArgs parseCommandLineArgs(int argc, char* argv[])
         case CommandLineMode::Shell:
             args.replMode = true;
             break;
+        case CommandLineMode::CompilerRepl:
+            args.compilerReplMode = true;
+            break;
         case CommandLineMode::Test:
         case CommandLineMode::None:
             break;
@@ -183,7 +189,7 @@ CommandLineArgs parseCommandLineArgs(int argc, char* argv[])
         switch (mode) {
         case CommandLineMode::None:
             showErrorAndExit(
-                "Expected command: compile, run, ast, debug, debug-server, shell, or test"
+                "Expected command: compile, run, ast, debug, debug-server, shell, compiler-repl, or test"
             );
             return;
 
@@ -223,6 +229,12 @@ CommandLineArgs parseCommandLineArgs(int argc, char* argv[])
                 return;
             }
             showErrorAndExit("shell received an extra argument '" + value + "'");
+            return;
+
+        case CommandLineMode::CompilerRepl:
+            showErrorAndExit(
+                "compiler-repl received an extra argument '" + value + "'"
+            );
             return;
 
         case CommandLineMode::Test: {
@@ -281,6 +293,10 @@ CommandLineArgs parseCommandLineArgs(int argc, char* argv[])
         }
         else if (mode == CommandLineMode::None && arg == "shell") {
             activateCommand(CommandLineMode::Shell, arg);
+            ++i;
+        }
+        else if (mode == CommandLineMode::None && arg == "compiler-repl") {
+            activateCommand(CommandLineMode::CompilerRepl, arg);
             ++i;
         }
         else if (mode == CommandLineMode::None &&
@@ -379,7 +395,7 @@ CommandLineArgs parseCommandLineArgs(int argc, char* argv[])
 
     if (mode == CommandLineMode::None) {
         showErrorAndExit(
-            "Expected command: compile, run, ast, debug, debug-server, shell, or test"
+            "Expected command: compile, run, ast, debug, debug-server, shell, compiler-repl, or test"
         );
     }
 
@@ -391,7 +407,8 @@ CommandLineArgs parseCommandLineArgs(int argc, char* argv[])
     if (mode == CommandLineMode::Compile) {
         if (args.debuggerMode || args.liveDebugServerMode ||
             args.runBytecode || args.runAST ||
-            args.replMode || args.runtimeSelfTest || args.astSelfTest) {
+            args.replMode || args.compilerReplMode ||
+            args.runtimeSelfTest || args.astSelfTest) {
             showErrorAndExit("compile cannot be combined with another command");
         }
         if (!args.functionName.empty() || !args.runArgs.empty() ||
@@ -405,7 +422,8 @@ CommandLineArgs parseCommandLineArgs(int argc, char* argv[])
     if (mode == CommandLineMode::RunBytecode) {
         if (args.debuggerMode || args.liveDebugServerMode ||
             args.runAST || args.replMode ||
-            args.runtimeSelfTest || args.astSelfTest) {
+            args.compilerReplMode || args.runtimeSelfTest ||
+            args.astSelfTest) {
             showErrorAndExit("run cannot be combined with another command");
         }
         if (!args.paramAssignments.empty() || !args.selfAssignments.empty() ||
@@ -420,7 +438,8 @@ CommandLineArgs parseCommandLineArgs(int argc, char* argv[])
     if (mode == CommandLineMode::RunAST) {
         if (args.debuggerMode || args.liveDebugServerMode ||
             args.runBytecode || args.replMode ||
-            args.runtimeSelfTest || args.astSelfTest) {
+            args.compilerReplMode || args.runtimeSelfTest ||
+            args.astSelfTest) {
             showErrorAndExit("ast cannot be combined with another command");
         }
         if (debugInfoOptionSeen || !args.stackTraceOutputFile.empty()) {
@@ -433,7 +452,8 @@ CommandLineArgs parseCommandLineArgs(int argc, char* argv[])
     if (mode == CommandLineMode::Debug) {
         if (args.liveDebugServerMode || args.runBytecode ||
             args.runAST || args.replMode ||
-            args.runtimeSelfTest || args.astSelfTest) {
+            args.compilerReplMode || args.runtimeSelfTest ||
+            args.astSelfTest) {
             showErrorAndExit("debug cannot be combined with another command");
         }
         if (!args.functionName.empty() || !args.runArgs.empty() ||
@@ -446,7 +466,8 @@ CommandLineArgs parseCommandLineArgs(int argc, char* argv[])
 
     if (mode == CommandLineMode::DebugServer) {
         if (args.debuggerMode || args.runBytecode || args.runAST ||
-            args.replMode || args.runtimeSelfTest || args.astSelfTest) {
+            args.replMode || args.compilerReplMode ||
+            args.runtimeSelfTest || args.astSelfTest) {
             showErrorAndExit("debug-server cannot be combined with another command");
         }
         if (!args.paramAssignments.empty() || !args.selfAssignments.empty() ||
@@ -461,7 +482,8 @@ CommandLineArgs parseCommandLineArgs(int argc, char* argv[])
     if (mode == CommandLineMode::Shell) {
         if (args.debuggerMode || args.liveDebugServerMode ||
             args.runBytecode || args.runAST ||
-            args.runtimeSelfTest || args.astSelfTest) {
+            args.compilerReplMode || args.runtimeSelfTest ||
+            args.astSelfTest) {
             showErrorAndExit("shell cannot be combined with another command");
         }
         if (!args.functionName.empty() || !args.runArgs.empty() ||
@@ -472,10 +494,28 @@ CommandLineArgs parseCommandLineArgs(int argc, char* argv[])
         }
     }
 
+    if (mode == CommandLineMode::CompilerRepl) {
+        if (args.debuggerMode || args.liveDebugServerMode ||
+            args.runBytecode || args.runAST || args.replMode ||
+            args.runtimeSelfTest || args.astSelfTest) {
+            showErrorAndExit(
+                "compiler-repl cannot be combined with another command"
+            );
+        }
+        if (!args.filename.empty() || !args.functionName.empty() ||
+            !args.runArgs.empty() || !args.paramAssignments.empty() ||
+            !args.selfAssignments.empty() || !args.bvmAssignments.empty() ||
+            !args.txFile.empty() || !args.debugOutputFile.empty() ||
+            !args.stackTraceOutputFile.empty() || debugInfoOptionSeen) {
+            showErrorAndExit("compiler-repl accepts only global options");
+        }
+    }
+
     if (mode == CommandLineMode::Test) {
         if (args.debuggerMode || args.liveDebugServerMode ||
             args.runBytecode || args.runAST ||
-            args.replMode || !args.filename.empty() || !args.functionName.empty() ||
+            args.replMode || args.compilerReplMode ||
+            !args.filename.empty() || !args.functionName.empty() ||
             !args.runArgs.empty() || !args.paramAssignments.empty() ||
             !args.selfAssignments.empty() || !args.bvmAssignments.empty() ||
             !args.txFile.empty() || !args.debugOutputFile.empty() ||
@@ -485,6 +525,10 @@ CommandLineArgs parseCommandLineArgs(int argc, char* argv[])
     }
 
     if (args.runtimeSelfTest || args.astSelfTest) {
+        return args;
+    }
+
+    if (args.compilerReplMode) {
         return args;
     }
 
@@ -1473,7 +1517,8 @@ int main(int argc, char* argv[])
             logFileName,
             !(args.debuggerMode || args.liveDebugServerMode ||
               args.runBytecode || args.runAST ||
-              args.replMode || args.runtimeSelfTest || args.astSelfTest)
+              args.replMode || args.compilerReplMode ||
+              args.runtimeSelfTest || args.astSelfTest)
         );
 #else
     Logger::GetInstance().Initialize(args.logLevel, logFileName, false);
@@ -1489,7 +1534,8 @@ int main(int argc, char* argv[])
     const bool quietConsoleLog =
         args.debuggerMode || args.liveDebugServerMode ||
         args.runBytecode || args.runAST || args.replMode ||
-        args.runtimeSelfTest || args.astSelfTest;
+        args.compilerReplMode || args.runtimeSelfTest ||
+        args.astSelfTest;
 
     if (!quietConsoleLog) {
         LOG_INFO("start " + executableName + " \n");
@@ -1512,6 +1558,15 @@ int main(int argc, char* argv[])
         const bool ok = apc_interpreter::runASTSelfTest(std::cout, std::cerr);
         Logger::GetInstance().Shutdown();
         return ok ? 0 : 1;
+    }
+
+    if (args.compilerReplMode) {
+        Logger::GetInstance().Shutdown();
+        Logger::GetInstance().Initialize(args.logLevel, logFileName, false);
+        apc::repl::ReplFrontend frontend;
+        const int replResult = frontend.run();
+        Logger::GetInstance().Shutdown();
+        return replResult;
     }
 
     if (args.replMode) {

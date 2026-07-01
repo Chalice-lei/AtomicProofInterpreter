@@ -132,6 +132,8 @@ void showUsage(const char* programName)
 #endif
     std::cout << "  shell [file.ct]               Start the interactive shell"
               << std::endl;
+    std::cout << "  compiler-repl                 Start the compiler REPL"
+              << std::endl;
     std::cout << "  test runtime                  Run interpreter runtime self-test"
               << std::endl;
     std::cout << "  test ast                      Run minimal AST interpreter self-test"
@@ -250,6 +252,10 @@ void showUsage(const char* programName)
     std::cout
         << "  " << programName
         << " shell [code.ct]                         # Start shell"
+        << std::endl;
+    std::cout
+        << "  " << programName
+        << " compiler-repl                          # Start compiler REPL"
         << std::endl;
     std::cout
         << "  " << programName

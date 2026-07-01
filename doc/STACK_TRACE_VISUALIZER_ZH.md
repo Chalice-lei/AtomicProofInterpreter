@@ -65,6 +65,8 @@ tools/vscode_stack_visualizer/
 - `AtomicProof: Debug Contract Trace`：从 `.ct` 合约直接启动 live Debug，插件会运行 `utxo_compiler debug-server <contract.ct> <function> [args...]`，并在同一个 VM 实例上执行 continue/step/breakpoint/variables
 - `AtomicProof: Export Trace Narrative`：导出 Markdown 执行叙事，适合论文、教学、评审和演示材料
 - `AtomicProof: Generate Stack Trace and Visualize`：选择合约、输入函数名和参数，自动调用 `build/bin/utxo_interpreter` 或 `build/bin/utxo_compiler` 生成 trace 并打开
+- `AtomicProof: Toggle Auto Debug On Save`：开启或关闭 `.ct` 保存后的自动刷新
+- `AtomicProof: Restart Current Live VM Debug`：停止并重新启动当前 live VM 调试会话
 
 `launch.json` 中 `.ct` 调试默认使用 live 后端：
 
@@ -96,6 +98,33 @@ tools/vscode_stack_visualizer/
   "atomicProofStackVisualizer.interpreterPath": "/absolute/path/to/utxo_compiler"
 }
 ```
+
+## 保存后自动刷新 / 自动重启
+
+插件支持用“保存后重新生成 trace / 重启 live VM 会话”的方式模拟接近边写边调的体验。先运行一次
+`AtomicProof: Toggle Auto Debug On Save`，或在设置中启用：
+
+```json
+{
+  "atomicProofStackVisualizer.autoRunOnSave.enabled": true,
+  "atomicProofStackVisualizer.autoRunOnSave.mode": "trace"
+}
+```
+
+`trace` 模式下，保存 `.ct` 文件会在默认 600ms 防抖后复用最近一次函数名和参数，重新生成
+`atomicProofStackVisualizer.traceOutputPath` 指向的 `stack_trace.json`，并刷新已打开的 Webview。刷新时不会强制抢走当前编辑器焦点；如果还没有历史函数名或参数，插件会提示输入一次。
+
+`live` 模式下，保存 `.ct` 文件会查找同一合约已经启动过的 live VM 调试配置。如果当前有对应会话，插件会停止旧会话并重新启动；如果没有运行中的会话，但本轮 VS Code 中用户已经显式执行过一次
+`AtomicProof: Debug Live VM`，插件也会复用最近的 `functionName`、`arguments`、`txFile` 和
+`interpreterPath` 启动新会话。VS Code 中设置的源码断点保留在编辑器里，并会在新调试会话启动时重新下发。
+
+相关设置：
+
+- `atomicProofStackVisualizer.autoRunOnSave.enabled`：是否启用保存后自动运行，默认 `false`
+- `atomicProofStackVisualizer.autoRunOnSave.mode`：`trace` 或 `live`，默认 `trace`
+- `atomicProofStackVisualizer.autoRunOnSave.debounceMs`：保存防抖时间，默认 `600`
+- `atomicProofStackVisualizer.autoRunOnSave.showStatus`：是否显示状态栏反馈，默认 `true`
+- `atomicProofStackVisualizer.autoRunOnSave.restartLiveDebug`：live 模式下是否自动重启会话，默认 `true`
 
 ## Webview 交互
 

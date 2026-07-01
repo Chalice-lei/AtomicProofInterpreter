@@ -19,6 +19,8 @@
 		"onCommand:atomicProofStackVisualizer.openLastTrace",
 		"onCommand:atomicProofStackVisualizer.debugActiveTrace",
 		"onCommand:atomicProofStackVisualizer.debugLiveContract",
+		"onCommand:atomicProofStackVisualizer.toggleAutoDebugOnSave",
+		"onCommand:atomicProofStackVisualizer.restartCurrentLiveDebug",
 		"onDebugResolve:atomicproof-trace",
 		"onDebugResolve:atomicproof-live"
 	],
@@ -62,6 +64,14 @@
 			{
 				"command": "atomicProofStackVisualizer.debugLiveContract",
 				"title": "AtomicProof: Debug Live VM"
+			},
+			{
+				"command": "atomicProofStackVisualizer.toggleAutoDebugOnSave",
+				"title": "AtomicProof: Toggle Auto Debug On Save"
+			},
+			{
+				"command": "atomicProofStackVisualizer.restartCurrentLiveDebug",
+				"title": "AtomicProof: Restart Current Live VM Debug"
 			}
 		],
 		"debuggers": [
@@ -279,6 +289,36 @@
 					"type": "boolean",
 					"default": true,
 					"description": "Open stack traces beside the active editor."
+				},
+				"atomicProofStackVisualizer.autoRunOnSave.enabled": {
+					"type": "boolean",
+					"default": false,
+					"description": "Run AtomicProof trace generation or live VM debug restart automatically after saving a .ct file."
+				},
+				"atomicProofStackVisualizer.autoRunOnSave.mode": {
+					"type": "string",
+					"enum": [
+						"trace",
+						"live"
+					],
+					"default": "trace",
+					"description": "Auto debug behavior after saving a .ct file."
+				},
+				"atomicProofStackVisualizer.autoRunOnSave.debounceMs": {
+					"type": "number",
+					"default": 600,
+					"minimum": 0,
+					"description": "Debounce delay in milliseconds before auto debug on save runs."
+				},
+				"atomicProofStackVisualizer.autoRunOnSave.showStatus": {
+					"type": "boolean",
+					"default": true,
+					"description": "Show AtomicProof auto debug on save status in the VS Code status bar."
+				},
+				"atomicProofStackVisualizer.autoRunOnSave.restartLiveDebug": {
+					"type": "boolean",
+					"default": true,
+					"description": "Restart the matching live VM debug session after saving when auto debug on save is in live mode."
 				}
 			}
 		}

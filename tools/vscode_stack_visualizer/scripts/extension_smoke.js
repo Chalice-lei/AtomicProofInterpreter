@@ -5,6 +5,8 @@ const { runTests } = require("@vscode/test-electron");
 
 async function main()
 {
+    delete process.env.ELECTRON_RUN_AS_NODE;
+
     const extensionDevelopmentPath = path.resolve(__dirname, "..");
     const extensionTestsPath = path.resolve(__dirname, "extension_smoke_runner.js");
     const launchArgs = ["--disable-extensions"];

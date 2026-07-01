@@ -2,7 +2,8 @@
 Contract DebugStackVisualizerAlt:
     def test_alt_roundtrip(input: int):
         temp = Push(10)
+        temp2 = Push(15)
+        temp3 = temp.Clone() + temp2.Clone()
         SetAlt(temp)
         SetMain(temp)
         result: int = temp + input
-        Return(result)

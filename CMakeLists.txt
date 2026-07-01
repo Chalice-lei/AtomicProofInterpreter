@@ -435,7 +435,7 @@ set(COMPILER_REPL_SOURCES
         src/compiler_repl/repl_frontend.cpp
 )
 
-add_library(apc_core STATIC ${CORE_SOURCES})
+add_library(apc_core STATIC ${CORE_SOURCES} ${COMPILER_REPL_SOURCES})
 target_include_directories(apc_core PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}
         ${CMAKE_CURRENT_SOURCE_DIR}/src
@@ -457,15 +457,6 @@ endif()
 add_executable(${EXECUTABLE_NAME} main.cpp)
 target_link_libraries(${EXECUTABLE_NAME} PRIVATE apc_core)
 target_compile_options(${EXECUTABLE_NAME} PRIVATE
-    $<$<CXX_COMPILER_ID:MSVC>:/W4>
-    $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-Wall -Wextra -Wpedantic>
-    $<$<CONFIG:Debug>:-g>
-    $<$<CONFIG:Release>:-O3 -DNDEBUG>
-)
-
-add_executable(apc-repl src/compiler_repl_main.cpp ${COMPILER_REPL_SOURCES})
-target_link_libraries(apc-repl PRIVATE apc_core)
-target_compile_options(apc-repl PRIVATE
     $<$<CXX_COMPILER_ID:MSVC>:/W4>
     $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-Wall -Wextra -Wpedantic>
     $<$<CONFIG:Debug>:-g>

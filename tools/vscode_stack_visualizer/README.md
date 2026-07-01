@@ -16,6 +16,8 @@ It visualizes `stack_trace.json` inside the editor.
    - `AtomicProof: Open Last Generated Stack Trace`
    - `AtomicProof: Debug Active Stack Trace`
    - `AtomicProof: Debug Live VM`
+   - `AtomicProof: Toggle Auto Debug On Save`
+   - `AtomicProof: Restart Current Live VM Debug`
 
 You can also right-click a `.ct` contract file and choose
 `AtomicProof: Generate Stack Trace and Visualize` or
@@ -52,6 +54,22 @@ The command asks for:
 It uses `build/bin/utxo_interpreter`, writes the JSON trace, and opens the
 Webview automatically.
 
+## Auto Debug On Save
+
+Run `AtomicProof: Toggle Auto Debug On Save` to enable or disable save-driven
+debugging for `.ct` files. The default mode is `trace`: after a short debounce,
+the extension reuses the most recent function name and arguments, regenerates
+the configured `traceOutputPath`, and refreshes the visualizer without taking
+focus from the editor. If no function or argument history exists yet, VS Code
+asks for it once.
+
+Set `atomicProofStackVisualizer.autoRunOnSave.mode` to `live` to restart the
+matching live VM debug session after saving. The extension records the most
+recent live debug launch for each contract and reuses its `functionName`,
+`arguments`, `txFile`, and `interpreterPath`. It does not hot-reload the running
+VM process; it stops the old session and starts a new one, so VS Code source
+breakpoints are preserved and re-applied by the debugger.
+
 ## Settings
 
 - `atomicProofStackVisualizer.interpreterPath`: override the interpreter path.
@@ -62,6 +80,14 @@ Webview automatically.
 - `atomicProofStackVisualizer.defaultViewMode`: `diff`, `before`, or `after`.
 - `atomicProofStackVisualizer.playbackSpeed`: initial playback speed.
 - `atomicProofStackVisualizer.openBeside`: open the Webview beside the editor.
+- `atomicProofStackVisualizer.autoRunOnSave.enabled`: enable save-driven trace
+  refresh or live debug restart.
+- `atomicProofStackVisualizer.autoRunOnSave.mode`: `trace` or `live`.
+- `atomicProofStackVisualizer.autoRunOnSave.debounceMs`: save debounce delay.
+- `atomicProofStackVisualizer.autoRunOnSave.showStatus`: show status bar
+  feedback.
+- `atomicProofStackVisualizer.autoRunOnSave.restartLiveDebug`: restart live VM
+  sessions when auto mode is `live`.
 
 Path settings support `${workspaceFolder}`, `${file}`, `${fileDirname}`,
 `${fileBasenameNoExtension}`, and `${home}`.

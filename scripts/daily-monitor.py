@@ -152,7 +152,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--sample-arg",
         action="append",
-        default=["--asa"],
+        default=None,
         help="Argument passed before the sample contract. Repeat for multiple arguments.",
     )
     parser.add_argument(
@@ -176,7 +176,10 @@ def parse_args() -> argparse.Namespace:
         default=os.environ.get("GITHUB_REPOSITORY", ""),
         help="owner/repo name for GitHub API calls.",
     )
-    return parser.parse_args()
+    args = parser.parse_args()
+    if args.sample_arg is None:
+        args.sample_arg = ["--asa", "compile"]
+    return args
 
 
 def resolve_under_repo(repo_root: pathlib.Path, path: pathlib.Path) -> pathlib.Path:
@@ -538,6 +541,27 @@ def command_line(command: list[str]) -> str:
     return " ".join(command)
 
 
+def print_failure_summary(build: dict[str, Any]) -> None:
+    failures = [
+        result
+        for result in build.get("commands", [])
+        if result.get("returncode", 0) != 0
+    ]
+    if not failures:
+        return
+
+    print("Daily monitor failed because command(s) returned non-zero:", file=sys.stderr)
+    for result in failures:
+        print(
+            f"- {result['name']}: exit {result['returncode']} "
+            f"({command_line(result['command'])})",
+            file=sys.stderr,
+        )
+        output = result.get("stderr_tail") or result.get("stdout_tail")
+        if output:
+            print(tail(output, 20), file=sys.stderr)
+
+
 def render_report(data: dict[str, Any]) -> str:
     lines: list[str] = []
     lines.append("# AtomicProofCompiler Daily Monitoring")
@@ -745,6 +769,9 @@ def main() -> int:
 
     print(f"Wrote markdown report: {args.output}")
     print(f"Wrote JSON report: {args.json_output}")
+    if hard_fail:
+        sys.stdout.flush()
+        print_failure_summary(build)
     return 1 if hard_fail else 0
 
 
