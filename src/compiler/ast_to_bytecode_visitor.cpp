@@ -194,6 +194,20 @@ void ASTToBytecodeVisitor::visit(BlockNode& node)
     for (auto it : symbolTable.m_newSymbol) {
         LOG_DEBUG(it, " is new symbol");
         newSymbol += " " + it;
+
+        // push 只表示当前块出现了新栈槽，不代表变量在当前块声明。
+        // 外层变量重新绑定后也会产生新栈槽；它必须跨越当前块继续存活。
+        std::string lookupName = it;
+        if (symbolTable.symbolExists(lookupName) &&
+            !symbolTable.isDeclaredInCurrentScope(it)) {
+            LOG_DEBUG(
+                it,
+                " is an outer-scope symbol rebound in the current scope; "
+                "skip cleanup"
+            );
+            continue;
+        }
+
         bool isKeepSymtabFlag = false;
         for (auto keepIt : symbolTable.m_keepSymbol) {
             if (keepIt == it) {

@@ -256,6 +256,7 @@ bool SymbolTable::defineSymbol(
     }
 
     m_currentScope.emplace_back(name, SymbolInfo{name, type, modifiers});
+    m_declaredSymbols.push_back(name);
     return true;
 }
 
@@ -271,6 +272,12 @@ bool SymbolTable::symbolExists(std::string& name) const
     return it != m_currentScope.rend();
 }
 
+bool SymbolTable::isDeclaredInCurrentScope(const std::string& name) const
+{
+    return std::find(m_declaredSymbols.begin(), m_declaredSymbols.end(), name) !=
+           m_declaredSymbols.end();
+}
+
 void SymbolTable::removeSymbol(const std::string& name)
 {
     auto scopeIt = std::find_if(
@@ -283,6 +290,10 @@ void SymbolTable::removeSymbol(const std::string& name)
     if (scopeIt != m_currentScope.end()) {
         m_currentScope.erase(scopeIt);
     }
+    m_declaredSymbols.erase(
+        std::remove(m_declaredSymbols.begin(), m_declaredSymbols.end(), name),
+        m_declaredSymbols.end()
+    );
 }
 
 std::vector<SymbolInfo> SymbolTable::getCurrentScopeSymbols() const
@@ -358,6 +369,7 @@ bool SymbolTable::defineArray(
     ArrayInfo arrayInfo(name, elementType, size, isFixedSize);
     SymbolInfo arraySymbol(arrayInfo);
     m_currentScope.emplace_back(name, arraySymbol);
+    m_declaredSymbols.push_back(name);
 
     return true;
 }
@@ -788,6 +800,7 @@ bool SymbolTable::defineCompoundType(const CompoundTypeInfo& compoundInfo)
 
     SymbolInfo symbolInfo(compoundInfo);
     m_currentScope.emplace_back(name, symbolInfo);
+    m_declaredSymbols.push_back(name);
 
     LOG_DEBUG(
         "Defined compound type: ",
@@ -888,6 +901,33 @@ static void renameOrAppendInList(
     }
 }
 
+// 声明归属只在原符号确属当前作用域时迁移，不能因栈槽重命名凭空新增。
+static void renameExistingInList(
+    std::vector<std::string>& list,
+    const std::string& oldName,
+    const std::string& newName
+)
+{
+    if (oldName == newName) {
+        return;
+    }
+
+    const bool alreadyHasNew =
+        std::find(list.begin(), list.end(), newName) != list.end();
+    for (auto it = list.begin(); it != list.end();) {
+        if (*it != oldName) {
+            ++it;
+            continue;
+        }
+        if (alreadyHasNew) {
+            it = list.erase(it);
+        } else {
+            *it = newName;
+            ++it;
+        }
+    }
+}
+
 // 身份转移前清除作用域中目标键的"骨架"条目, 避免重命名后键重复
 // (如 Struct_T a 声明时预创建的空 a.fi 条目)
 static void eraseScopeEntriesByKey(
@@ -947,6 +987,7 @@ bool SymbolTable::renameSymbolEntry(
     it->first = newName;
     it->second.m_stackElement.setName(newName);
     renameOrAppendInList(m_newSymbol, oldName, newName);
+    renameExistingInList(m_declaredSymbols, oldName, newName);
     if (m_stackPtr) {
         m_stackPtr->rename(oldName, newName);
     }
@@ -997,6 +1038,7 @@ bool SymbolTable::renameArraySymbol(
     it->first = newName;
     it->second.m_stackElement.setName(newName);
     renameOrAppendInList(m_newSymbol, oldName, newName);
+    renameExistingInList(m_declaredSymbols, oldName, newName);
     return true;
 }
 
@@ -1022,6 +1064,7 @@ bool SymbolTable::renameCompoundSymbol(
     it->first = newName;
     it->second.m_stackElement.setName(newName);
     renameOrAppendInList(m_newSymbol, oldName, newName);
+    renameExistingInList(m_declaredSymbols, oldName, newName);
 
     // 同步栈上的占位槽
     if (m_stackPtr) {
@@ -1079,6 +1122,14 @@ void SymbolTable::renameEntriesByPrefix(
 
     // 3) m_newSymbol 中的前缀匹配项同步
     for (auto& s : m_newSymbol) {
+        if (s.size() >= oldPrefix.size() &&
+            s.compare(0, oldPrefix.size(), oldPrefix) == 0) {
+            s = newPrefix + s.substr(oldPrefix.size());
+        }
+    }
+
+    // 4) 当前作用域声明归属同步迁移。
+    for (auto& s : m_declaredSymbols) {
         if (s.size() >= oldPrefix.size() &&
             s.compare(0, oldPrefix.size(), oldPrefix) == 0) {
             s = newPrefix + s.substr(oldPrefix.size());

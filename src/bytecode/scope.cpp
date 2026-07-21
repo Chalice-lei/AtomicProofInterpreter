@@ -170,6 +170,7 @@ void Scope::clean()
 void Scope::enterScope()
 {
     m_currentSymtab.m_newSymbol.clear();
+    m_currentSymtab.m_declaredSymbols.clear();
     m_symtabScopes.push(m_currentSymtab);
     LOG_DEBUG("Enter scope, symtabScopes size:", m_symtabScopes.size());
 }

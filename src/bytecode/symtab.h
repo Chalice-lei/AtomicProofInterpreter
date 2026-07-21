@@ -234,7 +234,9 @@ public:
     };
 
     SymbolTable(const SymbolTable& other)
-        : m_newSymbol(other.m_newSymbol), m_keepSymbol(other.m_keepSymbol),
+        : m_newSymbol(other.m_newSymbol),
+          m_declaredSymbols(other.m_declaredSymbols),
+          m_keepSymbol(other.m_keepSymbol),
           m_bindSymbol(other.m_bindSymbol), m_currentScope(other.m_currentScope)
     {
         // 主栈深拷贝
@@ -267,6 +269,7 @@ public:
         }
 
         m_newSymbol = other.m_newSymbol;
+        m_declaredSymbols = other.m_declaredSymbols;
         m_keepSymbol = other.m_keepSymbol;
         m_bindSymbol = other.m_bindSymbol;
         m_currentScope = other.m_currentScope;
@@ -345,6 +348,7 @@ public:
         std::string modifiers = ""
     );
     bool symbolExists(std::string& name) const;
+    bool isDeclaredInCurrentScope(const std::string& name) const;
 
     void removeSymbol(const std::string& name);
 
@@ -506,8 +510,10 @@ public:
     // 副栈: 所有 SymbolTable 共享 (通过 getSharedAltStack)
     std::shared_ptr<tbc::OpStack>& m_altStackPtr = s_sharedAltStackPtr;
     std::shared_ptr<tbc::OpStack> m_fixedStackPtr{nullptr};
-    // 当前作用域内新增的符号
+    // 当前作用域内新压入的栈槽（包括变量值和表达式临时值）
     std::vector<std::string> m_newSymbol;
+    // 当前作用域内通过声明或隐式声明新增的语义符号
+    std::vector<std::string> m_declaredSymbols;
     // keep 标记的返回符号
     std::vector<std::string> m_keepSymbol;
     // 形参 -> 实参绑定
