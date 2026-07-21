@@ -13,6 +13,7 @@
 /*.debug
 /*.ct
 /AGENTS.md
+/slides/
 /dist/
 /releases/
 /tools/vscode_stack_visualizer/node_modules/
