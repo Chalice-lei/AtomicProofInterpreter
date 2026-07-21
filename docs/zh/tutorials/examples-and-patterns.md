@@ -22,7 +22,7 @@
 推荐做法是直接编译单个文件：
 
 ```bash
-./utxo_interpreter test/test_basic_statement/test_operator/test_operator_add/operator_add_two_operands.ct
+./utxo_Interpreter test/test_basic_statement/test_operator/test_operator_add/operator_add_two_operands.ct
 ```
 
 这些示例的价值在于“短”：当你不确定某个语法是否被当前编译器支持时，先找对应最小例子，再迁移到自己的合约中。

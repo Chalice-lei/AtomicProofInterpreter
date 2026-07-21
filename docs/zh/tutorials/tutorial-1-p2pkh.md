@@ -87,7 +87,7 @@ pubKeyCopy = pubKey.Clone()
 ## 第三步：编译合约
 
 ```bash
-./utxo_interpreter p2pkh.ct
+./utxo_Interpreter p2pkh.ct
 ```
 
 编译成功后会输出 JSON 结果，其中应包含：
@@ -104,7 +104,7 @@ pubKeyCopy = pubKey.Clone()
 ## 第四步：进入调试器验证
 
 ```bash
-./utxo_interpreter p2pkh.ct --debug
+./utxo_Interpreter p2pkh.ct --debug
 ```
 
 运行后输入参数（示例）：

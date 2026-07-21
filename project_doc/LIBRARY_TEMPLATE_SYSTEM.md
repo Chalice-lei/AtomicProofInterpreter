@@ -243,7 +243,7 @@ Library my.lib:
 
 ```bash
 # 指定 stdlib 路径
-APC_STDLIB_PATH=$(pwd)/stdlib ./build/bin/utxo_interpreter my_contract.ct
+APC_STDLIB_PATH=$(pwd)/stdlib ./build/bin/utxo_Interpreter my_contract.ct
 
 # 或在 user_preferences.json 中配置
 {
@@ -261,7 +261,7 @@ APC_STDLIB_PATH=$(pwd)/stdlib ./build/bin/utxo_interpreter my_contract.ct
 
 **编译 `test/wallet.ct`：**
 ```bash
-APC_STDLIB_PATH=$(pwd)/stdlib ./build/bin/utxo_interpreter test/wallet.ct
+APC_STDLIB_PATH=$(pwd)/stdlib ./build/bin/utxo_Interpreter test/wallet.ct
 ```
 
 产出 `wallet.json`：

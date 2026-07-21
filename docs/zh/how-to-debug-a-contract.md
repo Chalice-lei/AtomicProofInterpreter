@@ -10,10 +10,10 @@ UTXO_Compiler 内置了一个交互式命令行调试器，在本地 BVM 模拟�
 
 ```bash
 # 基本启动
-./utxo_interpreter my_contract.ct --debug
+./utxo_Interpreter my_contract.ct --debug
 
 # 合约用到了子作用域副栈操作（--asa 模式）
-./utxo_interpreter my_contract.ct --debug --asa
+./utxo_Interpreter my_contract.ct --debug --asa
 ```
 
 启动调试器后先要选择语言：
@@ -135,7 +135,7 @@ UTXO_Compiler 内置了一个交互式命令行调试器，在本地 BVM 模拟�
 如果只需要生成调试信息文件用于其他工具，使用 `-d` 标志：
 
 ```bash
-./utxo_interpreter my_contract.ct -d
+./utxo_Interpreter my_contract.ct -d
 ```
 
 调试信息包含源码行号到字节码偏移的映射，以及函数符号表，供第三方工具分析。

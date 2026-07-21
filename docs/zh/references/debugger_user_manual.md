@@ -26,7 +26,7 @@
 ### 2.1 命令行
 
 ```bash
-./utxo_interpreter <源文件.ct> --debug
+./utxo_Interpreter <源文件.ct> --debug
 ```
 
 可选参数（与正常编译一致）：
@@ -40,8 +40,8 @@
 示例：
 
 ```bash
-./utxo_interpreter contract.ct --debug
-./utxo_interpreter contract.ct --debug --asa
+./utxo_Interpreter contract.ct --debug
+./utxo_Interpreter contract.ct --debug --asa
 ```
 
 ### 2.2 启动流程

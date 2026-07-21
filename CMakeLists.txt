@@ -107,8 +107,8 @@ project(utxo_interpreter
     LANGUAGES CXX
 )
 
-# 使用项目名作为编译产物名，CMake会自动处理平台特定的扩展名
-set(EXECUTABLE_NAME "${PROJECT_NAME}")
+# 可执行文件使用对外名称，CMake 会自动处理平台特定的扩展名
+set(EXECUTABLE_NAME "utxo_Interpreter")
 
 # C++ 标准和编译器配置
 set(CMAKE_CXX_STANDARD 20)

@@ -22,7 +22,7 @@ The small examples under `test/` are useful when you want to confirm one languag
 Compile a single file when checking a feature:
 
 ```bash
-./utxo_interpreter test/test_basic_statement/test_operator/test_operator_add/operator_add_two_operands.ct
+./utxo_Interpreter test/test_basic_statement/test_operator/test_operator_add/operator_add_two_operands.ct
 ```
 
 ---

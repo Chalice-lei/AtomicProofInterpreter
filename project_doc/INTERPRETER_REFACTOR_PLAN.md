@@ -1213,8 +1213,8 @@ AST interpreter 如果直接拿 ParserPass 的 AST，import 的库函数仍在 `
 
 ```bash
 cmake --build build
-./build/bin/utxo_interpreter test/contract_file/counter.ct
-./build/bin/utxo_interpreter test/beginner's_tutorial_on_compiler/p2pkh.ct
+./build/bin/utxo_Interpreter test/contract_file/counter.ct
+./build/bin/utxo_Interpreter test/beginner's_tutorial_on_compiler/p2pkh.ct
 ```
 
 检查:

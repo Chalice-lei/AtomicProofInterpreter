@@ -3,7 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 REPO_ROOT=$(cd "$SCRIPT_DIR/../.." && pwd)
-COMPILER=${APC_COMPILER:-"$REPO_ROOT/build/bin/utxo_interpreter"}
+COMPILER=${APC_COMPILER:-"$REPO_ROOT/build/bin/utxo_Interpreter"}
 
 if [[ ! -x "$COMPILER" ]]; then
     echo "Compiler not found or not executable: $COMPILER" >&2
@@ -150,6 +150,87 @@ assert any(move.get("from") == "main" and move.get("to") == "alt" for move in mo
 assert any(move.get("from") == "alt" and move.get("to") == "main" for move in moves), (
     "trace should distinguish alt -> main movement"
 )
+PY
+
+python3 - "$COMPILER" "$SCRIPT_DIR/debug_stack_visualizer_alt.ct" <<'PY'
+import json
+import subprocess
+import sys
+
+compiler = sys.argv[1]
+fixture = sys.argv[2]
+
+proc = subprocess.Popen(
+    [compiler, "debug-server", fixture, "test_alt_roundtrip", "5"],
+    stdin=subprocess.PIPE,
+    stdout=subprocess.PIPE,
+    stderr=subprocess.PIPE,
+    text=True,
+)
+
+def read_message():
+    line = proc.stdout.readline()
+    assert line, "live debug server closed stdout unexpectedly"
+    return json.loads(line)
+
+def send(seq, command, **extra):
+    request = {"seq": seq, "command": command}
+    request.update(extra)
+    proc.stdin.write(json.dumps(request) + "\n")
+    proc.stdin.flush()
+
+ready = read_message()
+assert ready["type"] == "event" and ready["event"] == "ready"
+
+send(1, "stepIn")
+step_response = read_message()
+assert step_response["type"] == "response" and step_response["success"]
+snapshot = step_response["body"]["snapshot"]
+assert snapshot["pc"] == 1, snapshot
+assert snapshot["opcode"] == "02", snapshot
+assert snapshot["operand"] == "9600", snapshot
+assert [item["pc"] for item in snapshot["lineInstructions"]] == [1], snapshot
+assert snapshot["lineInstructionSummary"] == "pc 1*: 02 9600", snapshot
+read_message()
+
+send(2, "variables", scope="instruction")
+variables_response = read_message()
+assert variables_response["type"] == "response" and variables_response["success"]
+variables = {
+    item["name"]: item["value"]
+    for item in variables_response["body"]["variables"]
+}
+assert variables["opcode"] == "pc 1*: 02 9600", variables
+assert variables["currentOpcode"] == "02", variables
+assert variables["operand"] == "9600", variables
+assert variables["instructions"] == "pc 1*: 02 9600", variables
+
+send(3, "stepIn")
+line_response = read_message()
+assert line_response["type"] == "response" and line_response["success"]
+line_snapshot = line_response["body"]["snapshot"]
+assert line_snapshot["pc"] == 2, line_snapshot
+assert [item["pc"] for item in line_snapshot["lineInstructions"]] == [2, 3, 4], line_snapshot
+assert "pc 2*:" in line_snapshot["lineInstructionSummary"], line_snapshot
+assert "pc 3:" in line_snapshot["lineInstructionSummary"], line_snapshot
+assert "pc 4:" in line_snapshot["lineInstructionSummary"], line_snapshot
+read_message()
+
+send(4, "variables", scope="instruction")
+line_variables_response = read_message()
+assert line_variables_response["type"] == "response" and line_variables_response["success"]
+line_variables = {
+    item["name"]: item["value"]
+    for item in line_variables_response["body"]["variables"]
+}
+assert line_variables["instructions"] == line_snapshot["lineInstructionSummary"], line_variables
+assert line_variables["opcode"] == line_snapshot["lineInstructionSummary"], line_variables
+assert line_variables["currentOpcode"] == line_snapshot["opcode"], line_variables
+
+proc.stdin.close()
+stderr = proc.stderr.read()
+return_code = proc.wait(timeout=10)
+assert return_code == 0, stderr
 PY
 
 echo "Debugger regression checks passed."

@@ -1,6 +1,6 @@
 # 字节码生成优化机会分析
 
-> 本文档对 AtomicProof Compiler（`apc` / `utxo_interpreter`）当前字节码生成路径做一次机会盘点，目的是为"进一步减少生成字节码量"提供可落地的改进清单。文档**不含基准数据**（待后续 benchmark 补充），也**不是任何单一 PR 的实施文档**，而是供团队/后续 Contributor 取用的参考。
+> 本文档对 AtomicProof Compiler（`apc` / `UTXO_Interpreter`）当前字节码生成路径做一次机会盘点，目的是为"进一步减少生成字节码量"提供可落地的改进清单。文档**不含基准数据**（待后续 benchmark 补充），也**不是任何单一 PR 的实施文档**，而是供团队/后续 Contributor 取用的参考。
 
 ---
 

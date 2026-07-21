@@ -445,8 +445,8 @@ x86_64-w64-mingw32-objdump -p /usr/lib/gcc/x86_64-w64-mingw32/13-win32/libgcc_s_
 **解决方案：**
 在CMakeLists.txt中，让CMake自动处理扩展名：
 ```cmake
-# ✅ 正确做法 - 让CMake自动添加.exe
-set(EXECUTABLE_NAME "${PROJECT_NAME}")
+# ✅ 正确做法 - 指定基础名称，让 CMake 自动添加 .exe
+set(EXECUTABLE_NAME "utxo_Interpreter")
 
 # ❌ 错误做法 - 手动添加.exe会导致双重扩展名
 # if(WIN32)
@@ -592,4 +592,4 @@ make VERBOSE=1
 
 **无需Windows机器，无需复杂配置！** 🎉
 
-有任何问题请查看故障排除部分或提交Issue。 
+有任何问题请查看故障排除部分或提交Issue。

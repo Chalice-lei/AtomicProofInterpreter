@@ -69,7 +69,7 @@ Rules of thumb:
 ## Step 3: Compile the Contract
 
 ```bash
-./utxo_interpreter p2pkh.ct
+./utxo_Interpreter p2pkh.ct
 ```
 
 After successful compilation, the JSON output should include:
@@ -83,7 +83,7 @@ After successful compilation, the JSON output should include:
 ## Step 4: Enter the Debugger to Verify
 
 ```bash
-./utxo_interpreter p2pkh.ct --debug
+./utxo_Interpreter p2pkh.ct --debug
 ```
 
 After running, input parameters (example):

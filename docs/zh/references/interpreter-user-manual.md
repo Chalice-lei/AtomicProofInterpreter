@@ -1,6 +1,6 @@
 # AtomicProof 解释器使用说明
 
-本文说明 `utxo_interpreter` 的日常使用方式，覆盖编译、REPL、AST 解释器、字节码运行器、参数注入、交易上下文文件和调试入口。
+本文说明 `utxo_Interpreter` 的日常使用方式，覆盖编译、REPL、AST 解释器、字节码运行器、参数注入、交易上下文文件和调试入口。
 
 ---
 
@@ -11,58 +11,58 @@
 ```bash
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
 cmake --build build -j
-./build/bin/utxo_interpreter --version
+./build/bin/utxo_Interpreter --version
 ```
 
 编译 `.ct` 合约并生成 JSON：
 
 ```bash
-./build/bin/utxo_interpreter -l none test/interpreter/ast_minimal_return.ct
+./build/bin/utxo_Interpreter -l none test/interpreter/ast_minimal_return.ct
 ```
 
 直接用 AST 解释器运行函数：
 
 ```bash
-./build/bin/utxo_interpreter -l none test/interpreter/ast_minimal_return.ct \
+./build/bin/utxo_Interpreter -l none test/interpreter/ast_minimal_return.ct \
   --run-ast --function main --arg 41
 ```
 
 编译后用字节码运行器执行函数：
 
 ```bash
-./build/bin/utxo_interpreter -l none test/interpreter/ast_minimal_return.ct \
+./build/bin/utxo_Interpreter -l none test/interpreter/ast_minimal_return.ct \
   --run-bytecode --function main --arg 41
 ```
 
 进入交互式 Shell：
 
 ```bash
-./build/bin/utxo_interpreter --shell
+./build/bin/utxo_Interpreter --shell
 ```
 
 ---
 
 ## 1. 准备可执行文件
 
-从源码构建后，可执行文件默认位于 `build/bin/utxo_interpreter`：
+从源码构建后，可执行文件默认位于 `build/bin/utxo_Interpreter`：
 
 ```bash
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
 cmake --build build -j
 
-./build/bin/utxo_interpreter --version
+./build/bin/utxo_Interpreter --version
 ```
 
 基本命令格式：
 
 ```bash
-utxo_interpreter [options] filename.ct
+utxo_Interpreter [options] filename.ct
 ```
 
 输入文件必须是 `.ct` 合约文件。下面的示例都假设在项目根目录运行：
 
 ```bash
-./build/bin/utxo_interpreter ...
+./build/bin/utxo_Interpreter ...
 ```
 
 如果当前是 Debug 构建，默认日志可能比较详细；需要安静输出时加 `-l warning`、`-l error` 或 `-l none`。
@@ -73,12 +73,12 @@ utxo_interpreter [options] filename.ct
 
 | 模式 | 命令 | 用途 |
 |------|------|------|
-| 只编译 | `utxo_interpreter contract.ct` | 生成锁定脚本 JSON，不执行 |
+| 只编译 | `utxo_Interpreter contract.ct` | 生成锁定脚本 JSON，不执行 |
 | 交互式 Shell | `--repl` / `--shell` | 进入解释器 REPL，直接输入表达式、语句或函数定义 |
 | AST 解释 | `--run-ast` / `--interpret-ast` | 直接解释 AST 子集，适合快速验证函数返回值 |
 | 字节码运行 | `--run-bytecode` / `--run` | 编译后在 BVM 模拟器中非交互式执行 |
 | 交互式调试 | `--debug` | 进入 CLI 调试器，支持断点和单步 |
-| 自测 | `--runtime-self-test`、`--ast-self-test` | 运行解释器内置自测 |
+| 开发者诊断 | `test runtime`、`test ast` | 运行解释器内置自测；用于 CI 和实现检查 |
 
 `--debug`、`--run-bytecode`、`--run-ast` 三种执行入口互斥，一次只能选择一种。`--repl` / `--shell` 也不能和这些执行入口一起使用；它可以不带文件启动，也可以带一个 `.ct` 文件用于预加载函数和结构体定义。
 
@@ -102,15 +102,13 @@ utxo_interpreter [options] filename.ct
 | `--self <field=value>`、`--self=<field=value>` | AST | 设置合约实例字段 `self.<field>` |
 | `--bvm <field=value>`、`--bvm=<field=value>` | AST | 设置运行时 `BVM.<field>` 字段或模拟签名结果 |
 | `--txfile <file>`、`--txfile=<file>` | AST / 字节码 | 读取交易上下文；AST 模式还可读取 `self` 和函数参数 |
-| `--runtime-self-test` | 自测 | 运行解释器运行时自测 |
-| `--ast-self-test` | 自测 | 运行 AST 解释器自测 |
 
 ---
 
 ## 3. 只编译合约
 
 ```bash
-./build/bin/utxo_interpreter -l none test/interpreter/ast_minimal_return.ct
+./build/bin/utxo_Interpreter -l none test/interpreter/ast_minimal_return.ct
 ```
 
 成功后会在当前工作目录生成同名 JSON，例如 `ast_minimal_return.json`。主要字段包括：
@@ -127,7 +125,7 @@ utxo_interpreter [options] filename.ct
 生成调试信息但不进入调试器：
 
 ```bash
-./build/bin/utxo_interpreter -l none test/interpreter/ast_minimal_return.ct \
+./build/bin/utxo_Interpreter -l none test/interpreter/ast_minimal_return.ct \
   --debug-output /tmp/ast_minimal_return.debug
 ```
 
@@ -136,7 +134,7 @@ utxo_interpreter [options] filename.ct
 如果合约需要在 `if/else`、私有函数等子作用域中使用 `SetAlt` / `SetMain`，编译或运行时加上 `--asa`：
 
 ```bash
-./build/bin/utxo_interpreter -l none --asa contract.ct
+./build/bin/utxo_Interpreter -l none --asa contract.ct
 ```
 
 ---
@@ -148,7 +146,7 @@ AST 解释器不走 BVM 字节码执行，而是直接解释已解析的 AST。�
 ### 4.1 运行单个函数
 
 ```bash
-./build/bin/utxo_interpreter test/interpreter/ast_minimal_return.ct \
+./build/bin/utxo_Interpreter test/interpreter/ast_minimal_return.ct \
   --run-ast --function main --arg 41
 ```
 
@@ -195,7 +193,7 @@ Error: <none>
 `--param` 用 `字段路径=值` 的方式设置函数参数，适合结构体和数组：
 
 ```bash
-./build/bin/utxo_interpreter test/interpreter/ast_tx_context.ct \
+./build/bin/utxo_Interpreter test/interpreter/ast_tx_context.ct \
   --run-ast \
   --function main \
   --bvm unlockingInput=0x010203 \
@@ -235,7 +233,7 @@ AST 模式下，`CheckSig`、`CheckSigVerify`、`MultiSig`、`MultiSigVerify` �
 `--function` 可以传入逗号分隔的函数名：
 
 ```bash
-./build/bin/utxo_interpreter contract.ct \
+./build/bin/utxo_Interpreter contract.ct \
   --run-ast --function setup,verify
 ```
 
@@ -248,7 +246,7 @@ AST 模式下，`CheckSig`、`CheckSigVerify`、`MultiSig`、`MultiSigVerify` �
 字节码运行器会先编译合约，再在 BVM 模拟器中非交互式运行选定函数。
 
 ```bash
-./build/bin/utxo_interpreter test/interpreter/ast_minimal_return.ct \
+./build/bin/utxo_Interpreter test/interpreter/ast_minimal_return.ct \
   --run-bytecode --function main --arg 41
 ```
 
@@ -325,7 +323,7 @@ param.pretx.Outputs[1].Value=0x2a000000
 运行示例：
 
 ```bash
-./build/bin/utxo_interpreter test/interpreter/ast_tx_context.ct \
+./build/bin/utxo_Interpreter test/interpreter/ast_tx_context.ct \
   --run-ast --function main --txfile test/interpreter/ast_tx_context.txt
 ```
 
@@ -381,13 +379,13 @@ JSON 还可以使用 `currenttx` / `currentTx` / `ctx`、`pretx` / `preTx` / `pr
 启动 REPL：
 
 ```bash
-./build/bin/utxo_interpreter --shell
+./build/bin/utxo_Interpreter --shell
 ```
 
 也可以启动时预加载一个合约文件中的函数和结构体：
 
 ```bash
-./build/bin/utxo_interpreter test/interpreter/ast_minimal_return.ct --shell
+./build/bin/utxo_Interpreter test/interpreter/ast_minimal_return.ct --shell
 ```
 
 REPL 启动后会出现 `In [1]:` 提示符，可以直接输入表达式或语句：
@@ -417,7 +415,7 @@ Out[1]: 3
 下面的示例从空 Shell 启动，依次演示表达式求值、变量赋值、函数定义、函数调用、查看当前名称和查看历史记录。函数块输入完成后需要追加一个空行：
 
 ```bash
-./build/bin/utxo_interpreter --shell -l none <<'EOF'
+./build/bin/utxo_Interpreter --shell -l none <<'EOF'
 1 + 2
 x = 5
 x + 7
@@ -452,7 +450,7 @@ Bye.
 `%run` 和 `%load` 可以把 `.ct` 文件里的合约函数和结构体加载到当前会话。加载后可以直接调用其中的函数：
 
 ```bash
-./build/bin/utxo_interpreter --shell -l none <<'EOF'
+./build/bin/utxo_Interpreter --shell -l none <<'EOF'
 %run test/repl/repl_load.ct
 double(4)
 exit
@@ -472,7 +470,7 @@ Bye.
 也可以把 `.ct` 文件放在命令行中，让 Shell 启动时自动加载：
 
 ```bash
-./build/bin/utxo_interpreter test/repl/repl_load.ct --shell -l none <<'EOF'
+./build/bin/utxo_Interpreter test/repl/repl_load.ct --shell -l none <<'EOF'
 double(6)
 exit
 EOF
@@ -530,7 +528,7 @@ Contract ShellEscrowDemo:
 在 Shell 中加载并调用：
 
 ```bash
-./build/bin/utxo_interpreter examples/interpreter_usage/shell_contract.ct --shell -l none <<'EOF'
+./build/bin/utxo_Interpreter examples/interpreter_usage/shell_contract.ct --shell -l none <<'EOF'
 %who
 quote(100, 3, 5, true)
 canUnlock(275, 275)
@@ -559,25 +557,27 @@ Bye.
 进入调试器：
 
 ```bash
-./build/bin/utxo_interpreter contract.ct --debug
+./build/bin/utxo_Interpreter contract.ct --debug
 ```
 
 调试器会先编译源码，然后进入 REPL。可用命令包括 `break`、`run`、`step`、`next`、`stack`、`bytecode`、`settxfile`、`showtx` 等。完整说明见 [调试器用户使用手册](./debugger_user_manual.md)。
 
 ---
 
-## 9. 内置自测
+## 9. 开发者诊断自测
+
+这两个入口用于 CI 和解释器实现检查，不用于测试用户自己的 `.ct` 合约；日常验证合约请使用 `ast`、`run` 或调试器入口。
 
 运行解释器运行时自测：
 
 ```bash
-./build/bin/utxo_interpreter --runtime-self-test
+./build/bin/utxo_Interpreter test runtime
 ```
 
 运行 AST 解释器自测：
 
 ```bash
-./build/bin/utxo_interpreter --ast-self-test
+./build/bin/utxo_Interpreter test ast
 ```
 
 这两个命令不需要传入 `.ct` 文件。
@@ -626,7 +626,7 @@ export APC_STDLIB_PATH=/path/to/AtomicProofInterpreter/stdlib
 使用日志级别参数：
 
 ```bash
-./build/bin/utxo_interpreter -l none contract.ct --run-ast --function main
+./build/bin/utxo_Interpreter -l none contract.ct --run-ast --function main
 ```
 
 ---

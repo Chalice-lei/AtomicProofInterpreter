@@ -8,13 +8,13 @@
 
 ### 1. 这个项目是做什么的？
 
-这个项目是一个 C++ 编写的 UTXO 智能合约编译器，可执行产物名在 `CMakeLists.txt` 中是 `utxo_interpreter`。
+这个项目是一个 C++ 编写的 UTXO 智能合约编译器，可执行产物名在 `CMakeLists.txt` 中是 `utxo_Interpreter`。
 
 它把一种扩展名为 `.ct` 的高级合约语言编译成 Bitcoin Script / BVM 可执行的脚本字节码，并导出 JSON 文件。合约语言风格接近 Python，支持 `Contract`、`Library`、`Struct`、函数、变量声明、条件、循环、内置函数和导入标准库。
 
 关键证据：
 
-- `CMakeLists.txt`：定义项目构建，C++20，可执行文件输出到 `build/bin/utxo_interpreter`。
+- `CMakeLists.txt`：定义项目构建，C++20，可执行文件输出到 `build/bin/utxo_Interpreter`。
 - `main.cpp`：命令行入口，读取 `.ct` 文件，运行 Lexer、Parser、AST 转字节码、优化、导出结果等 Pass。
 - `docs/zh/overview.md`：说明编译流程是源代码到词法分析、语法分析、语义分析、字节码生成、JSON 输出。
 - `doc/GRAMMAR_SPECIFICATION.md`：描述 `.ct` 合约语言语法。
@@ -137,7 +137,7 @@ JSON 里主要包含：
 文件/目录：CMakeLists.txt
 作用：项目构建配置。
 为什么重要：定义 C++ 标准、可执行文件、源码列表、nlohmann/json 依赖、调试器开关、安装规则和编译宏。
-和其他模块的关系：把 main.cpp、src/ 下的编译器源码、可选 debugger 源码编译成 build/bin/utxo_interpreter。
+和其他模块的关系：把 main.cpp、src/ 下的编译器源码、可选 debugger 源码编译成 build/bin/utxo_Interpreter。
 ```
 
 ```text
@@ -158,7 +158,7 @@ JSON 里主要包含：
 文件/目录：wallet.ct、schnorr_demo.ct、test_*.ct
 作用：示例或测试用合约源文件。
 为什么重要：它们展示 .ct 语言的实际写法。
-和其他模块的关系：可以作为 utxo_interpreter 的输入，经过完整编译流程生成 JSON。
+和其他模块的关系：可以作为 utxo_Interpreter 的输入，经过完整编译流程生成 JSON。
 ```
 
 ### src/ 核心源码目录
@@ -330,7 +330,7 @@ JSON 里主要包含：
 文件/目录：test/compiler_regression/
 作用：编译器回归测试。
 为什么重要：它通过编译临时 .ct 用例验证成功、失败、错误信息等行为。
-和其他模块的关系：调用 build/bin/utxo_interpreter，覆盖 Lexer、Parser、PreAnalysis、Codegen、Export 等完整流程。
+和其他模块的关系：调用 build/bin/utxo_Interpreter，覆盖 Lexer、Parser、PreAnalysis、Codegen、Export 等完整流程。
 ```
 
 关键文件：
@@ -355,7 +355,7 @@ JSON 里主要包含：
 文件/目录：scripts/
 作用：跨平台构建、发布打包、快速发布。
 为什么重要：面向构建和交付。
-和其他模块的关系：调用 CMake 构建 utxo_interpreter，并把 bin 和 stdlib 打包。
+和其他模块的关系：调用 CMake 构建 utxo_Interpreter，并把 bin 和 stdlib 打包。
 ```
 
 ```text
@@ -394,7 +394,7 @@ cmake --build . -j
 构建产物通常是：
 
 ```text
-build/bin/utxo_interpreter
+build/bin/utxo_Interpreter
 ```
 
 ### 第 2 步：用户执行编译命令
@@ -402,26 +402,26 @@ build/bin/utxo_interpreter
 典型命令：
 
 ```bash
-./build/bin/utxo_interpreter test/contract_file/counter.ct
+./build/bin/utxo_Interpreter test/contract_file/counter.ct
 ```
 
 或者在 `build/` 目录内：
 
 ```bash
-./bin/utxo_interpreter ../test/contract_file/counter.ct
+./bin/utxo_Interpreter ../test/contract_file/counter.ct
 ```
 
 调试模式：
 
 ```bash
-./build/bin/utxo_interpreter --debug test/contract_file/counter.ct
+./build/bin/utxo_Interpreter --debug test/contract_file/counter.ct
 ```
 
 输出 debug 信息：
 
 ```bash
-./build/bin/utxo_interpreter -d test/contract_file/counter.ct
-./build/bin/utxo_interpreter --debug-output counter.debug.json test/contract_file/counter.ct
+./build/bin/utxo_Interpreter -d test/contract_file/counter.ct
+./build/bin/utxo_Interpreter --debug-output counter.debug.json test/contract_file/counter.ct
 ```
 
 ### 第 3 步：命令进入 main.cpp
@@ -508,7 +508,7 @@ source_code
 如果想在浏览器里看每条字节码执行前后的主栈和 altstack 变化，可以使用 `run` 子命令导出栈 trace：
 
 ```bash
-./build/bin/utxo_interpreter run test/debugger_regression/debug_stack_visualizer_alt.ct test_alt_roundtrip 5 --stack-trace-output stack_trace.json
+./build/bin/utxo_Interpreter run test/debugger_regression/debug_stack_visualizer_alt.ct test_alt_roundtrip 5 --stack-trace-output stack_trace.json
 ```
 
 生成的 `stack_trace.json` 包含：
@@ -537,7 +537,7 @@ AtomicProof: Visualize Active Stack Trace
 AtomicProof: Generate Stack Trace and Visualize
 ```
 
-让扩展调用 `build/bin/utxo_interpreter` 生成 trace 并自动打开 Webview。
+让扩展调用 `build/bin/utxo_Interpreter` 生成 trace 并自动打开 Webview。
 
 Webview 左侧显示源码并高亮当前行，中间显示当前 step / PC / 指令和完整 JSON，右侧用 Top 在上方的两个竖向栈展示 Main Stack 和 Alt Stack。Diff 模式会用绿色标出 push、红色标出 pop/drop、黄色或蓝色标出 main stack 和 altstack 之间的移动。
 
@@ -1671,7 +1671,7 @@ Contract DebugLineMappingBasic:
 命令：
 
 ```bash
-./build/bin/utxo_interpreter test/debugger_regression/debug_line_mapping_basic.ct
+./build/bin/utxo_Interpreter test/debugger_regression/debug_line_mapping_basic.ct
 ```
 
 核心输入：

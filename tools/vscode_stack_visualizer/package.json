@@ -145,7 +145,7 @@
 							},
 							"interpreterPath": {
 								"type": "string",
-								"description": "Path to utxo_interpreter. Defaults to the extension setting."
+								"description": "Path to utxo_Interpreter. Defaults to the extension setting."
 							}
 						}
 					}
@@ -246,7 +246,7 @@
 				"atomicProofStackVisualizer.interpreterPath": {
 					"type": "string",
 					"default": "",
-					"description": "Path to utxo_interpreter. Leave empty to use build/bin/utxo_interpreter inside the workspace. Supports ${workspaceFolder}, ${file}, ${fileDirname}, ${fileBasenameNoExtension}, and ${home}."
+					"description": "Path to utxo_Interpreter. Leave empty to use build/bin/utxo_Interpreter inside the workspace. Supports ${workspaceFolder}, ${file}, ${fileDirname}, ${fileBasenameNoExtension}, and ${home}."
 				},
 				"atomicProofStackVisualizer.traceOutputPath": {
 					"type": "string",

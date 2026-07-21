@@ -36,10 +36,10 @@ mkdir build && cd build
 cmake ..                        # Release by default
 cmake --build . -j              # Parallel build
 
-./bin/utxo_interpreter --version   # Sanity check
+./bin/utxo_Interpreter --version   # Sanity check
 ```
 
-After a successful build, the executable lives at `build/bin/utxo_interpreter`.
+After a successful build, the executable lives at `build/bin/utxo_Interpreter`.
 
 ### Common CMake options
 
@@ -62,7 +62,7 @@ cmake .. -DCMAKE_BUILD_TYPE=Debug
 cmake .. -DUSE_GITEE_MIRROR=ON
 ```
 
-Build logs are mirrored to `utxo_interpreter.log` for diagnosing CMake-stage issues.
+Build logs are mirrored to `utxo_Interpreter.log` for diagnosing CMake-stage issues.
 
 ### Cross-platform build script
 
@@ -79,7 +79,7 @@ If you don't intend to modify the compiler source, just download a release packa
 #### Linux Package Structure
 ```
 utxo_interpreter-v1.0.0-linux/
-├── utxo_interpreter        # Executable
+├── utxo_Interpreter        # Executable
 ├── doc/                 # Documentation directory
 ├── install.sh           # Installation script
 └── VERSION              # Version information
@@ -88,7 +88,7 @@ utxo_interpreter-v1.0.0-linux/
 #### Windows Package Structure
 ```
 utxo_interpreter-v1.0.0-windows-64/32/
-├── utxo_interpreter.exe    # Windows executable
+├── utxo_Interpreter.exe    # Windows executable
 ├── libstdc++-6.dll      # ✨ C++ standard library
 ├── libgcc_s_seh-1.dll   # ✨ GCC runtime library
 ├── libwinpthread-1.dll  # ✨ Multi-threading support library
@@ -109,10 +109,10 @@ utxo_interpreter-v1.0.0-windows-64/32/
 cd build
 
 # Print version (includes git commit hash)
-./bin/utxo_interpreter --version
+./bin/utxo_Interpreter --version
 
 # Compile a sample contract
-./bin/utxo_interpreter ../test/contract_file/counter.ct
+./bin/utxo_Interpreter ../test/contract_file/counter.ct
 ```
 
 A successful run produces a `counter.json` in the current directory containing the compiled bytecode and ABI.
@@ -121,10 +121,10 @@ A successful run produces a `counter.json` in the current directory containing t
 
 ```bash
 # Run directly
-./builds/linux/bin/utxo_interpreter --version
+./builds/linux/bin/utxo_Interpreter --version
 
 # Test compilation
-./builds/linux/bin/utxo_interpreter your-script.ct
+./builds/linux/bin/utxo_Interpreter your-script.ct
 ```
 
 ### Test the Windows release package (with Wine on Linux)
@@ -134,17 +134,17 @@ A successful run produces a `counter.json` in the current directory containing t
 sudo apt install wine
 
 # Test Windows 64-bit version
-wine ./builds/windows-64/bin/utxo_interpreter.exe --version
+wine ./builds/windows-64/bin/utxo_Interpreter.exe --version
 
 # Test Windows 32-bit version
-wine ./builds/windows-32/bin/utxo_interpreter.exe --version
+wine ./builds/windows-32/bin/utxo_Interpreter.exe --version
 ```
 
 ### Verify Windows Package Dependencies
 
 ```bash
 # Check DLL dependencies of the Windows executable
-x86_64-w64-mingw32-objdump -p builds/windows-64/bin/utxo_interpreter.exe | grep "DLL Name"
+x86_64-w64-mingw32-objdump -p builds/windows-64/bin/utxo_Interpreter.exe | grep "DLL Name"
 
 # Verify DLLs included in the package
 unzip -l dist/utxo_interpreter-v*-windows-64.zip | grep "\.dll"

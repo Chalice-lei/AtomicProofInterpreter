@@ -36,10 +36,10 @@ mkdir build && cd build
 cmake ..                        # 默认 Release 构建
 cmake --build . -j              # 多核并行编译
 
-./bin/utxo_interpreter --version   # 验证可执行文件
+./bin/utxo_Interpreter --version   # 验证可执行文件
 ```
 
-构建成功后，可执行文件位于 `build/bin/utxo_interpreter`。
+构建成功后，可执行文件位于 `build/bin/utxo_Interpreter`。
 
 ### 常用 CMake 选项
 
@@ -62,7 +62,7 @@ cmake .. -DCMAKE_BUILD_TYPE=Debug
 cmake .. -DUSE_GITEE_MIRROR=ON
 ```
 
-构建过程的日志会同时输出到 `utxo_interpreter.log`，方便排查 CMake 阶段的问题。
+构建过程的日志会同时输出到 `utxo_Interpreter.log`，方便排查 CMake 阶段的问题。
 
 ### 跨平台构建脚本
 
@@ -79,7 +79,7 @@ cmake .. -DUSE_GITEE_MIRROR=ON
 #### Linux 包结构
 ```
 utxo_interpreter-v1.0.0-linux/
-├── utxo_interpreter        # 可执行文件
+├── utxo_Interpreter        # 可执行文件
 ├── doc/                 # 文档目录
 ├── install.sh           # 安装脚本
 └── VERSION              # 版本信息
@@ -88,7 +88,7 @@ utxo_interpreter-v1.0.0-linux/
 #### Windows 包结构
 ```
 utxo_interpreter-v1.0.0-windows-64/32/
-├── utxo_interpreter.exe    # Windows可执行文件
+├── utxo_Interpreter.exe    # Windows可执行文件
 ├── libstdc++-6.dll      # ✨ C++标准库
 ├── libgcc_s_seh-1.dll   # ✨ GCC运行时库
 ├── libwinpthread-1.dll  # ✨ 多线程支持库
@@ -109,20 +109,20 @@ utxo_interpreter-v1.0.0-windows-64/32/
 cd build
 
 # 查看版本（含 Git 提交 hash）
-./bin/utxo_interpreter --version
+./bin/utxo_Interpreter --version
 
 # 编译一个示例合约
-./bin/utxo_interpreter ../test/contract_file/counter.ct
+./bin/utxo_Interpreter ../test/contract_file/counter.ct
 ```
 
 正常情况下你会在当前目录看到一个 `counter.json`，里面包含编译输出的字节码与 ABI。
 
 ### 常用命令行参数
 
-`utxo_interpreter` 的命令格式是：
+`utxo_Interpreter` 的命令格式是：
 
 ```bash
-utxo_interpreter [options] filename.ct
+utxo_Interpreter [options] filename.ct
 ```
 
 常用参数如下：
@@ -141,13 +141,13 @@ utxo_interpreter [options] filename.ct
 
 ```bash
 # 编译合约，输出 counter.json
-./bin/utxo_interpreter ../test/contract_file/counter.ct
+./bin/utxo_Interpreter ../test/contract_file/counter.ct
 
 # 输出详细日志，便于排查语义分析或字节码生成问题
-./bin/utxo_interpreter --log-level debug ../test/contract_file/counter.ct
+./bin/utxo_Interpreter --log-level debug ../test/contract_file/counter.ct
 
 # 进入交互式调试器
-./bin/utxo_interpreter --debug ../test/contract_file/counter.ct
+./bin/utxo_Interpreter --debug ../test/contract_file/counter.ct
 ```
 
 编译输出文件默认写入当前工作目录，文件名取自输入文件名。例如编译 `counter.ct` 会生成 `counter.json`。
@@ -156,10 +156,10 @@ utxo_interpreter [options] filename.ct
 
 ```bash
 # 直接运行
-./builds/linux/bin/utxo_interpreter --version
+./builds/linux/bin/utxo_Interpreter --version
 
 # 测试编译功能
-./builds/linux/bin/utxo_interpreter your-script.ct
+./builds/linux/bin/utxo_Interpreter your-script.ct
 ```
 
 ### 测试 Windows 版本（在 Linux 下用 Wine）
@@ -169,17 +169,17 @@ utxo_interpreter [options] filename.ct
 sudo apt install wine
 
 # 测试Windows 64位版本
-wine ./builds/windows-64/bin/utxo_interpreter.exe --version
+wine ./builds/windows-64/bin/utxo_Interpreter.exe --version
 
 # 测试Windows 32位版本
-wine ./builds/windows-32/bin/utxo_interpreter.exe --version
+wine ./builds/windows-32/bin/utxo_Interpreter.exe --version
 ```
 
 ### 验证 Windows 包依赖库
 
 ```bash
 # 检查 Windows 可执行文件依赖的 DLL
-x86_64-w64-mingw32-objdump -p builds/windows-64/bin/utxo_interpreter.exe | grep "DLL Name"
+x86_64-w64-mingw32-objdump -p builds/windows-64/bin/utxo_Interpreter.exe | grep "DLL Name"
 
 # 验证打包包含的 DLL
 unzip -l dist/utxo_interpreter-v*-windows-64.zip | grep "\.dll"

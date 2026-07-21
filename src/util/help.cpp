@@ -127,16 +127,10 @@ void showUsage(const char* programName)
 #ifdef ENABLE_DEBUGGER
     std::cout << "  debug <file.ct>               Start interactive debugger"
               << std::endl;
-    std::cout << "  debug-server <file.ct> [function] [args...]"
-              << "  Start JSONL live debug server" << std::endl;
 #endif
     std::cout << "  shell [file.ct]               Start the interactive shell"
               << std::endl;
     std::cout << "  compiler-repl                 Start the compiler REPL"
-              << std::endl;
-    std::cout << "  test runtime                  Run interpreter runtime self-test"
-              << std::endl;
-    std::cout << "  test ast                      Run minimal AST interpreter self-test"
               << std::endl;
     std::cout << std::endl;
 
@@ -168,8 +162,6 @@ void showUsage(const char* programName)
     std::cout << "  run:     --stack-trace-output <file>"
               << "  Write stack trace JSON for visualization"
               << std::endl;
-    std::cout << "  debug-server: --txfile <file>"
-              << "  Load transaction context" << std::endl;
 #endif
     std::cout << "  ast:     --txfile <file>      Load transaction context"
               << std::endl;
@@ -181,6 +173,16 @@ void showUsage(const char* programName)
               << std::endl;
     std::cout << "                                  Dot paths and array indexes are supported"
               << std::endl;
+    std::cout << std::endl;
+
+    std::cout << "Developer diagnostics:" << std::endl;
+    std::cout << "  test runtime                  Run interpreter runtime self-test"
+              << std::endl;
+    std::cout << "  test ast                      Run minimal AST interpreter self-test"
+              << std::endl;
+    std::cout << "                                  Intended for CI and implementation checks;"
+              << std::endl;
+    std::cout << "                                  no .ct file is required" << std::endl;
     std::cout << std::endl;
 
     std::cout << "Supported log levels:" << std::endl;
@@ -243,11 +245,6 @@ void showUsage(const char* programName)
         << "  " << programName
         << " debug code.ct                           # Start debugger"
         << std::endl;
-    std::cout
-        << "  " << programName
-        << " debug-server code.ct main 1"
-        << "  # Start JSONL live debug server"
-        << std::endl;
 #endif
     std::cout
         << "  " << programName
@@ -256,14 +253,6 @@ void showUsage(const char* programName)
     std::cout
         << "  " << programName
         << " compiler-repl                          # Start compiler REPL"
-        << std::endl;
-    std::cout
-        << "  " << programName
-        << " test runtime                            # Run runtime self-test"
-        << std::endl;
-    std::cout
-        << "  " << programName
-        << " test ast                                # Run AST self-test"
         << std::endl;
 }
 

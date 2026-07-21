@@ -1,6 +1,7 @@
 #include "live_debug_server.h"
 
 #include <algorithm>
+#include <cctype>
 #include <memory>
 #include <optional>
 #include <stdexcept>
@@ -31,6 +32,78 @@ namespace
 using nlohmann::json;
 using apc::util::trim;
 
+bool isHexString(const std::string& value)
+{
+    return !value.empty() &&
+           std::all_of(value.begin(), value.end(), [](unsigned char ch) {
+               return std::isxdigit(ch) != 0;
+           });
+}
+
+std::optional<std::pair<std::string, std::string>> parseCompactDirectPush(
+    const std::string& instruction
+)
+{
+    if (instruction.size() < 2 || instruction.size() % 2 != 0 ||
+        !isHexString(instruction)) {
+        return std::nullopt;
+    }
+
+    int length = 0;
+    try {
+        length = std::stoi(instruction.substr(0, 2), nullptr, 16);
+    } catch (...) {
+        return std::nullopt;
+    }
+
+    if (length < 1 || length > 75) {
+        return std::nullopt;
+    }
+
+    const size_t operandChars = static_cast<size_t>(length) * 2;
+    if (instruction.size() != 2 + operandChars) {
+        return std::nullopt;
+    }
+
+    return std::make_pair(instruction.substr(0, 2), instruction.substr(2));
+}
+
+std::optional<std::pair<std::string, std::string>> parseNamedPushData(
+    const std::string& instruction
+)
+{
+    struct PushDataSpec
+    {
+        const char* name;
+        size_t lengthChars;
+    };
+
+    static constexpr PushDataSpec specs[] = {
+        {"OP_PUSHDATA1", 2},
+        {"OP_PUSHDATA2", 4},
+        {"OP_PUSHDATA4", 8},
+    };
+
+    for (const auto& spec : specs) {
+        const std::string name(spec.name);
+        if (instruction.rfind(name, 0) != 0) {
+            continue;
+        }
+
+        const std::string remaining = trim(instruction.substr(name.size()));
+        if (remaining.size() < spec.lengthChars) {
+            return std::make_pair(name, std::string());
+        }
+
+        return std::make_pair(
+            name,
+            trim(remaining.substr(spec.lengthChars))
+        );
+    }
+
+    return std::nullopt;
+}
+
 std::string vmStateToString(VMState state)
 {
     switch (state) {
@@ -55,11 +128,54 @@ std::pair<std::string, std::string> parseInstructionText(
 )
 {
     const std::string cleaned = trim(instruction);
+    if (auto namedPushData = parseNamedPushData(cleaned)) {
+        return *namedPushData;
+    }
+
     const size_t space = cleaned.find_first_of(" \t\r\n");
     if (space == std::string::npos) {
+        if (auto compactPush = parseCompactDirectPush(cleaned)) {
+            return *compactPush;
+        }
         return {cleaned, ""};
     }
     return {cleaned.substr(0, space), trim(cleaned.substr(space + 1))};
+}
+
+std::string formatInstructionParts(
+    const std::string& opcode,
+    const std::string& operand
+)
+{
+    if (operand.empty()) {
+        return opcode;
+    }
+    return opcode + " " + operand;
+}
+
+std::string summarizeLineInstructions(const json& instructions)
+{
+    if (!instructions.is_array()) {
+        return "";
+    }
+
+    std::string summary;
+    for (const auto& item : instructions) {
+        if (!summary.empty()) {
+            summary += "; ";
+        }
+
+        summary += "pc " + std::to_string(item.value("pc", 0));
+        if (item.value("current", false)) {
+            summary += "*";
+        }
+        summary += ": ";
+        summary += formatInstructionParts(
+            item.value("opcode", ""),
+            item.value("operand", "")
+        );
+    }
+    return summary;
 }
 
 json stackElementToJson(
@@ -498,12 +614,19 @@ private:
                                                 ? m_compileResult.debugInfo
                                                       ->getFunctionAtPC(m_vm->getPC())
                                                 : nullptr;
+        const json lineInstructions = currentLineInstructions(
+            location,
+            function
+        );
 
         body["pc"] = m_vm->getPC();
         body["state"] = vmStateToString(m_vm->getState());
         body["instruction"] = instruction;
         body["opcode"] = opcode;
         body["operand"] = operand;
+        body["lineInstructions"] = lineInstructions;
+        body["lineInstructionSummary"] =
+            summarizeLineInstructions(lineInstructions);
         body["functionName"] = function ? function->name : m_functionName;
         body["instructionCount"] = m_vm->getInstructionCount();
         body["totalInstructions"] = m_compileResult.bytecodeInstructions.size();
@@ -536,10 +659,23 @@ private:
 
         if (scope == "instruction") {
             const json snap = snapshot();
+            const std::string opcodeSummary =
+                snap.value("lineInstructionSummary", "");
+            const std::string currentOpcode = snap.value("opcode", "");
             return json::array({
                 makeVariable("pc", std::to_string(snap.value("pc", 0)), "number"),
                 makeVariable("state", snap.value("state", ""), "string"),
-                makeVariable("opcode", snap.value("opcode", ""), "string"),
+                makeVariable(
+                    "instructions",
+                    opcodeSummary,
+                    "line-instructions"
+                ),
+                makeVariable(
+                    "opcode",
+                    opcodeSummary.empty() ? currentOpcode : opcodeSummary,
+                    "line-instructions"
+                ),
+                makeVariable("currentOpcode", currentOpcode, "string"),
                 makeVariable("operand", snap.value("operand", ""), "string"),
                 makeVariable(
                     "function",
@@ -611,6 +747,44 @@ private:
         return json::array();
     }
 
+    json currentLineInstructions(
+        const SourceLocation& location,
+        const FunctionDebugInfo* function
+    ) const
+    {
+        json result = json::array();
+        if (!m_compileResult.debugInfo || location.line == 0) {
+            return result;
+        }
+
+        const auto pcs = m_compileResult.debugInfo->getPCsForLine(location.line);
+        for (size_t pc : pcs) {
+            if (pc >= m_compileResult.bytecodeInstructions.size()) {
+                continue;
+            }
+            if (function && (pc < function->startPC || pc >= function->endPC)) {
+                continue;
+            }
+            if (!function && m_endPC > m_startPC &&
+                (pc < m_startPC || pc >= m_endPC)) {
+                continue;
+            }
+
+            const std::string instruction =
+                m_compileResult.bytecodeInstructions[pc];
+            const auto [opcode, operand] = parseInstructionText(instruction);
+            result.push_back({
+                {"pc", pc},
+                {"instruction", instruction},
+                {"opcode", opcode},
+                {"operand", operand},
+                {"current", m_vm && pc == m_vm->getPC()},
+            });
+        }
+
+        return result;
+    }
+
     json evaluate(const std::string& expression) const
     {
         const std::string expr = trim(expression);
@@ -634,6 +808,16 @@ private:
             expr == "functionName" || expr == "state") {
             result["value"] = snap.value(expr, "");
             result["result"] = snap.value(expr, "");
+            return result;
+        }
+        if (expr == "instructions" || expr == "lineInstructions") {
+            result["type"] = expr == "lineInstructions" ? "object" : "string";
+            result["value"] = expr == "lineInstructions"
+                                  ? snap.value("lineInstructions", json::array())
+                                  : json(snap.value("lineInstructionSummary", ""));
+            result["result"] = expr == "lineInstructions"
+                                   ? snap["lineInstructions"].dump()
+                                   : snap.value("lineInstructionSummary", "");
             return result;
         }
         if (expr == "function") {

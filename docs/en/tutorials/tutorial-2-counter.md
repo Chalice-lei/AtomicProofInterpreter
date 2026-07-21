@@ -188,7 +188,7 @@ This function iterates through the current transaction's outputs and performs st
 ## Step 3: Compile
 
 ```bash
-./utxo_interpreter contract_file/counter.ct
+./utxo_Interpreter contract_file/counter.ct
 ```
 
 You should see the `Counter` contract and its public verification functions (specific exported function names depend on compilation output).
@@ -198,7 +198,7 @@ You should see the `Counter` contract and its public verification functions (spe
 ## Step 4: Debugging and Verification Suggestions
 
 ```bash
-./utxo_interpreter contract_file/counter.ct --debug
+./utxo_Interpreter contract_file/counter.ct --debug
 ```
 
 ### Scenario A: Correct Increment

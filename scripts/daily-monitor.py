@@ -402,7 +402,7 @@ def run_build_and_tests(args: argparse.Namespace) -> dict[str, Any]:
         )
         results.append(build)
 
-    compiler = build_dir / "bin" / "utxo_interpreter"
+    compiler = build_dir / "bin" / "utxo_Interpreter"
     env = os.environ.copy()
     env["APC_COMPILER"] = str(compiler)
     env["APC_STDLIB_PATH"] = str(repo_root / "stdlib")

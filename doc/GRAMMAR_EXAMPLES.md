@@ -464,7 +464,7 @@ Contract MultiSigWallet:
 
 ```bash
 # 设置 stdlib 路径后编译
-APC_STDLIB_PATH=$(pwd)/stdlib ./build/bin/utxo_interpreter test/wallet.ct
+APC_STDLIB_PATH=$(pwd)/stdlib ./build/bin/utxo_Interpreter test/wallet.ct
 
 # 也可通过 user_preferences.json 配置 stdlib 路径
 ```

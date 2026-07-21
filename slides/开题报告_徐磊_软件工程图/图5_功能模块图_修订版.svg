@@ -1,0 +1,137 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="3000" height="2000" viewBox="0 0 3000 2000">
+  <defs>
+    <style>
+      .page-title { font: 700 62px 'WenQuanYi Zen Hei', 'Microsoft YaHei', sans-serif; fill: #111827; }
+      .system-title { font: 700 44px 'WenQuanYi Zen Hei', 'Microsoft YaHei', sans-serif; fill: #111827; }
+      .section-title { font: 700 34px 'WenQuanYi Zen Hei', 'Microsoft YaHei', sans-serif; fill: #334155; }
+      .module-title { font: 700 38px 'WenQuanYi Zen Hei', 'Microsoft YaHei', sans-serif; fill: #111827; }
+      .function-text { font: 400 27px 'WenQuanYi Zen Hei', 'Microsoft YaHei', sans-serif; fill: #1f2937; }
+      .support-title { font: 700 29px 'WenQuanYi Zen Hei', 'Microsoft YaHei', sans-serif; fill: #111827; }
+      .support-text { font: 400 24px 'WenQuanYi Zen Hei', 'Microsoft YaHei', sans-serif; fill: #374151; }
+      .boundary { fill: #ffffff; stroke: #111827; stroke-width: 5; }
+      .section { fill: #f8fafc; stroke: #64748b; stroke-width: 3; }
+      .module { fill: #ffffff; stroke: #1f2937; stroke-width: 4; }
+      .function { fill: #f9fafb; stroke: #64748b; stroke-width: 2.5; }
+      .support { fill: #ffffff; stroke: #475569; stroke-width: 3; }
+      .divider { stroke: #cbd5e1; stroke-width: 3; }
+    </style>
+  </defs>
+
+  <rect width="3000" height="2000" fill="#ffffff"/>
+  <text x="1500" y="92" text-anchor="middle" class="page-title">功能模块图</text>
+
+  <rect x="80" y="150" width="2840" height="1780" rx="28" class="boundary"/>
+  <text x="1500" y="228" text-anchor="middle" class="system-title">合约调试与验证系统</text>
+
+  <!-- 一级功能模块：仅表达功能分解，不使用流程箭头。 -->
+  <rect x="130" y="285" width="2740" height="1125" rx="24" class="section"/>
+  <text x="180" y="342" class="section-title">一级功能模块</text>
+  <line x1="180" y1="362" x2="2820" y2="362" class="divider"/>
+
+  <!-- 第一行 -->
+  <g aria-label="输入与交互模块">
+    <rect x="190" y="395" width="750" height="445" rx="22" class="module"/>
+    <text x="565" y="452" text-anchor="middle" class="module-title">输入与交互模块</text>
+    <rect x="245" y="485" width="640" height="62" rx="13" class="function"/>
+    <text x="565" y="526" text-anchor="middle" class="function-text">源码与库路径读取</text>
+    <rect x="245" y="565" width="640" height="62" rx="13" class="function"/>
+    <text x="565" y="606" text-anchor="middle" class="function-text">命令分发与运行模式识别</text>
+    <rect x="245" y="645" width="640" height="62" rx="13" class="function"/>
+    <text x="565" y="686" text-anchor="middle" class="function-text">参数与交易上下文加载</text>
+    <rect x="245" y="725" width="640" height="62" rx="13" class="function"/>
+    <text x="565" y="766" text-anchor="middle" class="function-text">Shell 与编译器 REPL</text>
+  </g>
+
+  <g aria-label="前端分析模块">
+    <rect x="1125" y="395" width="750" height="445" rx="22" class="module"/>
+    <text x="1500" y="452" text-anchor="middle" class="module-title">前端分析模块</text>
+    <rect x="1180" y="485" width="640" height="62" rx="13" class="function"/>
+    <text x="1500" y="526" text-anchor="middle" class="function-text">导入（import）与库合并</text>
+    <rect x="1180" y="565" width="640" height="62" rx="13" class="function"/>
+    <text x="1500" y="606" text-anchor="middle" class="function-text">词法、语法分析与 AST 构建</text>
+    <rect x="1180" y="645" width="640" height="62" rx="13" class="function"/>
+    <text x="1500" y="686" text-anchor="middle" class="function-text">类型与所有权检查</text>
+    <rect x="1180" y="725" width="640" height="62" rx="13" class="function"/>
+    <text x="1500" y="766" text-anchor="middle" class="function-text">静态信息生成与常量折叠</text>
+  </g>
+
+  <g aria-label="编译生成模块">
+    <rect x="2060" y="395" width="750" height="445" rx="22" class="module"/>
+    <text x="2435" y="452" text-anchor="middle" class="module-title">编译生成模块</text>
+    <rect x="2115" y="485" width="640" height="62" rx="13" class="function"/>
+    <text x="2435" y="526" text-anchor="middle" class="function-text">字节码生成与处理</text>
+    <rect x="2115" y="565" width="640" height="62" rx="13" class="function"/>
+    <text x="2435" y="606" text-anchor="middle" class="function-text">ABI 与调试信息生成</text>
+    <rect x="2115" y="645" width="640" height="62" rx="13" class="function"/>
+    <text x="2435" y="686" text-anchor="middle" class="function-text">锁定脚本与解锁信息生成</text>
+    <rect x="2115" y="725" width="640" height="62" rx="13" class="function"/>
+    <text x="2435" y="766" text-anchor="middle" class="function-text">编译结果导出</text>
+  </g>
+
+  <!-- 第二行 -->
+  <g aria-label="解释执行模块">
+    <rect x="190" y="890" width="750" height="445" rx="22" class="module"/>
+    <text x="565" y="947" text-anchor="middle" class="module-title">解释执行模块</text>
+    <rect x="245" y="980" width="640" height="62" rx="13" class="function"/>
+    <text x="565" y="1021" text-anchor="middle" class="function-text">AST 源码解释执行</text>
+    <rect x="245" y="1060" width="640" height="62" rx="13" class="function"/>
+    <text x="565" y="1101" text-anchor="middle" class="function-text">运行时环境与内置对象</text>
+    <rect x="245" y="1140" width="640" height="62" rx="13" class="function"/>
+    <text x="565" y="1181" text-anchor="middle" class="function-text">BVM 双栈字节码执行</text>
+    <rect x="245" y="1220" width="640" height="62" rx="13" class="function"/>
+    <text x="565" y="1261" text-anchor="middle" class="function-text">执行结果与轨迹导出</text>
+  </g>
+
+  <g aria-label="调试与可视化模块">
+    <rect x="1125" y="890" width="750" height="445" rx="22" class="module"/>
+    <text x="1500" y="947" text-anchor="middle" class="module-title">调试与可视化模块</text>
+    <rect x="1180" y="980" width="640" height="62" rx="13" class="function"/>
+    <text x="1500" y="1021" text-anchor="middle" class="function-text">断点、单步与调用栈控制</text>
+    <rect x="1180" y="1060" width="640" height="62" rx="13" class="function"/>
+    <text x="1500" y="1101" text-anchor="middle" class="function-text">主栈、副栈与变量查看</text>
+    <rect x="1180" y="1140" width="640" height="62" rx="13" class="function"/>
+    <text x="1500" y="1181" text-anchor="middle" class="function-text">JSONL 实时调试服务</text>
+    <rect x="1180" y="1220" width="640" height="62" rx="13" class="function"/>
+    <text x="1500" y="1261" text-anchor="middle" class="function-text">插件可视化与离线回放</text>
+  </g>
+
+  <g aria-label="测试验证模块">
+    <rect x="2060" y="890" width="750" height="445" rx="22" class="module"/>
+    <text x="2435" y="947" text-anchor="middle" class="module-title">测试验证模块</text>
+    <rect x="2115" y="980" width="640" height="62" rx="13" class="function"/>
+    <text x="2435" y="1021" text-anchor="middle" class="function-text">运行时与 AST 自测试</text>
+    <rect x="2115" y="1060" width="640" height="62" rx="13" class="function"/>
+    <text x="2435" y="1101" text-anchor="middle" class="function-text">编译、解释与调试回归</text>
+    <rect x="2115" y="1140" width="640" height="62" rx="13" class="function"/>
+    <text x="2435" y="1181" text-anchor="middle" class="function-text">差分测试支撑</text>
+    <rect x="2115" y="1220" width="640" height="62" rx="13" class="function"/>
+    <text x="2435" y="1261" text-anchor="middle" class="function-text">插件验证与打包检查</text>
+  </g>
+
+  <!-- 横向公共支撑：通过分层位置表达，不绘制含义不明的依赖箭头。 -->
+  <rect x="280" y="1470" width="2440" height="350" rx="24" class="section"/>
+  <text x="1500" y="1528" text-anchor="middle" class="section-title">公共支撑能力（横向支撑全部功能模块）</text>
+  <line x1="330" y1="1550" x2="2670" y2="1550" class="divider"/>
+
+  <g aria-label="配置管理">
+    <rect x="350" y="1590" width="500" height="165" rx="18" class="support"/>
+    <text x="600" y="1650" text-anchor="middle" class="support-title">配置管理</text>
+    <text x="600" y="1702" text-anchor="middle" class="support-text">用户配置、构建选项</text>
+  </g>
+  <g aria-label="错误与日志管理">
+    <rect x="950" y="1590" width="500" height="165" rx="18" class="support"/>
+    <text x="1200" y="1650" text-anchor="middle" class="support-title">错误与日志管理</text>
+    <text x="1200" y="1702" text-anchor="middle" class="support-text">定位、级别与上下文</text>
+  </g>
+  <g aria-label="标准库与样例">
+    <rect x="1550" y="1590" width="500" height="165" rx="18" class="support"/>
+    <text x="1800" y="1650" text-anchor="middle" class="support-title">标准库与样例</text>
+    <text x="1800" y="1702" text-anchor="middle" class="support-text">库模板、教程与合约样例</text>
+  </g>
+  <g aria-label="工程维护">
+    <rect x="2150" y="1590" width="500" height="165" rx="18" class="support"/>
+    <text x="2400" y="1650" text-anchor="middle" class="support-title">工程维护</text>
+    <text x="2400" y="1702" text-anchor="middle" class="support-text">构建、发布与文档归档</text>
+  </g>
+</svg>

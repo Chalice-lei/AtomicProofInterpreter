@@ -27,7 +27,7 @@ You can also right-click a `.ct` contract file and choose
 ## Generate a Trace Manually
 
 ```bash
-build/bin/utxo_interpreter run test/debugger_regression/debug_stack_visualizer_alt.ct test_alt_roundtrip 5 --stack-trace-output stack_trace.json
+build/bin/utxo_Interpreter run test/debugger_regression/debug_stack_visualizer_alt.ct test_alt_roundtrip 5 --stack-trace-output stack_trace.json
 ```
 
 Then open `stack_trace.json` in VS Code and run:
@@ -51,7 +51,7 @@ The command asks for:
 - function arguments
 - trace output path
 
-It uses `build/bin/utxo_interpreter`, writes the JSON trace, and opens the
+It uses `build/bin/utxo_Interpreter`, writes the JSON trace, and opens the
 Webview automatically.
 
 ## Auto Debug On Save
@@ -173,7 +173,7 @@ The extension also contributes an `atomicproof-live` debugger. It launches the
 interpreter in JSONL protocol mode:
 
 ```bash
-build/bin/utxo_interpreter debug-server <contract.ct> [function] [args...]
+build/bin/utxo_Interpreter debug-server <contract.ct> [function] [args...]
 ```
 
 From VS Code, right-click a `.ct` file and run:

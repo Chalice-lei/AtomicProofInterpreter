@@ -23,7 +23,7 @@ The testing focus for UTXO contracts differs somewhat from Ethereum contracts. S
 The most basic test is to directly compile the contract file with the compiler, confirming no syntax errors or ownership errors:
 
 ```bash
-./utxo_interpreter my_contract.ct
+./utxo_Interpreter my_contract.ct
 ```
 
 If it outputs JSON bytecode without errors, the contract is at least syntactically and semantically correct.
@@ -32,7 +32,7 @@ If you maintain a project with multiple contracts, it's recommended to use a bat
 
 ```bash
 # Compile contracts in contracts/ directory one by one
-COMPILER="${COMPILER:-utxo_interpreter}"
+COMPILER="${COMPILER:-utxo_Interpreter}"
 for f in contracts/**/*.ct; do
     echo "Testing: $f"
     "$COMPILER" "$f" > /dev/null && echo "  OK" || echo "  FAILED"
@@ -46,7 +46,7 @@ done
 The [built-in debugger](./how-to-debug-a-contract.md) is currently the most direct means of execution verification. Start the debugger, input a set of parameters, let the contract run to completion, and observe whether the final value on the stack is true:
 
 ```bash
-./utxo_interpreter my_contract.ct --debug
+./utxo_Interpreter my_contract.ct --debug
 ```
 
 ### Test Matrix
@@ -73,7 +73,7 @@ For projects requiring continuous integration, it's recommended to organize test
 #!/bin/bash
 # run_tests.sh
 
-COMPILER="${COMPILER:-utxo_interpreter}"
+COMPILER="${COMPILER:-utxo_Interpreter}"
 PASS=0
 FAIL=0
 
@@ -101,7 +101,7 @@ echo "Results: $PASS passed, $FAIL failed"
 Compile with the `-d` flag to generate debug info files, then use the debugger to check each line's execution:
 
 ```bash
-utxo_interpreter my_contract.ct -d
+utxo_Interpreter my_contract.ct -d
 ```
 
 Debug info contains a mapping from source line numbers to bytecode offsets, which can be used to:
@@ -116,7 +116,7 @@ Debug info contains a mapping from source line numbers to bytecode offsets, whic
 
 **Pitfall 1: Ownership errors only trigger at runtime**
 
-Ownership checks are compile-time — the compiler reports errors during the `utxo_interpreter` phase. When testing, you only need to confirm compilation passes; there is no need to worry about "runtime ownership errors."
+Ownership checks are compile-time — the compiler reports errors during the `utxo_Interpreter` phase. When testing, you only need to confirm compilation passes; there is no need to worry about "runtime ownership errors."
 
 **Pitfall 2: `EqualVerify` failure doesn't return false — it terminates**
 

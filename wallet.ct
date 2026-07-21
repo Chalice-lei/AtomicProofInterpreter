@@ -32,7 +32,7 @@
 #
 # 部署流程:
 #   1) 编译:
-#        APC_STDLIB_PATH=$(pwd)/stdlib ./build/bin/utxo_interpreter wallet.ct
+#        APC_STDLIB_PATH=$(pwd)/stdlib ./build/bin/utxo_Interpreter wallet.ct
 #      产出 wallet.json
 #
 #   2) 计算收款人 pubKey 的 Hash160 (示例):

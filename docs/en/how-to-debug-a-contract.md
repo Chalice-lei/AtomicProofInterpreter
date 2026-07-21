@@ -10,10 +10,10 @@ UTXO_Compiler includes an interactive command-line debugger that single-steps th
 
 ```bash
 # Basic start
-./utxo_interpreter my_contract.ct --debug
+./utxo_Interpreter my_contract.ct --debug
 
 # Contract uses sub-scope alt stack operations (--asa mode)
-./utxo_interpreter my_contract.ct --debug --asa
+./utxo_Interpreter my_contract.ct --debug --asa
 ```
 
 After starting the debugger, you first select a language:
@@ -135,7 +135,7 @@ Type `help` to see all available commands.
 If you only need to generate debug info files for use with other tools, use the `-d` flag:
 
 ```bash
-./utxo_interpreter my_contract.ct -d
+./utxo_Interpreter my_contract.ct -d
 ```
 
 The debug info contains a mapping from source line numbers to bytecode offsets, as well as the function symbol table, for analysis by third-party tools.

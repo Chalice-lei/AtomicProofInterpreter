@@ -2,7 +2,7 @@
 set -euo pipefail
 
 if [[ $# -lt 1 ]]; then
-    echo "usage: $0 /path/to/utxo_interpreter" >&2
+    echo "usage: $0 /path/to/utxo_Interpreter" >&2
     exit 2
 fi
 

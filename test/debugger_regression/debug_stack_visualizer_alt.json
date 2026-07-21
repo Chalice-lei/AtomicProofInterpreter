@@ -1,6 +1,6 @@
 {
   "metadata": {
-    "compiler_name": "utxo_interpreter",
+    "compiler_name": "utxo_Interpreter",
     "compiler_version": "1.0.0",
     "compiler_description": "AtomicProof Interpreter.",
     "build_timestamp": 1782210654,

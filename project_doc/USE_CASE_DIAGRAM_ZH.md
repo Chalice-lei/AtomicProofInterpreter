@@ -1,6 +1,6 @@
 # AtomicProof Compiler 系统完整用例图
 
-本文档给出当前仓库中 `AtomicProof Compiler / utxo_interpreter` 工具链的完整用例图。系统边界以内包括编译器、AST 解释器、字节码运行器、CLI 调试器、交互式 Shell、自测、构建与发布脚本；系统边界以外包括下游部署工具和链节点。
+本文档给出当前仓库中 `AtomicProof Compiler / UTXO_Interpreter` 工具链的完整用例图。系统边界以内包括编译器、AST 解释器、字节码运行器、CLI 调试器、交互式 Shell、自测、构建与发布脚本；系统边界以外包括下游部署工具和链节点。
 
 ## 参与者
 
@@ -51,7 +51,7 @@ actor "CI/自动化脚本" as CI
 actor "apc-buildunlockscript\n下游部署工具" as DeployTool
 actor "TBC/Bitcoin 节点" as Chain
 
-rectangle "AtomicProof Compiler / utxo_interpreter 工具链" as System {
+rectangle "AtomicProof Compiler / UTXO_Interpreter 工具链" as System {
   package "通用入口" {
     usecase "查看帮助" as UC_Help
     usecase "查看版本与构建能力" as UC_Version

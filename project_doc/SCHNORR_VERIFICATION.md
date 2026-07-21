@@ -225,7 +225,7 @@ Library std.foo:
 
 ```bash
 APC_STDLIB_PATH=$(pwd)/stdlib \
-    ./build/bin/utxo_interpreter test/schnorr_demo.ct
+    ./build/bin/utxo_Interpreter test/schnorr_demo.ct
 ```
 
 或安装后通过 `APC_DEFAULT_STDLIB_PATH`（CMake 注入）自动查找。

@@ -23,7 +23,7 @@ UTXO 合约的测试重点与以太坊合约有所不同。由于合约逻辑全
 最基础的测试是直接让编译器编译合约文件，确认没有语法错误和所有权错误：
 
 ```bash
-./utxo_interpreter my_contract.ct
+./utxo_Interpreter my_contract.ct
 ```
 
 如果生成 `my_contract.json` 且没有报错，说明合约至少在语法、类型、所有权和字节码生成层面是正确的。输出 JSON 中的 `lock.hex` 是最终锁定脚本十六进制，`lock.asm` 是反汇编结果，`abi` / `functions` 可用于核对解锁参数顺序。
@@ -32,7 +32,7 @@ UTXO 合约的测试重点与以太坊合约有所不同。由于合约逻辑全
 
 ```bash
 # 逐一编译 contracts/ 目录下的合约
-COMPILER="${COMPILER:-utxo_interpreter}"
+COMPILER="${COMPILER:-utxo_Interpreter}"
 for f in contracts/**/*.ct; do
     echo "Testing: $f"
     "$COMPILER" "$f" > /dev/null && echo "  OK" || echo "  FAILED"
@@ -59,7 +59,7 @@ done
 [内置调试器](./how-to-debug-a-contract.md) 是目前最直接的执行验证手段。启动调试器，输入一组参数，让合约运行到结束，观察最终栈上的值是否为真：
 
 ```bash
-./utxo_interpreter my_contract.ct --debug
+./utxo_Interpreter my_contract.ct --debug
 ```
 
 ### 测试矩阵
@@ -86,7 +86,7 @@ done
 #!/bin/bash
 # run_tests.sh
 
-COMPILER="${COMPILER:-utxo_interpreter}"
+COMPILER="${COMPILER:-utxo_Interpreter}"
 PASS=0
 FAIL=0
 
@@ -114,7 +114,7 @@ echo "Results: $PASS passed, $FAIL failed"
 使用 `-d` 标志编译，生成调试信息文件，然后配合调试器检查每一行的执行情况：
 
 ```bash
-utxo_interpreter my_contract.ct -d
+utxo_Interpreter my_contract.ct -d
 ```
 
 调试信息包含源码行号到字节码偏移的映射，可以用来：
@@ -126,13 +126,13 @@ utxo_interpreter my_contract.ct -d
 如果要指定调试信息文件名：
 
 ```bash
-utxo_interpreter my_contract.ct --debug-output my_contract.debug
+utxo_Interpreter my_contract.ct --debug-output my_contract.debug
 ```
 
 如果合约在私有函数或 `if/else` 子作用域中使用 `SetAlt` / `SetMain`，编译器默认会拦截这类写法，以避免副栈顺序被隐式破坏。确认你的副栈协议正确后，可显式开启：
 
 ```bash
-utxo_interpreter --asa my_contract.ct
+utxo_Interpreter --asa my_contract.ct
 ```
 
 `--asa` 是 `--allow-subscope-altstack` 的短写。
@@ -156,7 +156,7 @@ utxo_interpreter --asa my_contract.ct
 
 **陷阱一：所有权错误只在运行时触发**
 
-所有权检查是编译期的——编译器会在 `utxo_interpreter` 阶段报错。测试时只需确认编译通过即可，不需要担心"运行时所有权错误"。
+所有权检查是编译期的——编译器会在 `utxo_Interpreter` 阶段报错。测试时只需确认编译通过即可，不需要担心"运行时所有权错误"。
 
 **陷阱二：`EqualVerify` 失败不返回假，而是终止**
 

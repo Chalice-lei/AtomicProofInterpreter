@@ -4,7 +4,7 @@
 
 ## What is UTXO_Compiler
 
-`UTXO_Compiler` (executable name `utxo_interpreter`) is a smart contract compiler targeting the **Bitcoin UTXO model**. It accepts high-level contract source files with the `.ct` extension and compiles them into BVM bytecode that can be embedded in Bitcoin transaction locking scripts.
+`UTXO_Compiler` (executable name `utxo_Interpreter`) is a smart contract compiler targeting the **Bitcoin UTXO model**. It accepts high-level contract source files with the `.ct` extension and compiles them into BVM bytecode that can be embedded in Bitcoin transaction locking scripts.
 
 The contract language syntax is derived from Python — using indentation to delimit code blocks and `def` to define functions — but adds mandatory type declarations and a **compile-time ownership check** mechanism to help developers catch data misuse issues before deployment.
 

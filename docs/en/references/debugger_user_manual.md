@@ -26,7 +26,7 @@ This document describes how to use the UTXO_Compiler built-in CLI debugger, suit
 ### 2.1 Command Line
 
 ```bash
-./utxo_interpreter <source_file.ct> --debug
+./utxo_Interpreter <source_file.ct> --debug
 ```
 
 Optional parameters (same as normal compilation):
@@ -40,8 +40,8 @@ Optional parameters (same as normal compilation):
 Examples:
 
 ```bash
-./utxo_interpreter contract.ct --debug
-./utxo_interpreter contract.ct --debug --asa
+./utxo_Interpreter contract.ct --debug
+./utxo_Interpreter contract.ct --debug --asa
 ```
 
 ### 2.2 Startup Process

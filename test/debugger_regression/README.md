@@ -5,9 +5,9 @@ These contracts are small manual probes for the CLI debugger.
 Run examples:
 
 ```bash
-build/bin/utxo_interpreter compile test/debugger_regression/debug_line_mapping_basic.ct -d --debug-output /tmp/apc_line_mapping.debug
-build/bin/utxo_interpreter debug test/debugger_regression/debug_line_mapping_basic.ct
-build/bin/utxo_interpreter run test/debugger_regression/debug_stack_visualizer_alt.ct test_alt_roundtrip 5 --stack-trace-output /tmp/apc_stack_trace.json
+build/bin/utxo_Interpreter compile test/debugger_regression/debug_line_mapping_basic.ct -d --debug-output /tmp/apc_line_mapping.debug
+build/bin/utxo_Interpreter debug test/debugger_regression/debug_line_mapping_basic.ct
+build/bin/utxo_Interpreter run test/debugger_regression/debug_stack_visualizer_alt.ct test_alt_roundtrip 5 --stack-trace-output /tmp/apc_stack_trace.json
 test/debugger_regression/run_debugger_regression.sh
 ```
 

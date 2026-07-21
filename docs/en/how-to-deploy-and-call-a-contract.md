@@ -11,7 +11,7 @@ This section covers the complete workflow from compiling a contract to deploying
 After running the compiler, the output is a JSON-formatted bytecode description:
 
 ```bash
-./utxo_interpreter my_contract.ct
+./utxo_Interpreter my_contract.ct
 ```
 
 Example output (simplified):
@@ -83,7 +83,7 @@ Deployment transaction
 ├── Input: some existing UTXO (provides funds)
 └── Output:
     ├── value:          number of satoshis to lock in the contract
-    └── locking script: bytecode compiled by utxo_interpreter
+    └── locking script: bytecode compiled by utxo_Interpreter
 ```
 
 ### Locking Script and SuffixData
@@ -103,7 +103,7 @@ The pseudocode below sketches a "P2PKH contract deployment". Replace `BitcoinTxB
 
 ```python
 # 1. Compile the contract
-$ ./utxo_interpreter p2pkh.ct
+$ ./utxo_Interpreter p2pkh.ct
 # Produces p2pkh.json. lock.hex is a bytecode template with self.pubKeyHash placeholder.
 
 # 2. Substitute self.pubKeyHash with this instance's real hash

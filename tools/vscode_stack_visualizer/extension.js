@@ -2592,16 +2592,38 @@ function liveInstructionVariables(snapshot)
         return [];
     }
     const source = snapshot.source || {};
+    const opcodeSummary = liveLineInstructionSummary(snapshot) ||
+        snapshot.opcode || snapshot.instruction || "";
     return [
         dapVariable("pc", snapshot.pc ?? ""),
         dapVariable("state", snapshot.state || ""),
-        dapVariable("opcode", snapshot.opcode || snapshot.instruction || ""),
+        dapVariable("opcode", opcodeSummary),
+        dapVariable("currentOpcode", snapshot.opcode || snapshot.instruction || ""),
         dapVariable("operand", snapshot.operand || ""),
         dapVariable("function", snapshot.functionName || ""),
         dapVariable("source", `${source.file || ""}:${source.line || ""}`),
         dapVariable("executed", snapshot.instructionCount ?? ""),
         dapVariable("range", `${snapshot.range?.startPC ?? 0}..${snapshot.range?.endPC ?? 0}`)
     ];
+}
+
+function liveLineInstructionSummary(snapshot)
+{
+    if (!snapshot) {
+        return "";
+    }
+    if (snapshot.lineInstructionSummary) {
+        return String(snapshot.lineInstructionSummary);
+    }
+    if (!Array.isArray(snapshot.lineInstructions)) {
+        return "";
+    }
+    return snapshot.lineInstructions.map((item) => {
+        const marker = item && item.current ? "*" : "";
+        const opcode = item?.opcode || item?.instruction || "";
+        const operand = item?.operand ? ` ${item.operand}` : "";
+        return `pc ${item?.pc ?? ""}${marker}: ${opcode}${operand}`;
+    }).join("; ");
 }
 
 function liveStackVariables(values)
@@ -2700,7 +2722,10 @@ function liveEvaluateVariableReference(adapter, response)
 
 module.exports = {
     activate,
-    deactivate
+    deactivate,
+    __test: {
+        liveInstructionVariables
+    }
 };
 
 function createStatusBarItem()
@@ -2776,7 +2801,7 @@ function getInterpreterPath(workspaceRoot, contractPath)
         workspaceRoot,
         "build",
         "bin",
-        process.platform === "win32" ? "utxo_interpreter.exe" : "utxo_interpreter"
+        process.platform === "win32" ? "utxo_Interpreter.exe" : "utxo_Interpreter"
     );
 }
 

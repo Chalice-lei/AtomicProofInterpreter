@@ -12,10 +12,10 @@ cmake --build build -j2
 build/bin/utxo_compiler run <contract.ct> <function> <args...> --stack-trace-output stack_trace.json
 ```
 
-如果你的本地可执行文件名是 `utxo_interpreter`，同样可以使用：
+如果你的本地可执行文件名是 `utxo_Interpreter`，同样可以使用：
 
 ```bash
-build/bin/utxo_interpreter run <contract.ct> <function> <args...> --stack-trace-output stack_trace.json
+build/bin/utxo_Interpreter run <contract.ct> <function> <args...> --stack-trace-output stack_trace.json
 ```
 
 参数规则沿用调试器现有入栈规则：
@@ -64,7 +64,7 @@ tools/vscode_stack_visualizer/
 - `AtomicProof: Debug Active Stack Trace`：用 VS Code Debug 面板回放 trace，支持 step/continue、源码断点和变量视图中的 main/alt stack
 - `AtomicProof: Debug Contract Trace`：从 `.ct` 合约直接启动 live Debug，插件会运行 `utxo_compiler debug-server <contract.ct> <function> [args...]`，并在同一个 VM 实例上执行 continue/step/breakpoint/variables
 - `AtomicProof: Export Trace Narrative`：导出 Markdown 执行叙事，适合论文、教学、评审和演示材料
-- `AtomicProof: Generate Stack Trace and Visualize`：选择合约、输入函数名和参数，自动调用 `build/bin/utxo_interpreter` 或 `build/bin/utxo_compiler` 生成 trace 并打开
+- `AtomicProof: Generate Stack Trace and Visualize`：选择合约、输入函数名和参数，自动调用 `build/bin/utxo_Interpreter` 或 `build/bin/utxo_compiler` 生成 trace 并打开
 - `AtomicProof: Toggle Auto Debug On Save`：开启或关闭 `.ct` 保存后的自动刷新
 - `AtomicProof: Restart Current Live VM Debug`：停止并重新启动当前 live VM 调试会话
 

@@ -148,8 +148,8 @@ get_version_info() {
         local parsed_name=$(echo "$version_output" | grep -E "(编译器名称:|Compiler Name:)" | sed -E 's/.*(编译器名称:|Compiler Name:)\s*([a-zA-Z0-9_-]+).*/\2/' | head -1)
         
         # 如果解析到的名称与配置不符，使用配置的名称
-        if [[ -n "$parsed_name" && "$parsed_name" != "$PROJECT_NAME" ]]; then
-            log_warning "可执行文件中的名称($parsed_name)与配置不符，使用配置名称($PROJECT_NAME)"
+        if [[ -n "$parsed_name" && "$parsed_name" != "$EXECUTABLE_NAME" ]]; then
+            log_warning "可执行文件中的名称($parsed_name)与配置不符，使用配置名称($EXECUTABLE_NAME)"
         fi
         
         if [[ -z "$PROJECT_VERSION" ]]; then

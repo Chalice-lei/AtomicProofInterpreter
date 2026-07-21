@@ -6,7 +6,7 @@ named struct parameters, contract instance fields, and BVM runtime fields.
 From the project root:
 
 ```bash
-./build/bin/utxo_interpreter -l none ast examples/interpreter_usage/interpreter_usage.ct \
+./build/bin/utxo_Interpreter -l none ast examples/interpreter_usage/interpreter_usage.ct \
   verify \
   0xabcd \
   0x02 \
@@ -34,7 +34,7 @@ The example uses:
 You can also provide the same runtime values directly on the command line:
 
 ```bash
-./build/bin/utxo_interpreter -l none ast examples/interpreter_usage/interpreter_usage.ct \
+./build/bin/utxo_Interpreter -l none ast examples/interpreter_usage/interpreter_usage.ct \
   verify \
   0xabcd \
   0x02 \
@@ -53,7 +53,7 @@ You can also provide the same runtime values directly on the command line:
 interactive function calls:
 
 ```bash
-./build/bin/utxo_interpreter shell examples/interpreter_usage/shell_contract.ct -l none <<'EOF'
+./build/bin/utxo_Interpreter shell examples/interpreter_usage/shell_contract.ct -l none <<'EOF'
 %who
 quote(100, 3, 5, true)
 canUnlock(275, 275)

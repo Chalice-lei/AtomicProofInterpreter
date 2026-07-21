@@ -16,7 +16,7 @@
 
 | 工具 | 作用 |
 |------|------|
-| `utxo_interpreter` | 编译 `.ct`，输出 `lock.hex`、`abi`、`structs`、`unlock` 等 JSON 信息 |
+| `utxo_Interpreter` | 编译 `.ct`，输出 `lock.hex`、`abi`、`structs`、`unlock` 等 JSON 信息 |
 | `tbc-lib-js` | 构造、签名和序列化 TBC 交易 |
 | `tbc-contract` | 查询 UTXO / 父交易、构造 UTXO 对象、广播 raw transaction |
 | `apc-buildunlockscript/src/buildTxData.ts` | 把父交易、当前交易输出序列化为 APC 合约 ABI 需要的 hex |
@@ -32,7 +32,7 @@
 
 ```bash
 cd /home/ubuntu/code/AtomicProofCompiler/build/bin
-./utxo_interpreter ../../test/contract_file/counter.ct
+./utxo_Interpreter ../../test/contract_file/counter.ct
 ```
 
 然后构建 `apc-buildunlockscript`：

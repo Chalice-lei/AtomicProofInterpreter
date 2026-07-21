@@ -31,9 +31,9 @@ movement, and consumption events for clickable value history in the visualizer.
 From the repository root:
 
 ```bash
-build/bin/utxo_interpreter run test/debugger_regression/debug_stack_visualizer_alt.ct test_alt_roundtrip 5 --stack-trace-output examples/stack_traces/alt_roundtrip.json
-build/bin/utxo_interpreter run test/debugger_regression/debug_line_mapping_basic.ct test_line_mapping 1 2 3 --stack-trace-output examples/stack_traces/arithmetic_line_mapping.json
-build/bin/utxo_interpreter run test/debugger_regression/debug_branch_loop_scope.ct test_branch_loop 1 --stack-trace-output examples/stack_traces/branch_loop_true.json
-build/bin/utxo_interpreter run test/debugger_regression/debug_branch_loop_scope.ct test_branch_loop -1 --stack-trace-output examples/stack_traces/branch_loop_false.json
-build/bin/utxo_interpreter run test/test_builtin_function_and_object/builtin_function/push_function_test.ct test_push --stack-trace-output examples/stack_traces/push_builtin.json
+build/bin/utxo_Interpreter run test/debugger_regression/debug_stack_visualizer_alt.ct test_alt_roundtrip 5 --stack-trace-output examples/stack_traces/alt_roundtrip.json
+build/bin/utxo_Interpreter run test/debugger_regression/debug_line_mapping_basic.ct test_line_mapping 1 2 3 --stack-trace-output examples/stack_traces/arithmetic_line_mapping.json
+build/bin/utxo_Interpreter run test/debugger_regression/debug_branch_loop_scope.ct test_branch_loop 1 --stack-trace-output examples/stack_traces/branch_loop_true.json
+build/bin/utxo_Interpreter run test/debugger_regression/debug_branch_loop_scope.ct test_branch_loop -1 --stack-trace-output examples/stack_traces/branch_loop_false.json
+build/bin/utxo_Interpreter run test/test_builtin_function_and_object/builtin_function/push_function_test.ct test_push --stack-trace-output examples/stack_traces/push_builtin.json
 ```

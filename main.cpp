@@ -47,6 +47,9 @@ std::map<std::string, LogLevel> logLevelMap =
      {"critical", LogLevel::CRITICAL},
      {"none", LogLevel::NONE}};
 
+const char* publicCommandList =
+    "compile, run, ast, debug, shell, or compiler-repl";
+
 struct CommandLineArgs
 {
     std::string filename{""};
@@ -188,9 +191,8 @@ CommandLineArgs parseCommandLineArgs(int argc, char* argv[])
     auto appendPositional = [&](const std::string& value) {
         switch (mode) {
         case CommandLineMode::None:
-            showErrorAndExit(
-                "Expected command: compile, run, ast, debug, debug-server, shell, compiler-repl, or test"
-            );
+            showErrorAndExit(std::string("Expected command: ") +
+                             publicCommandList);
             return;
 
         case CommandLineMode::Compile:
@@ -353,12 +355,6 @@ CommandLineArgs parseCommandLineArgs(int argc, char* argv[])
             args.enableDebug = true;
             i += 2;
         }
-        else if (arg.rfind("--stack-trace-output=", 0) == 0) {
-            args.stackTraceOutputFile =
-                arg.substr(std::string("--stack-trace-output=").size());
-            args.enableDebug = true;
-            ++i;
-        }
         else if (arg == "-d") {
             debugInfoOptionSeen = true;
             args.enableDebug = true;
@@ -394,9 +390,8 @@ CommandLineArgs parseCommandLineArgs(int argc, char* argv[])
     }
 
     if (mode == CommandLineMode::None) {
-        showErrorAndExit(
-            "Expected command: compile, run, ast, debug, debug-server, shell, compiler-repl, or test"
-        );
+        showErrorAndExit(std::string("Expected command: ") +
+                         publicCommandList);
     }
 
     if (mode == CommandLineMode::Test &&

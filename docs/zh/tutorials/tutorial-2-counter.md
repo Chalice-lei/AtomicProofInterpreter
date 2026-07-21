@@ -188,7 +188,7 @@ Contract Counter:
 ## 第三步：编译
 
 ```bash
-./utxo_interpreter contract_file/counter.ct
+./utxo_Interpreter contract_file/counter.ct
 ```
 
 预期可看到 `Counter` 合约及其公开校验函数（具体导出函数名以编译输出为准）。
@@ -198,7 +198,7 @@ Contract Counter:
 ## 第四步：调试验证建议
 
 ```bash
-./utxo_interpreter contract_file/counter.ct --debug
+./utxo_Interpreter contract_file/counter.ct --debug
 ```
 
 ### 场景 A：正确递增
