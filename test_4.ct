@@ -1,5 +1,0 @@
-Contract Test:
-    def main():
-        a: int[3] = [1, 2, 3]
-        ok = a[0] + a[1] + a[2]
-        #ok = 1 + 2 + 3

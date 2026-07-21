@@ -1,3 +1,0 @@
-Contract Test:
-    def test(a: int):
-        b = a * a

@@ -11,6 +11,7 @@
 /push_function_test.json
 /user_preferences.json
 /*.debug
+/*.ct
 /dist/
 /releases/
 /tools/vscode_stack_visualizer/node_modules/
