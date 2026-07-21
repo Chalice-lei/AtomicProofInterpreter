@@ -12,6 +12,7 @@
 /user_preferences.json
 /*.debug
 /*.ct
+/AGENTS.md
 /dist/
 /releases/
 /tools/vscode_stack_visualizer/node_modules/
