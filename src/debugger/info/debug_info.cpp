@@ -1,6 +1,8 @@
 #include "debug_info.h"
 
 #include <algorithm>
+#include <cctype>
+#include <filesystem>
 #include <fstream>
 #include <limits>
 #include <nlohmann/json.hpp>
@@ -12,6 +14,56 @@ namespace apc_debug
 {
 namespace
 {
+std::string normalizeSourceFilename(
+    const std::string& filename,
+    const std::string& primarySource
+)
+{
+    if (filename.empty()) {
+        return "";
+    }
+
+    namespace fs = std::filesystem;
+    fs::path sourcePath(filename);
+    if (sourcePath.is_relative() && !primarySource.empty()) {
+        const fs::path primaryPath(primarySource);
+        if (sourcePath.lexically_normal() != primaryPath.lexically_normal()) {
+            std::error_code primaryError;
+            fs::path primaryAbsolute = primaryPath.is_absolute()
+                                           ? primaryPath
+                                           : fs::absolute(
+                                                 primaryPath,
+                                                 primaryError
+                                             );
+            if (primaryError) {
+                primaryAbsolute = primaryPath;
+            }
+            sourcePath = primaryAbsolute.parent_path() / sourcePath;
+        }
+    }
+
+    std::error_code error;
+    fs::path normalized = fs::weakly_canonical(sourcePath, error);
+    if (error) {
+        normalized = fs::absolute(sourcePath, error);
+        if (error) {
+            normalized = sourcePath;
+        }
+        normalized = normalized.lexically_normal();
+    }
+
+    std::string value = normalized.generic_string();
+#ifdef _WIN32
+    std::transform(
+        value.begin(),
+        value.end(),
+        value.begin(),
+        [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); }
+    );
+#endif
+    return value;
+}
+
 json sourceLocationToJson(const SourceLocation& loc)
 {
     json locJson;
@@ -182,6 +234,36 @@ std::vector<size_t> DebugInfo::getPCsForLine(size_t line) const
         return it->second;
     }
     return std::vector<size_t>();
+}
+
+std::vector<size_t> DebugInfo::getPCsForSourceLine(
+    const std::string& filename,
+    size_t line
+) const
+{
+    const std::string requested = normalizeSourceFilename(
+        filename,
+        sourceFilename
+    );
+    if (requested.empty()) {
+        return {};
+    }
+
+    std::vector<size_t> result;
+    for (size_t pc : getPCsForLine(line)) {
+        auto location = pcToSource.find(pc);
+        if (location == pcToSource.end()) {
+            continue;
+        }
+        const std::string& mappedFilename =
+            location->second.filename.empty() ? sourceFilename
+                                              : location->second.filename;
+        if (normalizeSourceFilename(mappedFilename, sourceFilename) ==
+            requested) {
+            result.push_back(pc);
+        }
+    }
+    return result;
 }
 
 std::vector<size_t>

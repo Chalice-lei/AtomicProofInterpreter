@@ -348,6 +348,7 @@ option(BUILD_DEBUGGER "Build debugger support" ON)
 
 if(BUILD_DEBUGGER)
     message(STATUS "🐛 启用调试器支持")
+    find_package(Threads REQUIRED)
     add_compile_definitions(ENABLE_DEBUGGER)
     
     # 调试器源文件
@@ -449,6 +450,9 @@ target_compile_options(apc_core PRIVATE
 )
 
 target_link_libraries(apc_core PUBLIC nlohmann_json::nlohmann_json)
+if(BUILD_DEBUGGER)
+    target_link_libraries(apc_core PUBLIC Threads::Threads)
+endif()
 if(READLINE_LIBRARY)
     target_compile_definitions(apc_core PUBLIC APC_ENABLE_READLINE)
     target_link_libraries(apc_core PUBLIC ${READLINE_LIBRARY})

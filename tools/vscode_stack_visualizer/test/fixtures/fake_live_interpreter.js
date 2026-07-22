@@ -6,6 +6,7 @@ const readline = require("readline");
 
 const contractPath = process.argv[3] || "fixture.ct";
 const crashAfterInitialize = path.basename(contractPath) === "crash.ct";
+const pauseAfterContinue = path.basename(contractPath) === "pause.ct";
 let pc = 0;
 
 function value(number, id)
@@ -79,12 +80,57 @@ reader.on("line", (line) => {
         });
         return;
     }
+    if (request.command === "stackTrace") {
+        response(request, {
+            frames: [{
+                id: 1,
+                name: "fake_main",
+                pc,
+                source: snapshot().source,
+                current: true
+            }]
+        });
+        return;
+    }
+    if (request.command === "variables") {
+        const snap = snapshot();
+        let variables = [];
+        if (request.scope === "locals") {
+            variables = [{name: "localValue", type: "int", value: String(10 + pc), available: true}];
+        } else if (request.scope === "globals") {
+            variables = [{name: "globalValue", type: "int", value: "99", available: true}];
+        } else if (request.scope === "instruction") {
+            variables = [
+                {name: "pc", type: "number", value: String(pc)},
+                {name: "currentOpcode", type: "string", value: snap.opcode}
+            ];
+        } else if (request.scope === "mainStack" || request.scope === "altStack") {
+            const stack = request.scope === "mainStack" ? snap.mainStack : snap.altStack;
+            variables = stack.slice().reverse().map((item, index) => ({
+                name: index === 0 ? "[0] top" : `[${index}]`,
+                type: "stack-item",
+                value: `${item.hex} int=${item.intString}`
+            }));
+        }
+        response(request, {variables});
+        return;
+    }
     if (["next", "stepIn", "stepOut", "continue", "pause"].includes(request.command)) {
         pc = request.command === "continue" ? 5 : Math.min(5, pc + 1);
         response(request, {
-            allThreadsContinued: false,
+            allThreadsContinued: request.command === "continue",
             snapshot: snapshot()
         });
+        if (request.command === "continue") {
+            write({
+                type: "event",
+                event: "continued",
+                body: {threadId: 1, allThreadsContinued: true}
+            });
+            if (pauseAfterContinue) {
+                return;
+            }
+        }
         write({
             type: "event",
             event: "stopped",
@@ -101,9 +147,11 @@ reader.on("line", (line) => {
             "alt.length": snapshot().altStack.length,
             json: snapshot()
         };
-        const valueResult = Object.prototype.hasOwnProperty.call(values, expression)
-            ? values[expression]
-            : expression;
+        if (!Object.prototype.hasOwnProperty.call(values, expression)) {
+            response(request, {}, false, `unknown expression: ${expression}`);
+            return;
+        }
+        const valueResult = values[expression];
         response(request, {
             result: typeof valueResult === "object" ? JSON.stringify(valueResult) : String(valueResult),
             value: valueResult,
@@ -111,7 +159,7 @@ reader.on("line", (line) => {
         });
         return;
     }
-    if (request.command === "disconnect") {
+    if (request.command === "disconnect" || request.command === "terminate") {
         response(request, {snapshot: snapshot()});
         write({type: "event", event: "terminated", body: {snapshot: snapshot()}});
         reader.close();

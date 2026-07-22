@@ -233,14 +233,20 @@ Or add a launch configuration:
 
 The live debugger compiles the contract, initializes the VM stack from function
 arguments, supports source line breakpoints, `continue`, `next`, `stepIn`,
-`stepOut`, stack frames, Variables scopes for instruction/main stack/alt
-stack/call stack/warnings, and Watch expressions such as `pc`, `opcode`,
-`line`, `functionName`, `main[0].hex`, `alt.length`, and `json`.
+`stepOut`, asynchronous pause, and source-qualified breakpoints. Call Stack
+shows all active function frames. Variables includes Locals, Globals,
+Instruction, Main Stack, Alt Stack, Call Stack, Warnings, and Errors; Locals and
+Watch evaluation follow the selected frame. Watch expressions include source
+variables as well as `pc`, `opcode`, `line`, `functionName`, `main[0].hex`,
+`alt.length`, and `json`. Unknown expressions return a debugger error instead
+of being echoed as a successful value.
 
-Current VM limitation: `continue` runs synchronously inside the interpreter
-process. A Pause request fails fast with an explanatory message during a long
-run; use Stop/Terminate to kill the live debug server. Fully pausable long runs
-still require a future async server loop.
+`continue` returns before execution finishes and emits the DAP `continued`
+event. A subsequent Pause request is handled at the next VM instruction
+boundary. Runtime failures stop with reason `exception`, appear in the Debug
+Console and Errors scope, and are available through VS Code's exception-info
+request. Inspection and breakpoint reconfiguration requests made while the VM
+is running fail explicitly; pause first to obtain a consistent snapshot.
 
 ## Webview Navigation
 

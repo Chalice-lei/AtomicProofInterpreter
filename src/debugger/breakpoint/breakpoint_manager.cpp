@@ -9,7 +9,8 @@ BreakpointManager::BreakpointManager(std::shared_ptr<DebugInfo> debugInfo)
 }
 
 size_t BreakpointManager::addLineBreakpoint(const std::string& filename, size_t line) {
-    if (!m_debugInfo || m_debugInfo->getPCsForLine(line).empty()) {
+    if (!m_debugInfo ||
+        m_debugInfo->getPCsForSourceLine(filename, line).empty()) {
         return 0;
     }
     auto bp = std::make_shared<LineBreakpoint>(m_nextId, filename, line);
@@ -37,7 +38,8 @@ size_t BreakpointManager::addFunctionBreakpoint(const std::string& functionName)
 size_t BreakpointManager::addConditionalBreakpoint(const std::string& filename,
                                                    size_t line,
                                                    const std::string& condition) {
-    if (!m_debugInfo || m_debugInfo->getPCsForLine(line).empty()) {
+    if (!m_debugInfo ||
+        m_debugInfo->getPCsForSourceLine(filename, line).empty()) {
         return 0;
     }
     auto bp = std::make_shared<ConditionalBreakpoint>(m_nextId, filename, line, condition);
@@ -60,7 +62,8 @@ size_t BreakpointManager::addDataBreakpoint(const std::string& variableName) {
 }
 
 size_t BreakpointManager::addTemporaryBreakpoint(const std::string& filename, size_t line) {
-    if (!m_debugInfo || m_debugInfo->getPCsForLine(line).empty()) {
+    if (!m_debugInfo ||
+        m_debugInfo->getPCsForSourceLine(filename, line).empty()) {
         return 0;
     }
     auto bp = std::make_shared<LineBreakpoint>(m_nextId, filename, line);
@@ -205,7 +208,7 @@ bool BreakpointManager::resolveBreakpoint(size_t id) {
             return false;
         }
 
-        auto pcs = m_debugInfo->getPCsForLine(line);
+        auto pcs = m_debugInfo->getPCsForSourceLine(filename, line);
 
         if (pcs.empty()) {
             lineBp->setState(BreakpointState::PENDING);

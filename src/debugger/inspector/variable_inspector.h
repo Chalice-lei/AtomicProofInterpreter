@@ -67,6 +67,11 @@ public:
         size_t currentPC
     );
 
+    std::vector<VariableValue> getGlobalVariables(
+        const StackState& stack,
+        size_t currentPC
+    );
+
     std::optional<VariableValue> parseCompoundType(
         const std::string& varName,
         const std::string& varType,
@@ -107,6 +112,5 @@ private:
 } // namespace apc_debug
 
 #endif // VARIABLE_INSPECTOR_H
-
 
 

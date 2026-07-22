@@ -1,6 +1,7 @@
 #ifndef BVM_SIMULATOR_H
 #define BVM_SIMULATOR_H
 
+#include <atomic>
 #include <functional>
 #include <map>
 #include <memory>
@@ -59,6 +60,7 @@ enum class StepMode {
 // 调用栈帧（参考 Python Frame Object）
 struct CallFrame
 {
+    uint64_t frameId;
     std::string functionName;
     size_t returnPC;
     SourceLocation callLocation;
@@ -68,10 +70,14 @@ struct CallFrame
     size_t entryPC;
     size_t instructionCount;
     std::shared_ptr<ScopeDebugInfo> scope;
+    size_t suspendedPC;
+    SourceLocation suspendedLocation;
+    std::vector<StackElement> suspendedMainStack;
+    std::vector<StackElement> suspendedAltStack;
 
     CallFrame()
-        : returnPC(0), stackBase(0), frameStart(0), entryPC(0),
-          instructionCount(0)
+        : frameId(0), returnPC(0), stackBase(0), frameStart(0), entryPC(0),
+          instructionCount(0), suspendedPC(0)
     {}
 
     CallFrame(
@@ -80,8 +86,9 @@ struct CallFrame
         const SourceLocation& loc,
         size_t base
     )
-        : functionName(func), returnPC(ret), callLocation(loc), stackBase(base),
-          frameStart(base), entryPC(0), instructionCount(0)
+        : frameId(0), functionName(func), returnPC(ret), callLocation(loc),
+          stackBase(base), frameStart(base), entryPC(0), instructionCount(0),
+          suspendedPC(0)
     {}
 
     CallFrame(
@@ -91,8 +98,9 @@ struct CallFrame
         size_t base,
         size_t entry
     )
-        : functionName(func), returnPC(ret), callLocation(loc), stackBase(base),
-          frameStart(base), entryPC(entry), instructionCount(0)
+        : frameId(0), functionName(func), returnPC(ret), callLocation(loc),
+          stackBase(base), frameStart(base), entryPC(entry), instructionCount(0),
+          suspendedPC(0)
     {}
 };
 
@@ -162,6 +170,9 @@ public:
 
     void run();
     void pause();
+    void requestPause();
+    void requestTerminate();
+    void clearExecutionRequests();
     void resume();
     void stepIn();
     void stepOver();
@@ -470,7 +481,11 @@ private:
 
     // 断点命中后跳过同一源码行剩余断点，避免 continue 反复停在该行
     bool m_skipBreakpointOnce;
+    std::string m_skipBreakpointFile;
     size_t m_skipBreakpointLine;
+    uint64_t m_nextFrameId;
+    std::atomic<bool> m_pauseRequested;
+    std::atomic<bool> m_terminateRequested;
 
     // 所有条件均 true 才真正执行
     bool isCurrentlyExecuting() const;

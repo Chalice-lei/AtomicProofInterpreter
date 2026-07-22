@@ -1424,12 +1424,13 @@ class AtomicProofDebugAdapterBase
         });
     }
 
-    sendStopped(reason)
+    sendStopped(reason, details = {})
     {
         this.sendEvent("stopped", {
             reason,
             threadId: 1,
-            allThreadsStopped: true
+            allThreadsStopped: true,
+            ...details
         });
     }
 }
@@ -1450,10 +1451,19 @@ class AtomicProofLiveDebugAdapter extends AtomicProofDebugAdapterBase
         this.resolveReady = null;
         this.rejectReady = null;
         this.terminated = false;
+        this.liveFrames = new Map();
+        this.currentFrameId = 0;
+        this.lastException = null;
+        this.executionState = "created";
+        this.entryStoppedSent = false;
+        this.shutdownRequested = false;
+        this.protocolEventDeferralCount = 0;
+        this.deferredProtocolEvents = [];
     }
 
     dispose()
     {
+        this.shutdownRequested = true;
         this.stopChild();
         super.dispose();
     }
@@ -1482,7 +1492,11 @@ class AtomicProofLiveDebugAdapter extends AtomicProofDebugAdapterBase
             break;
         case "configurationDone":
             this.sendResponse(message);
-            this.sendStopped("entry");
+            if (!this.entryStoppedSent && !this.terminated) {
+                this.entryStoppedSent = true;
+                this.executionState = "paused";
+                this.sendStopped("entry");
+            }
             break;
         case "threads":
             this.sendResponse(message, {
@@ -1490,13 +1504,13 @@ class AtomicProofLiveDebugAdapter extends AtomicProofDebugAdapterBase
             });
             break;
         case "stackTrace":
-            this.handleStackTrace(message);
+            await this.handleStackTrace(message);
             break;
         case "scopes":
             this.handleScopes(message);
             break;
         case "variables":
-            this.handleVariables(message);
+            await this.handleVariables(message);
             break;
         case "evaluate":
             await this.handleEvaluate(message);
@@ -1511,8 +1525,11 @@ class AtomicProofLiveDebugAdapter extends AtomicProofDebugAdapterBase
         case "source":
             this.handleSource(message);
             break;
+        case "exceptionInfo":
+            this.handleExceptionInfo(message);
+            break;
         case "terminate":
-            this.handleTerminate(message);
+            await this.handleTerminate(message);
             break;
         case "disconnect":
             await this.handleDisconnect(message);
@@ -1531,6 +1548,7 @@ class AtomicProofLiveDebugAdapter extends AtomicProofDebugAdapterBase
             supportsSetVariable: false,
             supportsStepBack: false,
             supportsTerminateRequest: true,
+            supportsExceptionInfoRequest: true,
             supportsConditionalBreakpoints: false,
             supportsHitConditionalBreakpoints: false
         });
@@ -1539,6 +1557,9 @@ class AtomicProofLiveDebugAdapter extends AtomicProofDebugAdapterBase
     async handleLaunch(message)
     {
         const args = message.arguments || {};
+        if (this.child) {
+            throw new Error("A Live VM debug server is already running.");
+        }
         const contractPath = resolveLiveContractPath(String(args.contractPath || ""));
         if (!contractPath) {
             throw new Error("launch configuration is missing contractPath");
@@ -1546,6 +1567,14 @@ class AtomicProofLiveDebugAdapter extends AtomicProofDebugAdapterBase
 
         this.contractPath = contractPath;
         this.workspaceRoot = getWorkspaceRoot() || path.dirname(contractPath);
+        this.executionState = "starting";
+        this.terminated = false;
+        this.entryStoppedSent = false;
+        this.shutdownRequested = false;
+        this.lastException = null;
+        this.currentSnapshot = null;
+        this.variableRefs.clear();
+        this.liveFrames.clear();
         const interpreterPath = resolveLiveInterpreterPath(
             args.interpreterPath,
             this.workspaceRoot,
@@ -1584,6 +1613,7 @@ class AtomicProofLiveDebugAdapter extends AtomicProofDebugAdapterBase
         this.startChild(interpreterPath, protocolArgs);
         await this.waitForReady();
         await this.sendProtocolRequest("initialize");
+        this.executionState = "paused";
         this.sendResponse(message);
         this.sendEvent("initialized");
     }
@@ -1621,65 +1651,112 @@ class AtomicProofLiveDebugAdapter extends AtomicProofDebugAdapterBase
         });
     }
 
-    handleStackTrace(message)
+    async handleStackTrace(message)
     {
-        const snapshot = this.currentSnapshot || {};
-        const sourceFile = snapshot.source?.file || this.contractPath;
-        const sourcePath = resolveLiveSourcePath(this.contractPath, sourceFile);
-        this.sendResponse(message, {
-            stackFrames: [{
-                id: 1,
-                name: snapshot.functionName || snapshot.opcode || "Live VM",
-                source: sourcePath ? {
+        const response = this.child
+            ? await this.sendProtocolRequest("stackTrace")
+            : {frames: []};
+        const protocolFrames = Array.isArray(response.frames)
+            ? response.frames
+            : [];
+        this.liveFrames.clear();
+        this.currentFrameId = 0;
+        const stackFrames = protocolFrames.map((frame, index) => {
+            const source = frame.source || {};
+            const sourceFile = source.file || this.contractPath;
+            const sourcePath = resolveLiveSourcePath(this.contractPath, sourceFile);
+            const id = Number(frame.id || index + 1);
+            this.liveFrames.set(id, frame);
+            if (index === 0) {
+                this.currentFrameId = id;
+            }
+            const line = Number(source.line || 0);
+            const column = Number(source.column || 0);
+            return {
+                id,
+                name: frame.name || "Live VM",
+                source: sourcePath && line > 0 ? {
                     name: path.basename(sourcePath),
                     path: sourcePath
                 } : undefined,
-                line: Math.max(1, Number(snapshot.source?.line || 1)),
-                column: Math.max(1, Number(snapshot.source?.column || 1))
-            }],
-            totalFrames: this.currentSnapshot ? 1 : 0
+                line: line > 0 ? line : 1,
+                column: column > 0 ? column : 1
+            };
+        });
+        this.sendResponse(message, {
+            stackFrames,
+            totalFrames: stackFrames.length
         });
     }
 
     handleScopes(message)
     {
-        const snapshot = this.currentSnapshot || {};
-        this.variableRefs.clear();
-        this.nextVarRef = 1;
+        const frameId = Number(message.arguments?.frameId || this.currentFrameId || 0);
         this.sendResponse(message, {
             scopes: [
                 {
+                    name: "Locals",
+                    variablesReference: this.createVariableRef({
+                        remote: true,
+                        scope: "locals",
+                        frameId
+                    }),
+                    expensive: false
+                },
+                {
+                    name: "Globals",
+                    variablesReference: this.createVariableRef({
+                        remote: true,
+                        scope: "globals",
+                        frameId
+                    }),
+                    expensive: false
+                },
+                {
                     name: "Instruction",
-                    variablesReference: this.createVariableRef(
-                        liveInstructionVariables(snapshot)
-                    ),
+                    variablesReference: this.createVariableRef({
+                        remote: true,
+                        scope: "instruction",
+                        frameId
+                    }),
                     expensive: false
                 },
                 {
                     name: "Main Stack",
-                    variablesReference: this.createVariableRef(
-                        liveStackVariables(snapshot.mainStack)
-                    ),
+                    variablesReference: this.createVariableRef({
+                        remote: true,
+                        scope: "mainStack",
+                        frameId
+                    }),
                     expensive: false
                 },
                 {
                     name: "Alt Stack",
-                    variablesReference: this.createVariableRef(
-                        liveStackVariables(snapshot.altStack)
-                    ),
+                    variablesReference: this.createVariableRef({
+                        remote: true,
+                        scope: "altStack",
+                        frameId
+                    }),
                     expensive: false
                 },
                 {
                     name: "Call Stack",
                     variablesReference: this.createVariableRef(
-                        liveCallStackVariables(snapshot.callStack)
+                        liveCallStackVariables(this.currentSnapshot?.callStack)
                     ),
                     expensive: false
                 },
                 {
                     name: "Warnings",
                     variablesReference: this.createVariableRef(
-                        liveWarningVariables(snapshot.warnings)
+                        liveWarningVariables(this.currentSnapshot?.warnings)
+                    ),
+                    expensive: false
+                },
+                {
+                    name: "Errors",
+                    variablesReference: this.createVariableRef(
+                        liveErrorVariables(this.currentSnapshot || {})
                     ),
                     expensive: false
                 }
@@ -1687,11 +1764,22 @@ class AtomicProofLiveDebugAdapter extends AtomicProofDebugAdapterBase
         });
     }
 
-    handleVariables(message)
+    async handleVariables(message)
     {
         const ref = Number(message.arguments?.variablesReference || 0);
+        const descriptor = this.variableRefs.get(ref);
+        if (descriptor?.remote) {
+            const response = await this.sendProtocolRequest("variables", {
+                scope: descriptor.scope,
+                frameId: descriptor.frameId
+            });
+            this.sendResponse(message, {
+                variables: liveProtocolVariables(this, response.variables || [])
+            });
+            return;
+        }
         this.sendResponse(message, {
-            variables: this.variableRefs.get(ref) || []
+            variables: Array.isArray(descriptor) ? descriptor : []
         });
     }
 
@@ -1699,7 +1787,12 @@ class AtomicProofLiveDebugAdapter extends AtomicProofDebugAdapterBase
     {
         const expression = String(message.arguments?.expression || "").trim();
         const response = this.child
-            ? await this.sendProtocolRequest("evaluate", {expression})
+            ? await this.sendProtocolRequest("evaluate", {
+                expression,
+                frameId: Number(
+                    message.arguments?.frameId || this.currentFrameId || 0
+                )
+            })
             : evaluateLiveExpression(this, expression);
         const result = response.result !== undefined
             ? String(response.result)
@@ -1713,10 +1806,41 @@ class AtomicProofLiveDebugAdapter extends AtomicProofDebugAdapterBase
     async handleExecutionCommand(message)
     {
         const command = message.command;
-        const response = await this.sendProtocolRequest(command);
+        if (command === "pause") {
+            if (this.executionState !== "running") {
+                throw new Error("AtomicProof VM is not running.");
+            }
+        } else if (this.executionState === "running") {
+            throw new Error("AtomicProof VM is already running.");
+        } else if (this.executionState === "error") {
+            throw new Error(
+                "AtomicProof VM stopped on a runtime error; restart the debug session."
+            );
+        } else if (this.terminated) {
+            throw new Error("AtomicProof VM debug session has terminated.");
+        }
+
+        const previousState = this.executionState;
+        if (command !== "pause") {
+            this.executionState = "running";
+            this.variableRefs.clear();
+            this.liveFrames.clear();
+            this.currentFrameId = 0;
+        }
+
+        let response;
+        this.beginProtocolEventDeferral();
+        try {
+            response = await this.sendProtocolRequest(command);
+        } catch (error) {
+            this.executionState = previousState;
+            this.endProtocolEventDeferral();
+            throw error;
+        }
         this.sendResponse(message, command === "continue"
             ? {allThreadsContinued: Boolean(response.allThreadsContinued)}
             : {});
+        this.endProtocolEventDeferral();
     }
 
     handleSource(message)
@@ -1732,8 +1856,25 @@ class AtomicProofLiveDebugAdapter extends AtomicProofDebugAdapterBase
         this.sendResponse(message, {content: "", mimeType: "text/plain"});
     }
 
+    handleExceptionInfo(message)
+    {
+        const error = this.lastException || this.currentSnapshot?.error ||
+            "AtomicProof runtime error";
+        this.sendResponse(message, {
+            exceptionId: "AtomicProofRuntimeError",
+            description: error,
+            breakMode: "always",
+            details: {
+                message: error,
+                typeName: "RuntimeError"
+            }
+        });
+    }
+
     async handleDisconnect(message)
     {
+        this.shutdownRequested = true;
+        this.beginProtocolEventDeferral();
         if (this.child) {
             try {
                 await this.sendProtocolRequest("disconnect");
@@ -1742,15 +1883,32 @@ class AtomicProofLiveDebugAdapter extends AtomicProofDebugAdapterBase
             }
         }
         this.sendResponse(message);
+        this.endProtocolEventDeferral();
     }
 
-    handleTerminate(message)
+    async handleTerminate(message)
     {
-        this.terminated = true;
-        this.stopChild();
-        this.rejectPending(new Error("Live VM debug session terminated."));
+        this.shutdownRequested = true;
+        this.beginProtocolEventDeferral();
+        const child = this.child;
+        if (this.child) {
+            try {
+                await this.sendProtocolRequest("terminate");
+            } catch (_error) {
+                this.stopChild();
+            }
+        }
+        if (child && this.child === child) {
+            await this.waitForChildExit(child);
+        }
         this.sendResponse(message);
-        this.sendEvent("terminated");
+        this.endProtocolEventDeferral();
+        if (!this.terminated) {
+            this.terminated = true;
+            this.executionState = "terminated";
+            this.rejectPending(new Error("Live VM debug session terminated."));
+            this.sendEvent("terminated");
+        }
     }
 
     startChild(interpreterPath, args)
@@ -1765,7 +1923,12 @@ class AtomicProofLiveDebugAdapter extends AtomicProofDebugAdapterBase
         });
         this.child.stdout.on("data", (chunk) => this.handleStdout(chunk));
         this.child.stderr.on("data", (chunk) => {
-            output.append(chunk.toString());
+            const text = chunk.toString();
+            output.append(text);
+            this.sendEvent("output", {
+                category: "stderr",
+                output: text
+            });
         });
         this.child.on("error", (error) => {
             this.rejectPending(error);
@@ -1781,15 +1944,26 @@ class AtomicProofLiveDebugAdapter extends AtomicProofDebugAdapterBase
             this.rejectPending(exitError);
             this.rejectReady?.(exitError);
             if (!this.terminated) {
-                this.terminated = true;
                 const detail = signal
                     ? `signal ${signal}`
                     : `code ${code}`;
-                this.sendEvent("output", {
-                    category: "console",
-                    output: `AtomicProof live debug server exited with ${detail}.\n`
-                });
-                this.sendEvent("terminated");
+                if (!this.shutdownRequested) {
+                    this.sendEvent("output", {
+                        category: "console",
+                        output: `AtomicProof live debug server exited with ${detail}.\n`
+                    });
+                }
+                if (this.protocolEventDeferralCount > 0) {
+                    this.deferredProtocolEvents.push({
+                        type: "event",
+                        event: "terminated",
+                        body: {}
+                    });
+                } else {
+                    this.terminated = true;
+                    this.executionState = "terminated";
+                    this.sendEvent("terminated");
+                }
             }
         });
     }
@@ -1840,7 +2014,15 @@ class AtomicProofLiveDebugAdapter extends AtomicProofDebugAdapterBase
 
     handleProtocolEvent(message)
     {
+        if (this.protocolEventDeferralCount > 0 &&
+            ["continued", "stopped", "terminated"].includes(message.event)) {
+            this.deferredProtocolEvents.push(message);
+            return;
+        }
         const body = message.body || {};
+        if (this.terminated && message.event !== "ready") {
+            return;
+        }
         if (body.snapshot) {
             this.currentSnapshot = body.snapshot;
         }
@@ -1851,12 +2033,42 @@ class AtomicProofLiveDebugAdapter extends AtomicProofDebugAdapterBase
             return;
         }
         if (message.event === "stopped") {
-            this.sendStopped(body.reason || "step");
+            this.variableRefs.clear();
+            this.nextVarRef = 1;
+            this.liveFrames.clear();
+            this.currentFrameId = 0;
+            const reason = body.reason === "error" || body.reason === "exception"
+                ? "exception"
+                : body.reason || "step";
+            this.executionState = reason === "exception" ? "error" : "paused";
+            const error = body.description || body.text || body.snapshot?.error;
+            if (reason === "exception" && error) {
+                this.lastException = String(error);
+                this.sendEvent("output", {
+                    category: "stderr",
+                    output: this.lastException + "\n"
+                });
+                this.sendStopped(reason, {
+                    description: this.lastException,
+                    text: this.lastException
+                });
+            } else {
+                this.sendStopped(reason);
+            }
+            return;
+        }
+        if (message.event === "continued") {
+            this.executionState = "running";
+            this.sendEvent("continued", {
+                threadId: Number(body.threadId || 1),
+                allThreadsContinued: body.allThreadsContinued !== false
+            });
             return;
         }
         if (message.event === "terminated") {
             if (!this.terminated) {
                 this.terminated = true;
+                this.executionState = "terminated";
                 this.sendEvent("terminated");
             }
             return;
@@ -1865,6 +2077,7 @@ class AtomicProofLiveDebugAdapter extends AtomicProofDebugAdapterBase
             const error = new Error(String(
                 body.message || "Live VM debug server error"
             ));
+            this.lastException = error.message;
             this.rejectReady?.(error);
             this.sendEvent("output", {
                 category: "stderr",
@@ -1873,9 +2086,56 @@ class AtomicProofLiveDebugAdapter extends AtomicProofDebugAdapterBase
         }
     }
 
+    flushDeferredProtocolEvents()
+    {
+        const events = this.deferredProtocolEvents.splice(0);
+        for (const event of events) {
+            this.handleProtocolEvent(event);
+        }
+    }
+
+    beginProtocolEventDeferral()
+    {
+        this.protocolEventDeferralCount += 1;
+    }
+
+    endProtocolEventDeferral()
+    {
+        this.protocolEventDeferralCount = Math.max(
+            0,
+            this.protocolEventDeferralCount - 1
+        );
+        if (this.protocolEventDeferralCount === 0) {
+            this.flushDeferredProtocolEvents();
+        }
+    }
+
     waitForReady()
     {
         return this.readyPromise || Promise.resolve();
+    }
+
+    waitForChildExit(child, timeoutMs = 1000)
+    {
+        if (!child || child.exitCode !== null || child.signalCode !== null) {
+            return Promise.resolve();
+        }
+        return new Promise((resolve) => {
+            let settled = false;
+            const finish = () => {
+                if (settled) return;
+                settled = true;
+                clearTimeout(timer);
+                resolve();
+            };
+            const timer = setTimeout(() => {
+                if (this.child === child) {
+                    this.stopChild();
+                }
+                finish();
+            }, timeoutMs);
+            child.once("close", finish);
+        });
     }
 
     sendProtocolRequest(command, args = {})
@@ -2028,11 +2288,39 @@ class AtomicProofTraceDebugAdapter extends AtomicProofDebugAdapterBase
     handleSetBreakpoints(message)
     {
         const sourcePath = message.arguments?.source?.path || "";
-        const sourceLines = new Set(this.steps().map((step) => sourceLineForTraceStep(step)));
+        const defaultSource = sourceFileForTraceStep(
+            this.trace,
+            this.steps()[0],
+            this.tracePath
+        );
+        const mappedSourcePaths = [...new Set(this.steps().map((step) =>
+            normalizeDebugSourcePath(resolveDebugSourcePath(
+                this.tracePath,
+                sourceFileForTraceStep(this.trace, step, this.tracePath)
+            ))
+        ))];
+        const basenameMatches = sourcePath && !path.isAbsolute(sourcePath)
+            ? mappedSourcePaths.filter((candidate) =>
+                path.basename(candidate) === path.basename(sourcePath)
+            )
+            : [];
+        const normalizedSourcePath = basenameMatches.length === 1
+            ? basenameMatches[0]
+            : normalizeDebugSourcePath(sourcePath
+                ? resolveDebugSourcePath(this.tracePath, sourcePath)
+                : resolveDebugSourcePath(this.tracePath, defaultSource));
+        const hasMappedStep = (line) => this.steps().some((step) =>
+            sourceLineForTraceStep(step) === line &&
+            normalizeDebugSourcePath(resolveDebugSourcePath(
+                this.tracePath,
+                sourceFileForTraceStep(this.trace, step, this.tracePath)
+            )) === normalizedSourcePath
+        );
         const requested = message.arguments?.breakpoints || [];
         this.breakpoints = requested.map((bp, index) => ({
             id: index + 1,
             path: sourcePath,
+            normalizedPath: normalizedSourcePath,
             line: Number(bp.line || 0),
             condition: String(bp.condition || "").trim(),
             hitCondition: String(bp.hitCondition || "").trim(),
@@ -2042,9 +2330,9 @@ class AtomicProofTraceDebugAdapter extends AtomicProofDebugAdapterBase
         this.sendResponse(message, {
             breakpoints: this.breakpoints.map((bp) => ({
                 id: bp.id,
-                verified: sourceLines.has(bp.line),
+                verified: hasMappedStep(bp.line),
                 line: bp.line,
-                message: sourceLines.has(bp.line)
+                message: hasMappedStep(bp.line)
                     ? undefined
                     : "No trace step is mapped to this source line."
             }))
@@ -2201,8 +2489,13 @@ class AtomicProofTraceDebugAdapter extends AtomicProofDebugAdapterBase
         if (!line) {
             return false;
         }
+        const currentPath = normalizeDebugSourcePath(resolveDebugSourcePath(
+            this.tracePath,
+            sourceFileForTraceStep(this.trace, step, this.tracePath)
+        ));
         for (const breakpoint of this.breakpoints) {
-            if (breakpoint.line !== line) {
+            if (breakpoint.line !== line ||
+                breakpoint.normalizedPath !== currentPath) {
                 continue;
             }
             breakpoint.hitCount += 1;
@@ -2521,10 +2814,18 @@ function sourceColumnForTraceStep(step)
 function sourceFileForTraceStep(trace, step, tracePath)
 {
     const source = (trace && trace.source) || {};
-    return source.file ||
-        (step && (step.sourceFile || (step.source && step.source.file))) ||
+    return (step && (step.sourceFile || (step.source && step.source.file))) ||
+        source.file ||
         tracePath ||
         "stack_trace.json";
+}
+
+function normalizeDebugSourcePath(sourcePath)
+{
+    if (!sourcePath) {
+        return "";
+    }
+    return normalizeFsPath(canonicalPath(sourcePath));
 }
 
 function resolveDebugSourcePath(tracePath, sourceFile)
@@ -2660,6 +2961,32 @@ function liveWarningVariables(warnings)
         value: String(warning),
         variablesReference: 0
     }));
+}
+
+function liveErrorVariables(snapshot)
+{
+    const error = snapshot?.error || "";
+    return error ? [dapVariable("runtimeError", error)] : [];
+}
+
+function liveProtocolVariables(adapter, variables)
+{
+    return (variables || []).map((variable) => {
+        const children = Array.isArray(variable.children)
+            ? liveProtocolVariables(adapter, variable.children)
+            : [];
+        return {
+            name: String(variable.name || ""),
+            value: String(variable.value ?? ""),
+            type: variable.type ? String(variable.type) : undefined,
+            variablesReference: children.length
+                ? adapter.createVariableRef(children)
+                : 0,
+            presentationHint: variable.available === false
+                ? {attributes: ["readOnly"]}
+                : undefined
+        };
+    });
 }
 
 function evaluateLiveExpression(adapter, expression)

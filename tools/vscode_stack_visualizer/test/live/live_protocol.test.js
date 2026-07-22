@@ -26,6 +26,34 @@ const contract = path.join(
     "debugger_regression",
     "debug_stack_visualizer_alt.ct"
 );
+const asyncPauseContract = path.join(
+    repoRoot,
+    "test",
+    "debugger_regression",
+    "debug_async_pause.ct"
+);
+const runtimeErrorContract = path.join(
+    repoRoot,
+    "test",
+    "debugger_regression",
+    "debug_runtime_error.ct"
+);
+const privateFunctionContract = path.join(
+    repoRoot,
+    "test",
+    "debugger_regression",
+    "debug_private_function_step.ct"
+);
+
+async function waitForCondition(predicate, message, timeoutMs = 3000)
+{
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+        if (predicate()) return;
+        await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    throw new Error(message);
+}
 
 class JsonlClient
 {
@@ -41,10 +69,12 @@ class JsonlClient
         this.buffer = "";
         this.stderr = "";
         this.messages = [];
+        this.history = [];
         this.waiters = new Set();
         this.seq = 1;
         this.closed = false;
         this.closeInfo = null;
+        this.terminatedSeen = false;
         this.child.stdout.on("data", (chunk) => this.onData(chunk));
         this.child.stderr.on("data", (chunk) => { this.stderr += chunk; });
         this.child.on("close", (code, signal) => {
@@ -66,7 +96,12 @@ class JsonlClient
             const line = this.buffer.slice(0, newline).trim();
             this.buffer = this.buffer.slice(newline + 1);
             if (line) {
-                this.messages.push(JSON.parse(line));
+                const message = JSON.parse(line);
+                if (message.type === "event" && message.event === "terminated") {
+                    this.terminatedSeen = true;
+                }
+                this.messages.push(message);
+                this.history.push(message);
                 this.flushWaiters();
             }
         }
@@ -134,7 +169,9 @@ class JsonlClient
         if (!this.closed && this.child.stdin.writable) {
             const response = await this.request("disconnect");
             assert.strictEqual(response.success, true, response.message);
-            await this.event("terminated");
+            if (!this.terminatedSeen) {
+                await this.event("terminated");
+            }
             this.child.stdin.end();
         }
         await this.waitForExit();
@@ -211,6 +248,13 @@ test("真实 JSONL breakpoint + continue 在源码行停止", async (t) => {
     const client = new JsonlClient(serverArgs());
     t.after(() => client.cleanup());
     await client.event("ready");
+    const wrongSource = await client.request("setBreakpoints", {
+        source: {path: path.join(path.dirname(contract), "not-the-contract.ct")},
+        breakpoints: [{line: 7}]
+    });
+    assert.strictEqual(wrongSource.success, true, wrongSource.message);
+    assert.strictEqual(wrongSource.body.breakpoints[0].verified, false);
+
     const setResponse = await client.request("setBreakpoints", {
         source: {path: contract},
         breakpoints: [{line: 7}, {line: 9999}]
@@ -224,6 +268,250 @@ test("真实 JSONL breakpoint + continue 在源码行停止", async (t) => {
     const stopped = await client.event("stopped");
     assert.strictEqual(stopped.body.reason, "breakpoint");
     assert.strictEqual(stopped.body.snapshot.source.line, 7);
+    await client.disconnect();
+});
+
+test("真实 JSONL 运行时错误作为 exception 停止并携带错误详情", async (t) => {
+    const client = new JsonlClient([
+        "debug-server",
+        runtimeErrorContract,
+        "test_runtime_error"
+    ]);
+    t.after(() => client.cleanup());
+    await client.event("ready");
+
+    const response = await client.request("continue");
+    assert.strictEqual(response.success, true, response.message);
+    await client.event("continued");
+    const stopped = await client.event("stopped");
+    assert.strictEqual(stopped.body.reason, "exception");
+    assert.match(stopped.body.description, /OP_VERIFY failed/);
+    assert.match(stopped.body.snapshot.error, /OP_VERIFY failed/);
+    assert.strictEqual(client.terminatedSeen, false);
+
+    const duplicateStopsBefore = client.messages.filter((message) =>
+        message.type === "event" && message.event === "stopped"
+    ).length;
+    const staleFrame = await client.request("variables", {
+        scope: "locals",
+        frameId: 999999
+    });
+    assert.strictEqual(staleFrame.success, false);
+    const duplicateStopsAfter = client.messages.filter((message) =>
+        message.type === "event" && message.event === "stopped"
+    ).length;
+    assert.strictEqual(duplicateStopsAfter, duplicateStopsBefore);
+    await client.disconnect();
+});
+
+test("真实 JSONL 返回完整调用栈、帧变量并拒绝未知表达式", async (t) => {
+    const client = new JsonlClient([
+        "debug-server",
+        privateFunctionContract,
+        "test_private_step",
+        "4",
+        "3"
+    ]);
+    t.after(() => client.cleanup());
+    await client.event("ready");
+
+    for (let index = 0; index < 2; index += 1) {
+        const step = await client.request("stepIn");
+        assert.strictEqual(step.success, true, step.message);
+        await client.event("stopped");
+    }
+
+    const stackTrace = await client.request("stackTrace");
+    assert.strictEqual(stackTrace.success, true, stackTrace.message);
+    assert.deepStrictEqual(
+        stackTrace.body.frames.map((frame) => frame.name),
+        ["_sum_pair", "test_private_step"]
+    );
+    assert(stackTrace.body.frames.every((frame) => Number(frame.id) > 0));
+    assert(stackTrace.body.frames.every((frame) => frame.source.line > 0));
+
+    const calleeFrame = stackTrace.body.frames[0];
+    const locals = await client.request("variables", {
+        scope: "locals",
+        frameId: calleeFrame.id
+    });
+    assert.strictEqual(locals.success, true, locals.message);
+    const localMap = Object.fromEntries(
+        locals.body.variables.map((item) => [item.name, item])
+    );
+    assert.strictEqual(localMap.x.value, "5");
+    assert.strictEqual(localMap.y.value, "3");
+
+    const evaluated = await client.request("evaluate", {
+        expression: "x",
+        frameId: calleeFrame.id
+    });
+    assert.strictEqual(evaluated.success, true, evaluated.message);
+    assert.strictEqual(evaluated.body.result, "5");
+
+    const callerFrame = stackTrace.body.frames[1];
+    const callerLocals = await client.request("variables", {
+        scope: "locals",
+        frameId: callerFrame.id
+    });
+    assert.strictEqual(callerLocals.success, true, callerLocals.message);
+    assert.deepStrictEqual(
+        callerLocals.body.variables.map((item) => [item.name, item.value]),
+        [["before", "5"]]
+    );
+    const callerEvaluation = await client.request("evaluate", {
+        expression: "before",
+        frameId: callerFrame.id
+    });
+    assert.strictEqual(callerEvaluation.success, true, callerEvaluation.message);
+    assert.strictEqual(callerEvaluation.body.result, "5");
+    for (const [expression, expected] of [
+        ["pc", String(callerFrame.pc)],
+        ["functionName", "test_private_step"],
+        ["main[0].int", "5"]
+    ]) {
+        const frameEvaluation = await client.request("evaluate", {
+            expression,
+            frameId: callerFrame.id
+        });
+        assert.strictEqual(
+            frameEvaluation.success,
+            true,
+            frameEvaluation.message
+        );
+        assert.strictEqual(frameEvaluation.body.result, expected);
+    }
+    const callerMainStack = await client.request("variables", {
+        scope: "mainStack",
+        frameId: callerFrame.id
+    });
+    assert.strictEqual(callerMainStack.success, true, callerMainStack.message);
+    assert.match(callerMainStack.body.variables[0].value, /int=5/);
+
+    const stoppedBefore = client.messages.filter((message) =>
+        message.type === "event" && message.event === "stopped"
+    ).length;
+    const unknown = await client.request("evaluate", {
+        expression: "does_not_exist",
+        frameId: calleeFrame.id
+    });
+    assert.strictEqual(unknown.success, false);
+    assert.match(unknown.message, /not found|unknown|failed|未找到/i);
+    const stoppedAfter = client.messages.filter((message) =>
+        message.type === "event" && message.event === "stopped"
+    ).length;
+    assert.strictEqual(stoppedAfter, stoppedBefore);
+    await client.disconnect();
+});
+
+test("真实 JSONL 非零函数入口在 ready 阶段返回匹配的顶层帧", async (t) => {
+    const client = new JsonlClient([
+        "debug-server",
+        privateFunctionContract,
+        "_sum_pair",
+        "4",
+        "3"
+    ]);
+    t.after(() => client.cleanup());
+
+    const ready = await client.event("ready");
+    assert.strictEqual(ready.body.snapshot.functionName, "_sum_pair");
+    const stackTrace = await client.request("stackTrace");
+    assert.strictEqual(stackTrace.success, true, stackTrace.message);
+    assert.deepStrictEqual(
+        stackTrace.body.frames.map((frame) => frame.name),
+        ["_sum_pair"]
+    );
+    assert.strictEqual(
+        stackTrace.body.frames[0].pc,
+        ready.body.snapshot.pc
+    );
+    await client.disconnect();
+});
+
+test("真实 JSONL 顶层 stepOut 直接终止且不产生伪停止位置", async (t) => {
+    const client = new JsonlClient(serverArgs());
+    t.after(() => client.cleanup());
+    await client.event("ready");
+
+    const response = await client.request("stepOut");
+    assert.strictEqual(response.success, true, response.message);
+    assert.strictEqual(response.body.snapshot.state, "finished");
+    await client.event("terminated");
+    assert.strictEqual(
+        client.messages.some((message) =>
+            message.type === "event" && message.event === "stopped"
+        ),
+        false
+    );
+    await client.disconnect();
+});
+
+test("真实 JSONL continue 可被并发 pause 中断且不会先终止", async (t) => {
+    const client = new JsonlClient([
+        "debug-server",
+        asyncPauseContract,
+        "test_async_pause"
+    ], 20000);
+    t.after(() => client.cleanup());
+    await client.event("ready");
+
+    const continueSeq = client.seq++;
+    const inspectSeq = client.seq++;
+    const initializeSeq = client.seq++;
+    const pauseSeq = client.seq++;
+    client.child.stdin.write(
+        JSON.stringify({seq: continueSeq, command: "continue"}) + "\n" +
+        JSON.stringify({seq: inspectSeq, command: "snapshot"}) + "\n" +
+        JSON.stringify({seq: initializeSeq, command: "initialize"}) + "\n" +
+        JSON.stringify({seq: pauseSeq, command: "pause"}) + "\n"
+    );
+
+    const continueResponse = await client.waitFor(
+        (message) => message.type === "response" &&
+            message.request_seq === continueSeq,
+        "continue response"
+    );
+    assert.strictEqual(continueResponse.success, true, continueResponse.message);
+    assert.strictEqual(continueResponse.body.allThreadsContinued, true);
+
+    const continued = await client.event("continued");
+    assert.strictEqual(continued.body.allThreadsContinued, true);
+    const inspectResponse = await client.waitFor(
+        (message) => message.type === "response" &&
+            message.request_seq === inspectSeq,
+        "running snapshot response"
+    );
+    assert.strictEqual(inspectResponse.success, false);
+    assert.match(inspectResponse.message, /program is running/);
+    const initializeResponse = await client.waitFor(
+        (message) => message.type === "response" &&
+            message.request_seq === initializeSeq,
+        "running initialize response"
+    );
+    assert.strictEqual(initializeResponse.success, false);
+    assert.match(initializeResponse.message, /program is running/);
+    const pauseResponse = await client.waitFor(
+        (message) => message.type === "response" &&
+            message.request_seq === pauseSeq,
+        "pause response"
+    );
+    assert.strictEqual(pauseResponse.success, true, pauseResponse.message);
+
+    const stopped = await client.event("stopped");
+    assert.strictEqual(stopped.body.reason, "pause");
+    assert.strictEqual(stopped.body.snapshot.state, "paused");
+    assert(
+        client.history.indexOf(pauseResponse) < client.history.indexOf(stopped),
+        "pause response must precede the asynchronous stopped event"
+    );
+    assert.strictEqual(client.terminatedSeen, false);
+
+    const resumed = await client.request("continue");
+    assert.strictEqual(resumed.success, true, resumed.message);
+    await client.event("continued");
+    await client.event("terminated");
+    assert.strictEqual(client.terminatedSeen, true);
     await client.disconnect();
 });
 
@@ -259,6 +547,60 @@ test("真实 Live DAP Adapter 连接真实解释器并支持 terminate", async (
     assertSuccess(assert, await client.request("terminate"));
     assert.strictEqual(adapter.child, null);
     assert.strictEqual(client.events("terminated").length, 1);
+});
+
+test("真实 Live DAP 将运行时错误映射为 exception、Errors 和 exceptionInfo", async (t) => {
+    const vscode = createVscodeMock({workspaceRoot: repoRoot});
+    const extension = loadExtensionWithMock(path.join(extensionRoot, "extension.js"), vscode);
+    const adapter = new extension.__test.AtomicProofLiveDebugAdapter();
+    const client = attach(adapter);
+    t.after(() => client.dispose());
+
+    assertSuccess(assert, await client.request("launch", {
+        contractPath: runtimeErrorContract,
+        functionName: "test_runtime_error",
+        interpreterPath: interpreter
+    }, 10000));
+    assertSuccess(assert, await client.request("continue"));
+    await waitForCondition(
+        () => client.events("stopped").some((event) =>
+            event.body.reason === "exception"
+        ),
+        "DAP did not emit an exception stop"
+    );
+
+    const stopped = client.events("stopped").at(-1);
+    assert.match(stopped.body.description, /OP_VERIFY failed/);
+    const exception = assertSuccess(
+        assert,
+        await client.request("exceptionInfo", {threadId: 1})
+    );
+    assert.match(exception.description, /OP_VERIFY failed/);
+
+    const frame = assertSuccess(
+        assert,
+        await client.request("stackTrace", {threadId: 1})
+    ).stackFrames[0];
+    const scopes = assertSuccess(
+        assert,
+        await client.request("scopes", {frameId: frame.id})
+    ).scopes;
+    const errors = scopes.find((scope) => scope.name === "Errors");
+    const errorVariables = assertSuccess(
+        assert,
+        await client.request("variables", {
+            variablesReference: errors.variablesReference
+        })
+    ).variables;
+    assert.match(errorVariables[0].value, /OP_VERIFY failed/);
+    assert(client.events("output").some((event) =>
+        event.body.category === "stderr" &&
+        /OP_VERIFY failed/.test(event.body.output)
+    ));
+    const invalidContinue = await client.request("continue");
+    assert.strictEqual(invalidContinue.success, false);
+    assert.match(invalidContinue.message, /runtime error.*restart/i);
+    assertSuccess(assert, await client.request("disconnect"));
 });
 
 test("编译错误、函数不存在、参数错误和 txFile 错误均失败且退出", async (t) => {

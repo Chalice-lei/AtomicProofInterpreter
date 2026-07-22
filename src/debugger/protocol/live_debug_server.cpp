@@ -1,11 +1,18 @@
 #include "live_debug_server.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cctype>
+#include <condition_variable>
+#include <filesystem>
+#include <functional>
+#include <map>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -19,6 +26,8 @@
 #include "../breakpoint/breakpoint_manager.h"
 #include "../core/debugger_core.h"
 #include "../info/debug_info.h"
+#include "../inspector/expression_evaluator.h"
+#include "../inspector/variable_inspector.h"
 #include "../vm/bvm_simulator.h"
 #include "../vm/stack_argument.h"
 #include "../vm/stack_state.h"
@@ -195,6 +204,52 @@ std::string stackArgumentStatusMessage(StackArgumentStatus status)
     return "invalid value";
 }
 
+std::string sourcePathKey(
+    const std::string& filename,
+    const std::string& primarySource
+)
+{
+    namespace fs = std::filesystem;
+    fs::path path(filename.empty() ? primarySource : filename);
+    if (path.is_relative() && !primarySource.empty()) {
+        std::error_code primaryError;
+        fs::path primaryPath(primarySource);
+        fs::path primaryAbsolute = primaryPath.is_absolute()
+                                       ? primaryPath
+                                       : fs::absolute(
+                                             primaryPath,
+                                             primaryError
+                                         );
+        if (primaryError) {
+            primaryAbsolute = primaryPath;
+        }
+        path = path.lexically_normal() == primaryPath.lexically_normal()
+                   ? primaryAbsolute
+                   : primaryAbsolute.parent_path() / path;
+    }
+
+    std::error_code error;
+    fs::path normalized = fs::weakly_canonical(path, error);
+    if (error) {
+        normalized = fs::absolute(path, error);
+        if (error) {
+            normalized = path;
+        }
+        normalized = normalized.lexically_normal();
+    }
+
+    std::string key = normalized.generic_string();
+#ifdef _WIN32
+    std::transform(
+        key.begin(),
+        key.end(),
+        key.begin(),
+        [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); }
+    );
+#endif
+    return key;
+}
+
 json stackElementToJson(
     const StackElement& value,
     size_t bottomIndex,
@@ -229,6 +284,7 @@ json callStackToJson(const std::vector<CallFrame>& frames)
     for (size_t index = 0; index < frames.size(); ++index) {
         const auto& frame = frames[index];
         json item;
+        item["id"] = frame.frameId;
         item["index"] = index;
         item["functionName"] = frame.functionName;
         item["returnPC"] = frame.returnPC;
@@ -236,10 +292,14 @@ json callStackToJson(const std::vector<CallFrame>& frames)
         item["frameStart"] = frame.frameStart;
         item["entryPC"] = frame.entryPC;
         item["instructionCount"] = frame.instructionCount;
+        item["suspendedPC"] = frame.suspendedPC;
+        const SourceLocation& frameLocation = frame.suspendedLocation.isValid()
+                                                  ? frame.suspendedLocation
+                                                  : frame.callLocation;
         item["source"] = {
-            {"file", frame.callLocation.filename},
-            {"line", frame.callLocation.line},
-            {"column", frame.callLocation.column}
+            {"file", frameLocation.filename},
+            {"line", frameLocation.line},
+            {"column", frameLocation.column}
         };
         result.push_back(std::move(item));
     }
@@ -261,12 +321,67 @@ json makeVariable(
     return item;
 }
 
+json variableValueToJson(const VariableValue& variable)
+{
+    json item;
+    item["name"] = variable.name;
+    item["type"] = variable.type;
+    item["value"] = variable.isValid ? variable.value : "<unavailable>";
+    item["rawValue"] = variable.rawValue;
+    item["available"] = variable.isValid;
+    item["stackOffset"] = variable.stackOffset;
+
+    json children = json::array();
+    for (const auto& field : variable.fields) {
+        children.push_back(variableValueToJson(field));
+    }
+    for (const auto& element : variable.elements) {
+        children.push_back(variableValueToJson(element));
+    }
+    if (!children.empty()) {
+        item["children"] = std::move(children);
+    }
+    return item;
+}
+
+json variableValuesToJson(const std::vector<VariableValue>& variables)
+{
+    json result = json::array();
+    for (const auto& variable : variables) {
+        result.push_back(variableValueToJson(variable));
+    }
+    return result;
+}
+
+enum class LiveSessionState {
+    Ready,
+    Running,
+    Paused,
+    Finished,
+    Error,
+    Terminated
+};
+
 class LiveDebugSession
 {
 public:
-    explicit LiveDebugSession(LiveDebugServerOptions options)
-        : m_options(std::move(options))
+    using EventSink = std::function<void(const json&)>;
+
+    LiveDebugSession(LiveDebugServerOptions options, EventSink eventSink)
+        : m_options(std::move(options)), m_eventSink(std::move(eventSink))
     {}
+
+    ~LiveDebugSession()
+    {
+        m_disconnectRequested.store(true, std::memory_order_release);
+        m_pauseAckCondition.notify_all();
+        if (m_vm &&
+            m_sessionState.load(std::memory_order_acquire) ==
+                LiveSessionState::Running) {
+            m_vm->requestTerminate();
+        }
+        joinExecutionThread();
+    }
 
     bool initialize(std::string& errorMessage)
     {
@@ -307,6 +422,10 @@ public:
             return false;
         }
 
+        // setExecutionRange 会移动 PC；重置一次以按选定函数入口和初始参数
+        // 重建顶层调用帧，确保 ready 阶段的 stackTrace/scopes 一致。
+        m_vm->reset();
+        m_sessionState.store(LiveSessionState::Ready, std::memory_order_release);
         return true;
     }
 
@@ -325,6 +444,9 @@ public:
 
         try {
             if (command == "initialize") {
+                if (isRunning()) {
+                    return runningRequestError(request);
+                }
                 return makeResponse(
                     request,
                     true,
@@ -338,33 +460,71 @@ public:
             }
 
             if (command == "setBreakpoints") {
+                if (isRunning()) {
+                    return runningRequestError(request);
+                }
                 return handleSetBreakpoints(request);
             }
 
             if (command == "continue") {
-                if (canExecute()) {
-                    m_vm->run();
+                if (!canExecute()) {
+                    return makeResponse(
+                        request,
+                        false,
+                        json::object(),
+                        "program is not paused or ready"
+                    );
                 }
-                events.push_back(stopOrTerminateEvent("continue"));
+                joinExecutionThread();
+                m_vm->clearExecutionRequests();
+                if (m_vm->getState() == VMState::READY) {
+                    m_vm->start();
+                }
+                m_sessionState.store(
+                    LiveSessionState::Running,
+                    std::memory_order_release
+                );
+                m_pendingContinue.store(true, std::memory_order_release);
+
+                json runningSnapshot = snapshot();
+                runningSnapshot["state"] = "running";
+                events.push_back(makeEvent(
+                    "continued",
+                    {{"threadId", 1}, {"allThreadsContinued", true}}
+                ));
                 return makeResponse(
                     request,
                     true,
-                    {{"allThreadsContinued", false}, {"snapshot", snapshot()}}
+                    {
+                        {"allThreadsContinued", true},
+                        {"snapshot", std::move(runningSnapshot)}
+                    }
                 );
             }
 
             if (command == "next" || command == "stepIn" ||
                 command == "stepOut") {
-                if (canExecute()) {
-                    if (command == "next") {
-                        m_vm->stepOver();
-                    } else if (command == "stepIn") {
-                        m_vm->stepIn();
-                    } else {
-                        m_vm->stepOut();
-                    }
+                if (!canExecute()) {
+                    return makeResponse(
+                        request,
+                        false,
+                        json::object(),
+                        "program is not paused or ready"
+                    );
                 }
-                events.push_back(stopOrTerminateEvent("step"));
+                joinExecutionThread();
+                m_vm->clearExecutionRequests();
+                if (command == "next") {
+                    m_vm->stepOver();
+                } else if (command == "stepIn") {
+                    m_vm->stepIn();
+                } else {
+                    m_vm->stepOut();
+                }
+                syncSessionStateFromVm();
+                if (const auto event = stopOrTerminateEvent("step")) {
+                    events.push_back(*event);
+                }
                 return makeResponse(
                     request,
                     true,
@@ -373,12 +533,30 @@ public:
             }
 
             if (command == "pause") {
-                m_vm->pause();
-                events.push_back(makeStoppedEvent("pause"));
-                return makeResponse(request, true, {{"snapshot", snapshot()}});
+                if (!isRunning()) {
+                    return makeResponse(
+                        request,
+                        false,
+                        json::object(),
+                        "program is not running"
+                    );
+                }
+                {
+                    std::lock_guard<std::mutex> lock(m_pauseAckMutex);
+                    m_pauseResponsePending = true;
+                }
+                m_vm->requestPause();
+                return makeResponse(
+                    request,
+                    true,
+                    {{"pauseRequested", true}}
+                );
             }
 
             if (command == "variables") {
+                if (isRunning()) {
+                    return runningRequestError(request);
+                }
                 return makeResponse(
                     request,
                     true,
@@ -387,9 +565,23 @@ public:
             }
 
             if (command == "evaluate") {
+                if (isRunning()) {
+                    return runningRequestError(request);
+                }
                 const std::string expression =
                     request.value("expression", request.value("expr", ""));
-                const json result = evaluate(expression);
+                const json result = evaluate(
+                    expression,
+                    request.value("frameId", static_cast<uint64_t>(0))
+                );
+                if (!result.value("success", true)) {
+                    return makeResponse(
+                        request,
+                        false,
+                        json::object(),
+                        result.value("message", "expression evaluation failed")
+                    );
+                }
                 return makeResponse(
                     request,
                     true,
@@ -402,10 +594,16 @@ public:
             }
 
             if (command == "snapshot") {
+                if (isRunning()) {
+                    return runningRequestError(request);
+                }
                 return makeResponse(request, true, {{"snapshot", snapshot()}});
             }
 
             if (command == "stackTrace") {
+                if (isRunning()) {
+                    return runningRequestError(request);
+                }
                 return makeResponse(
                     request,
                     true,
@@ -413,10 +611,31 @@ public:
                 );
             }
 
-            if (command == "disconnect") {
+            if (command == "disconnect" || command == "terminate") {
                 shouldExit = true;
-                events.push_back(makeEvent("terminated", {{"snapshot", snapshot()}}));
-                return makeResponse(request, true, {{"snapshot", snapshot()}});
+                m_disconnectRequested.store(true, std::memory_order_release);
+                m_pauseAckCondition.notify_all();
+                m_pendingContinue.store(false, std::memory_order_release);
+                if (isRunning()) {
+                    m_vm->requestTerminate();
+                }
+                joinExecutionThread();
+                m_sessionState.store(
+                    LiveSessionState::Terminated,
+                    std::memory_order_release
+                );
+                const json finalSnapshot = snapshot();
+                if (claimTerminatedEvent()) {
+                    events.push_back(makeEvent(
+                        "terminated",
+                        {{"snapshot", finalSnapshot}}
+                    ));
+                }
+                return makeResponse(
+                    request,
+                    true,
+                    {{"snapshot", finalSnapshot}}
+                );
             }
 
             return makeResponse(
@@ -426,12 +645,109 @@ public:
                 "unsupported live debug command: " + command
             );
         } catch (const std::exception& e) {
-            events.push_back(makeStoppedEvent("error"));
             return makeResponse(request, false, json::object(), e.what());
         }
     }
 
+    void startPendingExecution()
+    {
+        if (!m_pendingContinue.exchange(false, std::memory_order_acq_rel)) {
+            return;
+        }
+
+        joinExecutionThread();
+        m_executionThread = std::thread([this]() {
+            m_vm->run();
+
+            if (m_disconnectRequested.load(std::memory_order_acquire)) {
+                m_sessionState.store(
+                    LiveSessionState::Terminated,
+                    std::memory_order_release
+                );
+                return;
+            }
+
+            syncSessionStateFromVm();
+            const auto event = stopOrTerminateEvent("continue");
+            if (event && m_eventSink) {
+                waitForPauseResponse();
+                m_eventSink(*event);
+            }
+        });
+    }
+
+    void acknowledgeRequest(const json& request)
+    {
+        if (request.value("command", "") != "pause") {
+            return;
+        }
+        {
+            std::lock_guard<std::mutex> lock(m_pauseAckMutex);
+            m_pauseResponsePending = false;
+        }
+        m_pauseAckCondition.notify_all();
+    }
+
 private:
+    struct FrameInspectionContext
+    {
+        uint64_t frameId = 0;
+        size_t pc = 0;
+        StackState mainStack;
+        StackState altStack;
+        bool current = true;
+    };
+
+    std::optional<FrameInspectionContext> inspectionContext(
+        uint64_t requestedFrameId
+    ) const
+    {
+        if (!m_vm) {
+            return std::nullopt;
+        }
+
+        const auto& frames = m_vm->getCallStack();
+        if (frames.empty()) {
+            if (requestedFrameId != 0) {
+                return std::nullopt;
+            }
+            FrameInspectionContext context;
+            context.pc = m_vm->getPC();
+            context.mainStack = m_vm->getMainStack();
+            context.altStack = m_vm->getAltStack();
+            return context;
+        }
+
+        const CallFrame* selected = nullptr;
+        if (requestedFrameId == 0) {
+            selected = &frames.back();
+        } else {
+            for (const auto& frame : frames) {
+                if (frame.frameId == requestedFrameId) {
+                    selected = &frame;
+                    break;
+                }
+            }
+        }
+        if (!selected) {
+            return std::nullopt;
+        }
+
+        FrameInspectionContext context;
+        context.frameId = selected->frameId;
+        if (selected == &frames.back()) {
+            context.pc = m_vm->getPC();
+            context.mainStack = m_vm->getMainStack();
+            context.altStack = m_vm->getAltStack();
+        } else {
+            context.current = false;
+            context.pc = selected->suspendedPC;
+            context.mainStack.restore(selected->suspendedMainStack);
+            context.altStack.restore(selected->suspendedAltStack);
+        }
+        return context;
+    }
+
     bool configureFunctionAndInputs(std::string& errorMessage)
     {
         const json* structsJson = nullptr;
@@ -571,23 +887,99 @@ private:
 
     bool canExecute() const
     {
-        if (!m_vm) {
-            return false;
+        const LiveSessionState state =
+            m_sessionState.load(std::memory_order_acquire);
+        return m_vm &&
+               (state == LiveSessionState::Ready ||
+                state == LiveSessionState::Paused);
+    }
+
+    bool isRunning() const
+    {
+        return m_sessionState.load(std::memory_order_acquire) ==
+               LiveSessionState::Running;
+    }
+
+    void joinExecutionThread()
+    {
+        if (m_executionThread.joinable()) {
+            m_executionThread.join();
         }
-        const VMState state = m_vm->getState();
-        return state != VMState::FINISHED && state != VMState::ERROR;
+    }
+
+    void waitForPauseResponse()
+    {
+        std::unique_lock<std::mutex> lock(m_pauseAckMutex);
+        m_pauseAckCondition.wait(lock, [this]() {
+            return !m_pauseResponsePending ||
+                   m_disconnectRequested.load(std::memory_order_acquire);
+        });
+    }
+
+    void syncSessionStateFromVm()
+    {
+        LiveSessionState state = LiveSessionState::Error;
+        switch (m_vm->getState()) {
+            case VMState::READY:
+                state = LiveSessionState::Ready;
+                break;
+            case VMState::RUNNING:
+            case VMState::STEP_MODE:
+                state = LiveSessionState::Running;
+                break;
+            case VMState::PAUSED:
+                state = LiveSessionState::Paused;
+                break;
+            case VMState::FINISHED:
+                state = LiveSessionState::Finished;
+                break;
+            case VMState::ERROR:
+                state = LiveSessionState::Error;
+                break;
+        }
+        m_sessionState.store(state, std::memory_order_release);
+    }
+
+    json runningRequestError(const json& request) const
+    {
+        return makeResponse(
+            request,
+            false,
+            json::object(),
+            "program is running; pause it before inspecting or reconfiguring"
+        );
+    }
+
+    bool claimTerminatedEvent()
+    {
+        bool expected = false;
+        return m_terminatedEventSent.compare_exchange_strong(
+            expected,
+            true,
+            std::memory_order_acq_rel
+        );
     }
 
     json handleSetBreakpoints(const json& request)
     {
-        m_breakpoints->removeAllBreakpoints();
-
         const std::string sourcePath =
             request.contains("source") && request["source"].is_object()
                 ? request["source"].value("path", m_options.sourceFile)
                 : request.value("sourcePath", m_options.sourceFile);
+        const std::string sourceKey = sourcePathKey(
+            sourcePath,
+            m_options.sourceFile
+        );
+        auto previous = m_sourceBreakpointIds.find(sourceKey);
+        if (previous != m_sourceBreakpointIds.end()) {
+            for (size_t id : previous->second) {
+                m_breakpoints->removeBreakpoint(id);
+            }
+            m_sourceBreakpointIds.erase(previous);
+        }
 
         json responseBreakpoints = json::array();
+        std::vector<size_t> sourceBreakpointIds;
         const json requested =
             request.contains("breakpoints") && request["breakpoints"].is_array()
                 ? request["breakpoints"]
@@ -613,11 +1005,21 @@ private:
             if (id == 0) {
                 bp["message"] = "no executable AtomicProof instruction is mapped to this line";
             } else {
+                sourceBreakpointIds.push_back(id);
                 bp["pcs"] = m_compileResult.debugInfo
-                                ? m_compileResult.debugInfo->getPCsForLine(line)
+                                ? m_compileResult.debugInfo->getPCsForSourceLine(
+                                      sourcePath,
+                                      line
+                                  )
                                 : std::vector<size_t>{};
             }
             responseBreakpoints.push_back(std::move(bp));
+        }
+        if (!sourceBreakpointIds.empty()) {
+            m_sourceBreakpointIds.emplace(
+                sourceKey,
+                std::move(sourceBreakpointIds)
+            );
         }
 
         return makeResponse(
@@ -644,7 +1046,8 @@ private:
                                                 : nullptr;
         const json lineInstructions = currentLineInstructions(
             location,
-            function
+            function,
+            m_vm->getPC()
         );
 
         body["pc"] = m_vm->getPC();
@@ -680,13 +1083,90 @@ private:
         return body;
     }
 
+    json snapshotForContext(const FrameInspectionContext& context) const
+    {
+        if (context.current) {
+            return snapshot();
+        }
+
+        json body = snapshot();
+        const SourceLocation location = m_compileResult.debugInfo
+                                            ? m_compileResult.debugInfo
+                                                  ->getSourceLocation(context.pc)
+                                            : SourceLocation();
+        const std::string instruction =
+            context.pc < m_compileResult.bytecodeInstructions.size()
+                ? m_compileResult.bytecodeInstructions[context.pc]
+                : "";
+        const auto [opcode, operand] = parseInstructionText(instruction);
+        const FunctionDebugInfo* function = m_compileResult.debugInfo
+                                                ? m_compileResult.debugInfo
+                                                      ->getFunctionAtPC(context.pc)
+                                                : nullptr;
+        const json lineInstructions = currentLineInstructions(
+            location,
+            function,
+            context.pc
+        );
+
+        body["pc"] = context.pc;
+        body["instruction"] = instruction;
+        body["opcode"] = opcode;
+        body["operand"] = operand;
+        body["lineInstructions"] = lineInstructions;
+        body["lineInstructionSummary"] =
+            summarizeLineInstructions(lineInstructions);
+        body["functionName"] = function ? function->name : "";
+        body["source"] = {
+            {"file", location.filename.empty() ? m_options.sourceFile
+                                                : location.filename},
+            {"line", location.line},
+            {"column", location.column},
+            {"endLine", location.endLine},
+            {"endColumn", location.endColumn}
+        };
+        body["mainStack"] = stackToJson(context.mainStack);
+        body["altStack"] = stackToJson(context.altStack);
+        return body;
+    }
+
     json variablesForScope(const json& request) const
     {
         const std::string scope =
             request.value("scope", request.value("name", "instruction"));
 
+        if (scope == "locals" || scope == "globals") {
+            const auto context = inspectionContext(
+                request.value("frameId", static_cast<uint64_t>(0))
+            );
+            if (!context) {
+                throw std::runtime_error("debug stack frame is no longer available");
+            }
+            auto inspector = m_vm->getVariableInspector();
+            if (!inspector) {
+                return json::array();
+            }
+            return variableValuesToJson(
+                scope == "locals"
+                    ? inspector->getLocalVariables(
+                          context->mainStack,
+                          context->pc
+                      )
+                    : inspector->getGlobalVariables(
+                          context->mainStack,
+                          context->pc
+                      )
+            );
+        }
+
         if (scope == "instruction") {
-            const json snap = snapshot();
+            const auto context = inspectionContext(
+                request.value("frameId", static_cast<uint64_t>(0))
+            );
+            if (!context) {
+                throw std::runtime_error("debug stack frame is no longer available");
+            }
+            const json snap = snapshotForContext(*context);
             const std::string opcodeSummary =
                 snap.value("lineInstructionSummary", "");
             const std::string currentOpcode = snap.value("opcode", "");
@@ -721,9 +1201,15 @@ private:
 
         if (scope == "mainStack" || scope == "main" ||
             scope == "altStack" || scope == "alt") {
+            const auto context = inspectionContext(
+                request.value("frameId", static_cast<uint64_t>(0))
+            );
+            if (!context) {
+                throw std::runtime_error("debug stack frame is no longer available");
+            }
             const StackState& stack =
-                (scope == "altStack" || scope == "alt") ? m_vm->getAltStack()
-                                                         : m_vm->getMainStack();
+                (scope == "altStack" || scope == "alt") ? context->altStack
+                                                         : context->mainStack;
             const auto values = stack.getAll();
             json result = json::array();
             for (size_t depth = 0; depth < values.size(); ++depth) {
@@ -777,7 +1263,8 @@ private:
 
     json currentLineInstructions(
         const SourceLocation& location,
-        const FunctionDebugInfo* function
+        const FunctionDebugInfo* function,
+        size_t currentPC
     ) const
     {
         json result = json::array();
@@ -785,7 +1272,10 @@ private:
             return result;
         }
 
-        const auto pcs = m_compileResult.debugInfo->getPCsForLine(location.line);
+        const auto pcs = m_compileResult.debugInfo->getPCsForSourceLine(
+            location.filename.empty() ? m_options.sourceFile : location.filename,
+            location.line
+        );
         for (size_t pc : pcs) {
             if (pc >= m_compileResult.bytecodeInstructions.size()) {
                 continue;
@@ -806,17 +1296,21 @@ private:
                 {"instruction", instruction},
                 {"opcode", opcode},
                 {"operand", operand},
-                {"current", m_vm && pc == m_vm->getPC()},
+                {"current", pc == currentPC},
             });
         }
 
         return result;
     }
 
-    json evaluate(const std::string& expression) const
+    json evaluate(
+        const std::string& expression,
+        uint64_t frameId = 0
+    ) const
     {
         const std::string expr = trim(expression);
         json result;
+        result["success"] = true;
         result["type"] = "string";
         result["value"] = "";
         result["result"] = "";
@@ -825,7 +1319,14 @@ private:
             return result;
         }
 
-        const json snap = snapshot();
+        const auto context = inspectionContext(frameId);
+        if (!context) {
+            result["success"] = false;
+            result["message"] = "debug stack frame is no longer available";
+            return result;
+        }
+
+        const json snap = snapshotForContext(*context);
         if (expr == "pc") {
             result["type"] = "number";
             result["value"] = snap.value("pc", 0);
@@ -862,7 +1363,7 @@ private:
         if (expr == "main.length" || expr == "alt.length") {
             const bool main = expr.rfind("main", 0) == 0;
             const size_t size =
-                main ? m_vm->getMainStack().size() : m_vm->getAltStack().size();
+                main ? context->mainStack.size() : context->altStack.size();
             result["type"] = "number";
             result["value"] = size;
             result["result"] = std::to_string(size);
@@ -887,7 +1388,7 @@ private:
                 try {
                     const size_t depth = std::stoul(depthText);
                     const StackState& stack =
-                        useMain ? m_vm->getMainStack() : m_vm->getAltStack();
+                        useMain ? context->mainStack : context->altStack;
                     const auto values = stack.getAll();
                     if (depth < values.size()) {
                         const size_t index = values.size() - depth - 1;
@@ -920,8 +1421,25 @@ private:
             return result;
         }
 
-        result["value"] = expr;
-        result["result"] = expr;
+        auto evaluator = m_vm->getExpressionEvaluator();
+        if (!evaluator) {
+            result["success"] = false;
+            result["message"] = "debug stack frame is no longer available";
+            return result;
+        }
+        const EvaluationResult evaluated = evaluator->evaluate(
+            expr,
+            context->mainStack,
+            context->pc
+        );
+        if (!evaluated.success) {
+            result["success"] = false;
+            result["message"] = evaluated.errorMessage;
+            return result;
+        }
+        result["type"] = evaluated.type;
+        result["value"] = evaluated.value;
+        result["result"] = evaluated.value;
         return result;
     }
 
@@ -929,22 +1447,42 @@ private:
     {
         json frames = json::array();
         const json snap = snapshot();
-        json frame;
-        frame["id"] = 1;
-        frame["name"] = snap.value("functionName", "");
-        if (frame["name"].get<std::string>().empty()) {
-            frame["name"] = snap.value("opcode", "instruction");
+        if (!m_vm) {
+            return frames;
         }
-        frame["pc"] = snap.value("pc", 0);
-        frame["source"] = snap["source"];
-        frames.push_back(std::move(frame));
+
+        const auto& callStack = m_vm->getCallStack();
+        for (size_t offset = 0; offset < callStack.size(); ++offset) {
+            const size_t index = callStack.size() - offset - 1;
+            const auto& callFrame = callStack[index];
+            const bool current = index == callStack.size() - 1;
+            const SourceLocation& location =
+                callFrame.suspendedLocation.isValid()
+                    ? callFrame.suspendedLocation
+                    : callFrame.callLocation;
+
+            json frame;
+            frame["id"] = callFrame.frameId;
+            frame["name"] = callFrame.functionName;
+            frame["pc"] = current ? snap.value("pc", 0)
+                                  : callFrame.suspendedPC;
+            frame["source"] = current
+                                  ? snap["source"]
+                                  : json{
+                                        {"file", location.filename},
+                                        {"line", location.line},
+                                        {"column", location.column},
+                                    };
+            frame["current"] = current;
+            frames.push_back(std::move(frame));
+        }
         return frames;
     }
 
     std::string eventReason(const std::string& fallback) const
     {
         if (m_vm && m_vm->getState() == VMState::ERROR) {
-            return "error";
+            return "exception";
         }
         if (m_lastEvent == VMEvent::BREAKPOINT_HIT) {
             return "breakpoint";
@@ -955,9 +1493,12 @@ private:
         return fallback;
     }
 
-    json stopOrTerminateEvent(const std::string& fallback) const
+    std::optional<json> stopOrTerminateEvent(const std::string& fallback)
     {
         if (m_vm && m_vm->getState() == VMState::FINISHED) {
+            if (!claimTerminatedEvent()) {
+                return std::nullopt;
+            }
             return makeEvent("terminated", {{"snapshot", snapshot()}});
         }
         return makeStoppedEvent(eventReason(fallback));
@@ -965,10 +1506,16 @@ private:
 
     json makeStoppedEvent(const std::string& reason) const
     {
-        return makeEvent(
-            "stopped",
-            {{"reason", reason}, {"threadId", 1}, {"snapshot", snapshot()}}
-        );
+        json body = {
+            {"reason", reason},
+            {"threadId", 1},
+            {"snapshot", snapshot()},
+        };
+        if (reason == "exception" && m_vm && !m_vm->getLastError().empty()) {
+            body["description"] = m_vm->getLastError();
+            body["text"] = m_vm->getLastError();
+        }
+        return makeEvent("stopped", body);
     }
 
     json makeResponse(
@@ -999,12 +1546,22 @@ private:
     DebuggerCore::CompileResult m_compileResult;
     std::shared_ptr<BVMSimulator> m_vm;
     std::shared_ptr<BreakpointManager> m_breakpoints;
+    std::map<std::string, std::vector<size_t>> m_sourceBreakpointIds;
     std::vector<std::string> m_warnings;
     std::string m_functionName;
     size_t m_startPC = 0;
     size_t m_endPC = 0;
     VMEvent m_lastEvent = VMEvent::STARTED;
     std::string m_lastEventMessage;
+    EventSink m_eventSink;
+    std::thread m_executionThread;
+    std::atomic<LiveSessionState> m_sessionState{LiveSessionState::Ready};
+    std::atomic<bool> m_pendingContinue{false};
+    std::atomic<bool> m_disconnectRequested{false};
+    std::atomic<bool> m_terminatedEventSent{false};
+    std::mutex m_pauseAckMutex;
+    std::condition_variable m_pauseAckCondition;
+    bool m_pauseResponsePending = false;
 };
 
 void writeJsonLine(std::ostream& output, const json& message)
@@ -1027,18 +1584,21 @@ int runLiveDebugServer(
     const LiveDebugServerOptions& options
 )
 {
-    LiveDebugSession session(options);
+    std::mutex outputMutex;
+    const auto emit = [&output, &outputMutex](const json& message) {
+        std::lock_guard<std::mutex> lock(outputMutex);
+        writeJsonLine(output, message);
+    };
+
+    LiveDebugSession session(options, emit);
     std::string initError;
     if (!session.initialize(initError)) {
-        writeJsonLine(
-            output,
-            makeServerEvent("error", {{"message", initError}})
-        );
-        writeJsonLine(output, makeServerEvent("terminated", json::object()));
+        emit(makeServerEvent("error", {{"message", initError}}));
+        emit(makeServerEvent("terminated", json::object()));
         return 1;
     }
 
-    writeJsonLine(output, session.readyEvent());
+    emit(session.readyEvent());
 
     std::string line;
     bool shouldExit = false;
@@ -1053,30 +1613,29 @@ int runLiveDebugServer(
             request = json::parse(line);
         } catch (const std::exception& e) {
             error << "live debug protocol parse error: " << e.what() << '\n';
-            writeJsonLine(
-                output,
-                makeServerEvent(
-                    "error",
-                    {{"message", std::string("invalid JSON request: ") + e.what()}}
-                )
-            );
+            emit(makeServerEvent(
+                "error",
+                {{"message", std::string("invalid JSON request: ") + e.what()}}
+            ));
             continue;
         }
 
         if (!request.is_object()) {
-            writeJsonLine(
-                output,
-                makeServerEvent("error", {{"message", "request must be an object"}})
-            );
+            emit(makeServerEvent(
+                "error",
+                {{"message", "request must be an object"}}
+            ));
             continue;
         }
 
         std::vector<json> events;
         const json response = session.handleRequest(request, events, shouldExit);
-        writeJsonLine(output, response);
+        emit(response);
         for (const auto& event : events) {
-            writeJsonLine(output, event);
+            emit(event);
         }
+        session.acknowledgeRequest(request);
+        session.startPendingExecution();
     }
 
     return 0;

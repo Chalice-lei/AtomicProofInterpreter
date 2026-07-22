@@ -1,0 +1,5 @@
+# Debugger regression: runtime failures must surface as exception stops.
+Contract DebugRuntimeError:
+    def test_runtime_error():
+        EqualVerify(0, 1)
+        Return(1)

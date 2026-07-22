@@ -306,6 +306,34 @@ VariableInspector::getLocalVariables(const StackState& stack, size_t currentPC)
     return result;
 }
 
+std::vector<VariableValue>
+VariableInspector::getGlobalVariables(const StackState& stack, size_t currentPC)
+{
+    (void)currentPC;
+    std::vector<VariableValue> result;
+    if (!m_debugInfo || !m_debugInfo->globalScope) {
+        return result;
+    }
+
+    for (const auto& varInfo : m_debugInfo->globalScope->variables) {
+        if (varInfo.isStackVar && varInfo.stackOffset >= 0) {
+            auto value = readStackValue(
+                varInfo.stackOffset,
+                varInfo.name,
+                varInfo.type,
+                stack
+            );
+            result.push_back(
+                value ? *value
+                      : makeUnavailableValue(varInfo.name, varInfo.type)
+            );
+        } else {
+            result.push_back(makeUnavailableValue(varInfo.name, varInfo.type));
+        }
+    }
+    return result;
+}
+
 std::optional<VariableValue> VariableInspector::parseCompoundType(
     const std::string& varName,
     const std::string& varType,

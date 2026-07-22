@@ -158,6 +158,10 @@ public:
 
     SourceLocation getSourceLocation(size_t pc) const;
     std::vector<size_t> getPCsForLine(size_t line) const;
+    std::vector<size_t> getPCsForSourceLine(
+        const std::string& filename,
+        size_t line
+    ) const;
 
     // 用于断点解析
     std::vector<size_t>

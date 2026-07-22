@@ -70,6 +70,12 @@ test("Trace DAP 的 continue/reverseContinue 命中普通、条件和 hit count 
         "debugger_regression",
         "debug_line_mapping_basic.ct"
     );
+    const wrongSource = assertSuccess(assert, await client.request("setBreakpoints", {
+        source: {path: path.join(path.dirname(sourcePath), "different.ct")},
+        breakpoints: [{line: 8}]
+    }));
+    assert.strictEqual(wrongSource.breakpoints[0].verified, false);
+
     const breakpointBody = assertSuccess(assert, await client.request("setBreakpoints", {
         source: {path: sourcePath},
         breakpoints: [{line: 8, condition: "pc >= 2", hitCondition: "2"}]

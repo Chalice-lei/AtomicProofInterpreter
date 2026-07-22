@@ -6,7 +6,7 @@
 | --- | --- | --- |
 | `npm run test:fast` | Schema、5 个现有 Trace、elementId、8 个命令、Trace DAP、伪 Live DAP、auto save、安全 | Node.js |
 | `npm run test:webview` | 离线 Webview、导航/播放、书签、生命周期、复制、诊断、XSS、视觉、axe | Chromium |
-| `npm run test:live` | 真实 JSONL debug-server、真实 Live Adapter、错误启动与进程退出 | `build/bin/utxo_Interpreter` |
+| `npm run test:live` | 真实 JSONL debug-server、完整调用栈/帧变量、异步暂停、运行时异常、真实 Live Adapter 与进程退出 | `build/bin/utxo_Interpreter` |
 | `npm run test:extension` | 真实 Extension Host、公开命令、Trace DAP、trace/live 保存重启 | VS Code Electron；Linux CI 使用 Xvfb |
 | `npm run test:package` | VSIX 内容白名单、manifest、CLI 安装、干净 Extension Host 激活 | VS Code Electron；Linux CI 使用 Xvfb |
 | `npm run test:performance` | 10,000 step、1,000 元素栈、DOM 虚拟化、堆增长、连续播放 | Chromium |
@@ -28,7 +28,7 @@
 | elementId | 5 个样例的生产/移动/消费不变量；Webview 生命周期选择和跳转 |
 | 复制/诊断 | Markdown、JSON 实际剪贴板内容；完整、旧、不完整、空 Trace 诊断 |
 | Trace DAP | next/stepBack/continue/reverseContinue、普通/条件/hit count/logpoint 断点、variables/evaluate/source |
-| Live DAP | launch、breakpoint、continue/next/stepIn/stepOut、variables/evaluate、disconnect/terminate、异常退出 |
+| Live DAP | launch、文件+行断点、continue/next/stepIn/stepOut/pause、continued/stopped/terminated 状态序列、完整调用栈、Locals/Globals/双栈、按帧 evaluate、exceptionInfo/错误输出、disconnect/terminate、异常退出 |
 | 保存刷新 | trace/live、逐合约 debounce、两个合约隔离、真实 Extension Host 重启 |
 | 安全 | Webview XSS、argv 命令注入、缺失/越界源码路径与显式确认、nonce CSP、VSIX 内容白名单 |
 | 性能 | 10,000 step 首屏/跳转门槛、1,000 元素虚拟栈、DOM 上限、堆增长、timer 清理 |

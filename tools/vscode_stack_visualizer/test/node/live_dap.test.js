@@ -79,14 +79,57 @@ test("Live DAP 完整覆盖 launch、断点、continue/next/stepIn/stepOut", asy
     assertSuccess(assert, await client.request("configurationDone"));
     let stoppedCount = client.events("stopped").length;
     for (const command of ["next", "stepIn", "stepOut", "continue"]) {
-        assertSuccess(assert, await client.request(command));
+        const messageStart = client.messages.length;
+        const response = await client.request(command);
+        assertSuccess(assert, response);
         await waitFor(
             () => client.events("stopped").length > stoppedCount,
             `${command} did not emit a stopped event`
         );
+        const commandMessages = client.messages.slice(messageStart);
+        const responseIndex = commandMessages.indexOf(response);
+        const stoppedIndex = commandMessages.findIndex((item) =>
+            item.type === "event" && item.event === "stopped"
+        );
+        assert(responseIndex >= 0 && responseIndex < stoppedIndex);
         stoppedCount = client.events("stopped").length;
         assert.strictEqual(client.events("stopped").at(-1).body.reason, "step");
     }
+    assert.strictEqual(client.events("continued").length, 1);
+});
+
+test("Live DAP 并发 continue/pause 保证响应先于暂停事件", async (t) => {
+    const contract = createContract(t, "pause.ct");
+    const client = attach(createAdapter(path.dirname(contract)));
+    t.after(() => client.dispose());
+    assertSuccess(assert, await client.request("launch", {
+        contractPath: contract,
+        functionName: "main",
+        interpreterPath: process.execPath
+    }));
+
+    assertSuccess(assert, await client.request("continue"));
+    await waitFor(
+        () => client.events("continued").length > 0,
+        "continue did not emit continued"
+    );
+
+    const messageStart = client.messages.length;
+    const pauseResponse = await client.request("pause");
+    assertSuccess(assert, pauseResponse);
+    await waitFor(
+        () => client.events("stopped").some((event) =>
+            event.body.reason === "pause"
+        ),
+        "pause did not emit stopped"
+    );
+    const pauseMessages = client.messages.slice(messageStart);
+    const responseIndex = pauseMessages.indexOf(pauseResponse);
+    const stoppedIndex = pauseMessages.findIndex((item) =>
+        item.type === "event" && item.event === "stopped" &&
+        item.body.reason === "pause"
+    );
+    assert(responseIndex >= 0 && responseIndex < stoppedIndex);
 });
 
 test("Live DAP variables/evaluate 覆盖 instruction、双栈、调用栈和 warnings", async (t) => {
@@ -98,8 +141,18 @@ test("Live DAP variables/evaluate 覆盖 instruction、双栈、调用栈和 war
         functionName: "main",
         interpreterPath: process.execPath
     }));
+    let stoppedCount = client.events("stopped").length;
     assertSuccess(assert, await client.request("stepIn"));
+    await waitFor(
+        () => client.events("stopped").length > stoppedCount,
+        "first stepIn did not stop"
+    );
+    stoppedCount = client.events("stopped").length;
     assertSuccess(assert, await client.request("stepIn"));
+    await waitFor(
+        () => client.events("stopped").length > stoppedCount,
+        "second stepIn did not stop"
+    );
 
     const frame = assertSuccess(assert, await client.request("stackTrace")).stackFrames[0];
     assert.strictEqual(frame.name, "fake_main");
@@ -108,7 +161,16 @@ test("Live DAP variables/evaluate 覆盖 instruction、双栈、调用栈和 war
     const scopes = assertSuccess(assert, await client.request("scopes", {frameId: 1})).scopes;
     assert.deepStrictEqual(
         scopes.map((scope) => scope.name),
-        ["Instruction", "Main Stack", "Alt Stack", "Call Stack", "Warnings"]
+        [
+            "Locals",
+            "Globals",
+            "Instruction",
+            "Main Stack",
+            "Alt Stack",
+            "Call Stack",
+            "Warnings",
+            "Errors"
+        ]
     );
     const variablesByScope = new Map();
     for (const scope of scopes) {
@@ -117,6 +179,8 @@ test("Live DAP variables/evaluate 覆盖 instruction、双栈、调用栈和 war
         })).variables);
     }
     assert(variablesByScope.get("Instruction").some((item) => item.name === "currentOpcode"));
+    assert.strictEqual(variablesByScope.get("Locals")[0].name, "localValue");
+    assert.strictEqual(variablesByScope.get("Globals")[0].name, "globalValue");
     assert.match(variablesByScope.get("Main Stack")[0].value, /int=12/);
     assert.match(variablesByScope.get("Alt Stack")[0].value, /int=99/);
     assert.match(variablesByScope.get("Call Stack")[0].value, /returnPC=6/);
@@ -136,6 +200,37 @@ test("Live DAP variables/evaluate 覆盖 instruction、双栈、调用栈和 war
         variablesReference: json.variablesReference
     })).variables;
     assert(children.some((item) => item.name === "pc"));
+});
+
+test("Live DAP 拒绝重复执行请求并在停止后恢复操作", async (t) => {
+    const contract = createContract(t);
+    const client = attach(createAdapter(path.dirname(contract)));
+    t.after(() => client.dispose());
+    const launch = {
+        contractPath: contract,
+        functionName: "main",
+        interpreterPath: process.execPath
+    };
+    assertSuccess(assert, await client.request("launch", launch));
+    const duplicateLaunch = await client.request("launch", launch);
+    assert.strictEqual(duplicateLaunch.success, false);
+    assert.match(duplicateLaunch.message, /already running/);
+
+    const firstStep = client.request("next");
+    const duplicate = await client.request("continue");
+    assert.strictEqual(duplicate.success, false);
+    assert.match(duplicate.message, /already running/);
+    assertSuccess(assert, await firstStep);
+    await waitFor(
+        () => client.events("stopped").length > 0,
+        "first execution request did not stop"
+    );
+
+    assertSuccess(assert, await client.request("next"));
+    await waitFor(
+        () => client.events("stopped").length > 1,
+        "execution did not resume after the previous stop"
+    );
 });
 
 test("Live DAP disconnect 与 terminate 都结束子进程且发送 terminated", async (t) => {

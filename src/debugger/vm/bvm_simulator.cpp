@@ -53,7 +53,8 @@ BVMSimulator::BVMSimulator(
       m_stepStartLine(0), m_stepStartCallDepth(0), m_maxStackSize(0),
       m_maxCallDepth(0), m_hasExecutionRange(false), m_executionRangeStart(0),
       m_executionRangeEnd(0), m_skipBreakpointOnce(false),
-      m_skipBreakpointLine(0)
+      m_skipBreakpointFile(), m_skipBreakpointLine(0), m_nextFrameId(1),
+      m_pauseRequested(false), m_terminateRequested(false)
 {
     if (m_debugInfo) {
         m_varInspector = std::make_shared<VariableInspector>(m_debugInfo);
@@ -110,7 +111,9 @@ void BVMSimulator::reset()
     m_stepMode = StepMode::NONE;
     m_lastError.clear();
     m_skipBreakpointOnce = false;
+    m_skipBreakpointFile.clear();
     m_skipBreakpointLine = 0;
+    clearExecutionRequests();
 
     // 恢复初始栈快照
     m_mainStack = m_initialMainStack;
@@ -156,10 +159,21 @@ void BVMSimulator::run()
 
     while (m_state == VMState::RUNNING && m_pc < endPC &&
            m_pc < m_bytecode.size()) {
+        if (m_terminateRequested.load(std::memory_order_acquire)) {
+            m_state = VMState::FINISHED;
+            return;
+        }
+        if (m_pauseRequested.exchange(false, std::memory_order_acq_rel)) {
+            m_state = VMState::PAUSED;
+            fireEvent(VMEvent::PAUSED, "VM paused");
+            return;
+        }
+
         // 命中断点后跳过同一源码行剩余断点检查，避免 continue 反复停在该行
         if (m_skipBreakpointOnce) {
-            size_t curLine = getCurrentLocation().line;
-            if (curLine != m_skipBreakpointLine) {
+            const SourceLocation currentLocation = getCurrentLocation();
+            if (currentLocation.filename != m_skipBreakpointFile ||
+                currentLocation.line != m_skipBreakpointLine) {
                 m_skipBreakpointOnce = false;
             }
         }
@@ -167,7 +181,9 @@ void BVMSimulator::run()
         if (!m_skipBreakpointOnce && shouldBreakAtPC(m_pc)) {
             m_state = VMState::PAUSED;
             m_skipBreakpointOnce = true;
-            m_skipBreakpointLine = getCurrentLocation().line;
+            const SourceLocation currentLocation = getCurrentLocation();
+            m_skipBreakpointFile = currentLocation.filename;
+            m_skipBreakpointLine = currentLocation.line;
             fireEvent(
                 VMEvent::BREAKPOINT_HIT,
                 "Breakpoint hit at PC " + std::to_string(m_pc)
@@ -190,9 +206,24 @@ void BVMSimulator::run()
 void BVMSimulator::pause()
 {
     if (m_state == VMState::RUNNING) {
-        m_state = VMState::PAUSED;
-        fireEvent(VMEvent::PAUSED, "VM paused");
+        requestPause();
     }
+}
+
+void BVMSimulator::requestPause()
+{
+    m_pauseRequested.store(true, std::memory_order_release);
+}
+
+void BVMSimulator::requestTerminate()
+{
+    m_terminateRequested.store(true, std::memory_order_release);
+}
+
+void BVMSimulator::clearExecutionRequests()
+{
+    m_pauseRequested.store(false, std::memory_order_release);
+    m_terminateRequested.store(false, std::memory_order_release);
 }
 
 void BVMSimulator::resume()
@@ -216,9 +247,22 @@ void BVMSimulator::stepIn()
 
     m_state = VMState::STEP_MODE;
 
-    while (m_state == VMState::STEP_MODE && m_pc < m_bytecode.size()) {
+    const size_t endPC = m_hasExecutionRange ? m_executionRangeEnd
+                                             : m_bytecode.size();
+    while (m_state == VMState::STEP_MODE && m_pc < endPC &&
+           m_pc < m_bytecode.size()) {
         if (!executeInstruction()) {
             // 失败/结束时状态由 executeInstruction 更新
+            break;
+        }
+
+        if (m_state == VMState::FINISHED || m_state == VMState::ERROR) {
+            break;
+        }
+        if (m_pc >= endPC || m_pc >= m_bytecode.size()) {
+            m_state = VMState::FINISHED;
+            m_stepMode = StepMode::NONE;
+            fireEvent(VMEvent::FINISHED, "程序执行完成");
             break;
         }
 
@@ -244,7 +288,8 @@ void BVMSimulator::stepIn()
         }
     }
 
-    if (m_pc >= m_bytecode.size() && m_state == VMState::STEP_MODE) {
+    if ((m_pc >= endPC || m_pc >= m_bytecode.size()) &&
+        m_state == VMState::STEP_MODE) {
         m_state = VMState::FINISHED;
         m_stepMode = StepMode::NONE;
         fireEvent(VMEvent::FINISHED, "程序执行完成");
@@ -263,10 +308,23 @@ void BVMSimulator::stepOver()
     }
 
     m_state = VMState::STEP_MODE;
+    const size_t endPC = m_hasExecutionRange ? m_executionRangeEnd
+                                             : m_bytecode.size();
 
     // 停止条件：源码行变化 且 调用深度回到起始（或更浅）
-    while (m_state == VMState::STEP_MODE && m_pc < m_bytecode.size()) {
+    while (m_state == VMState::STEP_MODE && m_pc < endPC &&
+           m_pc < m_bytecode.size()) {
         if (!executeInstruction()) {
+            break;
+        }
+
+        if (m_state == VMState::FINISHED || m_state == VMState::ERROR) {
+            break;
+        }
+        if (m_pc >= endPC || m_pc >= m_bytecode.size()) {
+            m_state = VMState::FINISHED;
+            m_stepMode = StepMode::NONE;
+            fireEvent(VMEvent::FINISHED, "程序执行完成");
             break;
         }
 
@@ -300,8 +358,6 @@ void BVMSimulator::stepOver()
         }
     }
 
-    size_t endPC = m_hasExecutionRange ? m_executionRangeEnd
-                                       : m_bytecode.size();
     if (m_pc >= endPC && m_state == VMState::STEP_MODE) {
         m_state = VMState::FINISHED;
         m_stepMode = StepMode::NONE;
@@ -322,6 +378,7 @@ void BVMSimulator::stepOut()
 
     size_t endPC = m_hasExecutionRange ? m_executionRangeEnd
                                        : m_bytecode.size();
+    const bool topLevelFrame = m_stepStartCallDepth <= 1;
 
     // 执行直到调用深度减少
     while (m_state == VMState::STEP_MODE && m_pc < endPC &&
@@ -330,7 +387,17 @@ void BVMSimulator::stepOut()
             break;
         }
 
-        if (m_callStack.size() < m_stepStartCallDepth) {
+        if (m_state == VMState::FINISHED || m_state == VMState::ERROR) {
+            break;
+        }
+        if (m_pc >= endPC || m_pc >= m_bytecode.size()) {
+            m_state = VMState::FINISHED;
+            m_stepMode = StepMode::NONE;
+            fireEvent(VMEvent::FINISHED, "程序执行完成");
+            break;
+        }
+
+        if (!topLevelFrame && m_callStack.size() < m_stepStartCallDepth) {
             m_state = VMState::PAUSED;
             m_stepMode = StepMode::NONE;
             fireEvent(VMEvent::STEPPED, "Step out completed");
@@ -372,8 +439,23 @@ bool BVMSimulator::executeInstruction()
     std::string opcode, operand;
     std::vector<StackElement> mainStackBefore;
     std::vector<StackElement> altStackBefore;
+    std::optional<std::vector<StackElement>> callerStackBeforeFunctionEntry;
+    std::optional<std::vector<StackElement>>
+        callerAltStackBeforeFunctionEntry;
     SourceLocation traceLocation;
     std::string traceFunctionName;
+
+    // 函数调用在字节码中以内联的相邻函数区间表示。若下一条指令是新
+    // 函数入口，先保存调用准备指令执行前的 caller 栈，避免 callee 参数
+    // 改写栈顶后污染父帧变量检查。
+    if (m_debugInfo && tracePC + 1 < m_bytecode.size()) {
+        const auto* nextFunction =
+            m_debugInfo->getFunctionAtPC(tracePC + 1);
+        if (nextFunction && nextFunction->startPC == tracePC + 1) {
+            callerStackBeforeFunctionEntry = m_mainStack.snapshot();
+            callerAltStackBeforeFunctionEntry = m_altStack.snapshot();
+        }
+    }
 
     if (m_stackTraceEnabled) {
         mainStackBefore = m_mainStack.snapshot();
@@ -452,6 +534,22 @@ bool BVMSimulator::executeInstruction()
                     size_t returnAddr = func->endPC;
                     if (returnAddr == 0 || returnAddr > m_bytecode.size()) {
                         returnAddr = m_bytecode.size();
+                    }
+                    if (!m_callStack.empty()) {
+                        auto& parent = m_callStack.back();
+                        parent.suspendedPC = currentPC;
+                        parent.suspendedLocation =
+                            m_debugInfo->getSourceLocation(currentPC);
+                        parent.suspendedMainStack =
+                            callerStackBeforeFunctionEntry &&
+                                    m_pc == tracePC + 1
+                                ? *callerStackBeforeFunctionEntry
+                                : m_mainStack.snapshot();
+                        parent.suspendedAltStack =
+                            callerAltStackBeforeFunctionEntry &&
+                                    m_pc == tracePC + 1
+                                ? *callerAltStackBeforeFunctionEntry
+                                : m_altStack.snapshot();
                     }
                     pushCallFrame(func->name, returnAddr);
                 }
@@ -1710,6 +1808,7 @@ void BVMSimulator::pushCallFrame(const std::string& funcName, size_t returnAddr)
     CallFrame frame(
         funcName, returnAddr, getCurrentLocation(), m_mainStack.size(), m_pc
     );
+    frame.frameId = m_nextFrameId++;
 
     // 关联作用域信息（参考 Python Frame.f_locals）
     if (m_debugInfo) {

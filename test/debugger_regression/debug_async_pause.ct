@@ -1,0 +1,7 @@
+# Debugger regression: continue and pause are processed concurrently.
+Contract DebugAsyncPause:
+    def test_async_pause():
+        acc: int = 0
+        for i in Range(2000):
+            acc = acc + i
+        Return(acc)
