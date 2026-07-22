@@ -136,6 +136,42 @@ npm run package
 The package command uses the repository's local VSIX packer, so it does not
 depend on a floating global `vsce` release.
 
+## Automated Test Suites
+
+自动化测试采用分层结构。先安装依赖，再运行与改动对应的套件：
+
+```bash
+npm ci
+npm run test:fast
+npm run test:webview
+npm run test:extension
+npm run test:live
+npm run test:package
+npm run test:full
+```
+
+`test:fast` 覆盖 Schema/数据不变量、8 个公开命令路径和 Trace/Live DAP 协议；
+`test:webview` 使用无头 Chromium 覆盖离线交互、安全、剪贴板、持久化和
+可访问性；`test:extension` 运行真实 VS Code Extension Host；`test:live` 要求
+已经构建 `build/bin/utxo_Interpreter`；`test:package` 检查 VSIX 内容并安装到
+干净 Extension Host。核心套件缺少 Chromium 或解释器时会明确失败。
+
+10,000 step、1,000 元素栈和连续播放性能检查单独运行：
+
+```bash
+npm run test:performance
+```
+
+Linux 上先用 `npx playwright-core install chromium` 安装浏览器；没有显示服务时，
+Extension Host 测试需要运行在 Xvfb 中：
+
+```bash
+xvfb-run -a npm run test:full
+```
+
+当前 CI 文件是 `.github/workflows/stack-visualizer-check.yml`。PR 运行 Linux
+核心套件，定时任务运行跨平台与性能套件。详细覆盖矩阵见 `TESTING.md`。
+
 ## Debug Adapter
 
 The extension contributes a read-only `atomicproof-trace` debugger. Open a

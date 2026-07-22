@@ -1,34 +1,38 @@
-name: Stack Visualizer Check
+name: Stack Visualizer Tests
 
 on:
   push:
     paths:
       - "tools/vscode_stack_visualizer/**"
       - "examples/stack_traces/**"
+      - "test/debugger_regression/**"
+      - "src/debugger/**"
+      - "main.cpp"
+      - "CMakeLists.txt"
       - ".github/workflows/stack-visualizer-check.yml"
   pull_request:
     paths:
       - "tools/vscode_stack_visualizer/**"
       - "examples/stack_traces/**"
+      - "test/debugger_regression/**"
+      - "src/debugger/**"
+      - "main.cpp"
+      - "CMakeLists.txt"
       - ".github/workflows/stack-visualizer-check.yml"
+  schedule:
+    - cron: "17 3 * * *"
   workflow_dispatch:
-    inputs:
-      browser_smoke:
-        description: "Run browser smoke test"
-        required: false
-        default: false
-        type: boolean
-      extension_smoke:
-        description: "Run VS Code Extension Host smoke test"
-        required: false
-        default: false
-        type: boolean
+
+concurrency:
+  group: stack-visualizer-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'schedule' }}
 
 jobs:
-  check:
-    name: Check visualizer and VS Code extension
+  core:
+    if: github.event_name != 'schedule'
+    name: Core suite (Linux)
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 35
 
     steps:
       - name: Checkout repository
@@ -38,28 +42,114 @@ jobs:
         uses: actions/setup-node@v6
         with:
           node-version: "22"
+          cache: npm
+          cache-dependency-path: tools/vscode_stack_visualizer/package-lock.json
 
-      - name: Run stack visualizer checks
-        working-directory: tools/vscode_stack_visualizer
-        run: npm run check
-
-      - name: Install smoke dependencies
-        if: github.event_name == 'workflow_dispatch' && (inputs.browser_smoke || inputs.extension_smoke)
-        working-directory: tools/vscode_stack_visualizer
-        run: npm ci --ignore-scripts
-
-      - name: Run browser smoke test
-        if: github.event_name == 'workflow_dispatch' && inputs.browser_smoke
-        working-directory: tools/vscode_stack_visualizer
-        run: npm run browser-smoke
-
-      - name: Install Xvfb
-        if: github.event_name == 'workflow_dispatch' && inputs.extension_smoke
+      - name: Build interpreter with debug server
         run: |
-          sudo apt-get update
-          sudo apt-get install -y xvfb
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_DEBUGGER=ON
+          cmake --build build --parallel 2
 
-      - name: Run VS Code Extension Host smoke test
-        if: github.event_name == 'workflow_dispatch' && inputs.extension_smoke
+      - name: Install extension dependencies
         working-directory: tools/vscode_stack_visualizer
-        run: xvfb-run -a npm run extension-smoke
+        run: npm ci
+
+      - name: Install Chromium and Xvfb dependencies
+        working-directory: tools/vscode_stack_visualizer
+        run: npx playwright-core install --with-deps chromium
+
+      - name: Run required core suite
+        working-directory: tools/vscode_stack_visualizer
+        env:
+          APC_COMPILER: ${{ github.workspace }}/build/bin/utxo_Interpreter
+        run: xvfb-run -a npm run test:full
+
+      - name: Upload browser evidence
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: stack-visualizer-core-evidence
+          path: output/playwright
+          if-no-files-found: ignore
+
+  nightly-cross-platform:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    name: Nightly (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: tools/vscode_stack_visualizer/package-lock.json
+
+      - name: Build interpreter with debug server
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_DEBUGGER=ON
+          cmake --build build --parallel 2
+
+      - name: Install extension dependencies
+        working-directory: tools/vscode_stack_visualizer
+        run: npm ci
+
+      - name: Install Playwright Chromium
+        working-directory: tools/vscode_stack_visualizer
+        run: npx playwright-core install chromium
+
+      - name: Install Linux browser system dependencies
+        if: runner.os == 'Linux'
+        working-directory: tools/vscode_stack_visualizer
+        run: npx playwright-core install-deps chromium
+
+      - name: Cross-platform suite (Linux)
+        if: runner.os == 'Linux'
+        working-directory: tools/vscode_stack_visualizer
+        env:
+          APC_COMPILER: ${{ github.workspace }}/build/bin/utxo_Interpreter
+        run: xvfb-run -a npm run test:full
+
+      - name: Cross-platform suite (Windows/macOS)
+        if: runner.os != 'Linux'
+        working-directory: tools/vscode_stack_visualizer
+        env:
+          APC_COMPILER: ${{ runner.os == 'Windows' && format('{0}/build/bin/utxo_Interpreter.exe', github.workspace) || format('{0}/build/bin/utxo_Interpreter', github.workspace) }}
+        run: npm run test:full
+
+  nightly-performance:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    name: Nightly performance
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: tools/vscode_stack_visualizer/package-lock.json
+
+      - name: Install extension dependencies
+        working-directory: tools/vscode_stack_visualizer
+        run: npm ci
+
+      - name: Install Chromium
+        working-directory: tools/vscode_stack_visualizer
+        run: npx playwright-core install --with-deps chromium
+
+      - name: Run performance and continuous playback suite
+        working-directory: tools/vscode_stack_visualizer
+        run: npm run test:performance

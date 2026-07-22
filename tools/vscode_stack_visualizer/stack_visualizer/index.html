@@ -38,6 +38,7 @@
       --card-bg: #ffffff;
       --tag-bg: #ffffff;
       --empty-border: #cbd5e1;
+      --effect-text: #475569;
       --shadow: 0 12px 28px rgba(15, 23, 42, 0.06);
       color-scheme: light;
       font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
@@ -90,6 +91,7 @@
       --card-bg: #1f2937;
       --tag-bg: #111827;
       --empty-border: #475569;
+      --effect-text: #cbd5e1;
       --shadow: none;
       color-scheme: dark;
     }
@@ -121,6 +123,7 @@
       --card-bg: var(--vscode-editorWidget-background, #1f2937);
       --tag-bg: var(--vscode-editor-background, #111827);
       --empty-border: var(--vscode-panel-border, #475569);
+      --effect-text: var(--vscode-foreground, #cbd5e1);
       --shadow: none;
       color-scheme: dark;
     }
@@ -1153,6 +1156,11 @@
       animation: movePulse 760ms ease;
     }
 
+    .stack-card.moved-in .decoded,
+    .stack-card.moved-out .decoded {
+      color: var(--effect-text);
+    }
+
     .alt-stack .stack-card.moved-in,
     .alt-stack .stack-card.moved-out {
       border-color: #38bdf8;
@@ -1288,7 +1296,7 @@
         <div class="panel-title" id="sourceTitle">Source</div>
         <div class="panel-subtitle" id="sourceMeta">Line -</div>
       </div>
-      <div class="source-view" id="sourceView">
+      <div class="source-view" id="sourceView" role="region" aria-label="Contract source" tabindex="0">
         <div class="empty">Load stack_trace.json</div>
       </div>
     </section>
@@ -1314,7 +1322,7 @@
         <div class="control-section inline">
           <div class="control-label">Trace</div>
           <div class="control-row">
-            <input class="file-input" id="traceFile" type="file" accept="application/json,.json">
+            <input class="file-input" id="traceFile" type="file" accept="application/json,.json" aria-label="Choose stack trace JSON">
           </div>
         </div>
         <div class="control-section">
@@ -1331,11 +1339,11 @@
           </div>
           <div class="control-row">
             <span class="panel-subtitle">Timeline</span>
-            <input class="slider" id="timeline" type="range" min="0" max="0" value="0">
+            <input class="slider" id="timeline" type="range" min="0" max="0" value="0" aria-label="Trace timeline step">
           </div>
           <div class="control-row">
             <span class="panel-subtitle">Speed</span>
-            <input class="slider" id="speed" type="range" min="0.25" max="4" value="1" step="0.25">
+            <input class="slider" id="speed" type="range" min="0.25" max="4" value="1" step="0.25" aria-label="Playback speed">
             <span class="panel-subtitle" id="speedValue">1x</span>
           </div>
         </div>

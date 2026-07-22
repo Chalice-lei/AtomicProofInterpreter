@@ -2,6 +2,7 @@
 
 const fs = require("fs");
 const path = require("path");
+const Ajv2020 = require("ajv/dist/2020");
 
 const extensionRoot = path.resolve(__dirname, "..");
 const repoRoot = path.resolve(extensionRoot, "..", "..");
@@ -62,11 +63,14 @@ function checkHtml() {
 }
 
 function checkSchema() {
-  parseJson(schemaPath);
+  const schema = parseJson(schemaPath);
+  const ajv = new Ajv2020({ allErrors: true, strict: false });
+  const validate = ajv.compile(schema);
   console.log("trace JSON schema ok");
+  return { ajv, validate };
 }
 
-function checkExamples() {
+function checkExamples(schemaCheck) {
   const files = fs.readdirSync(examplesDir)
     .filter((file) => file.endsWith(".json"))
     .sort();
@@ -75,6 +79,10 @@ function checkExamples() {
   for (const file of files) {
     const fullPath = path.join(examplesDir, file);
     const trace = parseJson(fullPath);
+    assert(
+      schemaCheck.validate(trace),
+      `${file}: ${schemaCheck.ajv.errorsText(schemaCheck.validate.errors)}`
+    );
     assert(trace.format === "apc-stack-trace", `${file}: unexpected format`);
     assert(Array.isArray(trace.steps), `${file}: missing steps array`);
     assert(trace.steps.length > 0, `${file}: empty trace`);
@@ -86,5 +94,4 @@ function checkExamples() {
 }
 
 checkHtml();
-checkSchema();
-checkExamples();
+checkExamples(checkSchema());

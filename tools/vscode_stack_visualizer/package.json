@@ -27,6 +27,13 @@
 	"main": "./extension.js",
 	"scripts": {
 		"check": "node --check extension.js && node --check scripts/prepare_package.js && node --check scripts/package_vsix.js && node --check scripts/extension_smoke.js && node --check scripts/extension_smoke_runner.js && node --check scripts/live_debug_smoke.js && node --check scripts/browser_smoke.js && node scripts/check_visualizer.js",
+		"test:fast": "node --test --test-concurrency=1 test/node/*.test.js",
+		"test:webview": "node --test --test-concurrency=1 test/webview/webview.test.js",
+		"test:extension": "node test/extension/supervisor.js",
+		"test:live": "node --test --test-concurrency=1 test/live/live_protocol.test.js",
+		"test:package": "node test/package/supervisor.js",
+		"test:performance": "node --test --test-concurrency=1 test/webview/performance.test.js",
+		"test:full": "npm run check && npm run test:fast && npm run test:webview && npm run test:live && npm run test:extension && npm run test:package",
 		"browser-smoke": "node scripts/browser_smoke.js",
 		"extension-smoke": "node scripts/extension_smoke.js",
 		"live-smoke": "node scripts/live_debug_smoke.js",
@@ -36,6 +43,8 @@
 	},
 	"devDependencies": {
 		"@vscode/test-electron": "^3.0.0",
+		"ajv": "^8.20.0",
+		"axe-core": "^4.12.1",
 		"jszip": "^3.10.1",
 		"playwright-core": "^1.57.0"
 	},

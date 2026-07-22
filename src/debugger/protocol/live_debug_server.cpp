@@ -178,6 +178,23 @@ std::string summarizeLineInstructions(const json& instructions)
     return summary;
 }
 
+std::string stackArgumentStatusMessage(StackArgumentStatus status)
+{
+    switch (status) {
+        case StackArgumentStatus::Parsed:
+            return "";
+        case StackArgumentStatus::DefaultEmpty:
+            return "empty value";
+        case StackArgumentStatus::InvalidAddress:
+            return "invalid address";
+        case StackArgumentStatus::InvalidHex:
+            return "invalid hexadecimal value";
+        case StackArgumentStatus::InvalidNumber:
+            return "invalid numeric value";
+    }
+    return "invalid value";
+}
+
 json stackElementToJson(
     const StackElement& value,
     size_t bottomIndex,
@@ -510,9 +527,20 @@ private:
                     );
                     mainStack.push(defaultStackArgumentValue(type));
                 } else {
-                    mainStack.push(
-                        parseStackArgumentValue(m_options.args[index], type)
-                    );
+                    const StackArgumentParseResult parsed =
+                        parseStackArgumentValueDetailed(
+                            m_options.args[index],
+                            type
+                        );
+                    if (parsed.status != StackArgumentStatus::Parsed &&
+                        parsed.status != StackArgumentStatus::DefaultEmpty) {
+                        errorMessage =
+                            "invalid argument '" + name + "' for type '" +
+                            type + "': " +
+                            stackArgumentStatusMessage(parsed.status);
+                        return false;
+                    }
+                    mainStack.push(parsed.value);
                 }
             }
             m_vm->setInitialStacks(mainStack, altStack);

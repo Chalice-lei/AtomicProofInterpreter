@@ -19,3 +19,4 @@
 /tools/vscode_stack_visualizer/node_modules/
 /tools/vscode_stack_visualizer/.vscode-test/
 /tools/vscode_stack_visualizer/*.vsix
+/output/playwright/

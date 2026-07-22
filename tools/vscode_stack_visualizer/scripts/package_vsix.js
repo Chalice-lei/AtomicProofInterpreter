@@ -100,6 +100,7 @@ async function main()
     const outFile = parseOutArg(process.argv.slice(2));
     const files = [
         "README.md",
+        "TESTING.md",
         "extension.js",
         "language-configuration.json",
         "package.json",

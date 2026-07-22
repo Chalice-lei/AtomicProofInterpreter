@@ -17,8 +17,8 @@ const contract = path.join(
 );
 
 if (!fs.existsSync(interpreter)) {
-    console.log(`live debug smoke skipped: interpreter not found at ${interpreter}`);
-    process.exit(0);
+    console.error(`live debug smoke requires interpreter at ${interpreter}`);
+    process.exit(1);
 }
 
 const child = cp.spawn(interpreter, [
@@ -47,12 +47,23 @@ child.stdin.write('{"seq":4,"command":"variables","scope":"instruction"}\n');
 child.stdin.write('{"seq":5,"command":"disconnect"}\n');
 child.stdin.end();
 
+let timedOut = false;
 const timer = setTimeout(() => {
+    timedOut = true;
     child.kill("SIGTERM");
+    setTimeout(() => {
+        if (child.exitCode === null && child.signalCode === null) {
+            child.kill("SIGKILL");
+        }
+    }, 1000).unref();
 }, 5000);
 
 child.on("exit", (code) => {
     clearTimeout(timer);
+    if (timedOut) {
+        console.error("live debug smoke timed out after 5000ms");
+        process.exit(1);
+    }
     if (code !== 0 && code !== null) {
         console.error(errorOutput || output || `debug server exited with ${code}`);
         process.exit(code);

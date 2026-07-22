@@ -456,7 +456,7 @@ async function buildWebviewHtml(context, webview, trace, tracePath, templatePath
     );
 
     html = html.replace(
-        '<input class="file-input" id="traceFile" type="file" accept="application/json,.json">',
+        '<input class="file-input" id="traceFile" type="file" accept="application/json,.json" aria-label="Choose stack trace JSON">',
         '<button class="button" id="traceFile" title="Loaded from VS Code" type="button" disabled>VS Code Trace</button>'
     );
 
@@ -1511,6 +1511,9 @@ class AtomicProofLiveDebugAdapter extends AtomicProofDebugAdapterBase
         case "source":
             this.handleSource(message);
             break;
+        case "terminate":
+            this.handleTerminate(message);
+            break;
         case "disconnect":
             await this.handleDisconnect(message);
             break;
@@ -1527,6 +1530,7 @@ class AtomicProofLiveDebugAdapter extends AtomicProofDebugAdapterBase
             supportsEvaluateForHovers: true,
             supportsSetVariable: false,
             supportsStepBack: false,
+            supportsTerminateRequest: true,
             supportsConditionalBreakpoints: false,
             supportsHitConditionalBreakpoints: false
         });
@@ -1738,6 +1742,15 @@ class AtomicProofLiveDebugAdapter extends AtomicProofDebugAdapterBase
             }
         }
         this.sendResponse(message);
+    }
+
+    handleTerminate(message)
+    {
+        this.terminated = true;
+        this.stopChild();
+        this.rejectPending(new Error("Live VM debug session terminated."));
+        this.sendResponse(message);
+        this.sendEvent("terminated");
     }
 
     startChild(interpreterPath, args)
@@ -2724,7 +2737,16 @@ module.exports = {
     activate,
     deactivate,
     __test: {
-        liveInstructionVariables
+        AtomicProofLiveDebugAdapter,
+        AtomicProofTraceDebugAdapter,
+        buildWebviewHtml,
+        evaluateLiveExpression,
+        evaluateTraceExpression,
+        liveInstructionVariables,
+        resolveConfiguredPath,
+        sourcePathCandidates,
+        splitArgs,
+        validateTrace
     }
 };
 
@@ -2980,6 +3002,16 @@ async function handleWebviewMessage(context, tracePath, message)
         return;
     }
 
+    if (!isTrustedSourcePath(context, tracePath, sourcePath)) {
+        const choice = await vscode.window.showWarningMessage(
+            `Trace source is outside the workspace and trace directory: ${sourcePath}`,
+            "Open Anyway"
+        );
+        if (choice !== "Open Anyway") {
+            return;
+        }
+    }
+
     const line = Math.max(0, Number(message.line || 1) - 1);
     const column = Math.max(0, Number(message.column || 1) - 1);
     const document = await vscode.workspace.openTextDocument(vscode.Uri.file(sourcePath));
@@ -3003,6 +3035,33 @@ function resolveSourcePath(context, tracePath, sourceFile)
     );
 
     return candidates.find((candidate) => fs.existsSync(candidate)) || candidates[0];
+}
+
+function isTrustedSourcePath(context, tracePath, sourcePath)
+{
+    const roots = [
+        ...(vscode.workspace.workspaceFolders || []).map((folder) => folder.uri.fsPath),
+        tracePath && path.dirname(tracePath),
+        getRepositoryRoot(context)
+    ].filter(Boolean);
+    const candidate = canonicalPath(sourcePath);
+    return roots.some((root) => isPathWithin(canonicalPath(root), candidate));
+}
+
+function canonicalPath(filePath)
+{
+    try {
+        return fs.realpathSync.native(filePath);
+    } catch (_error) {
+        return path.resolve(filePath);
+    }
+}
+
+function isPathWithin(root, candidate)
+{
+    const relative = path.relative(root, candidate);
+    return relative === "" || (!relative.startsWith(`..${path.sep}`) &&
+        relative !== ".." && !path.isAbsolute(relative));
 }
 
 function sourcePathCandidates(tracePath, sourceFile, extraRoots = [])
