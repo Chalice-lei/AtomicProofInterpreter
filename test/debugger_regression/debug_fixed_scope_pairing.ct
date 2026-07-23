@@ -1,0 +1,17 @@
+# Debugger regression: fixed-area-only blocks must still close their scopes.
+Contract DebugFixedScopePairing:
+    def test_fixed_scope_pairing(flag: int):
+        value: int = 0
+
+        if flag.Clone() > 0:
+            value = 1
+        else:
+            local_only: int = 2
+            value = 3
+
+        if flag > 1:
+            value = 4
+        else:
+            value = 5
+
+        Return(value)

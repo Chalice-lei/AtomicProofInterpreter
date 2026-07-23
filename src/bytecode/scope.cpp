@@ -169,9 +169,11 @@ void Scope::clean()
 
 void Scope::enterScope()
 {
+    // 先保存父作用域完整状态，再清空子作用域的归属记录。若先清空，
+    // 嵌套块会永久丢失父作用域的 m_newSymbol/m_declaredSymbols。
+    m_symtabScopes.push(m_currentSymtab);
     m_currentSymtab.m_newSymbol.clear();
     m_currentSymtab.m_declaredSymbols.clear();
-    m_symtabScopes.push(m_currentSymtab);
     LOG_DEBUG("Enter scope, symtabScopes size:", m_symtabScopes.size());
 }
 

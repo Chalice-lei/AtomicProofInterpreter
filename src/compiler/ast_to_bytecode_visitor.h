@@ -352,7 +352,45 @@ private:
 
     bool isStructArrayFieldSubfield(const std::string& fieldPath) const;
 
-    bool blockContainsReturn(const StmtNode* stmt) const;
+    struct AltStackSnapshot
+    {
+        std::vector<tbc::StackElement> elements;
+        size_t combinedStackSize{0};
+    };
+
+    AltStackSnapshot captureAltStack() const;
+    void restoreAltStack(const AltStackSnapshot& snapshot);
+
+    std::optional<std::string>
+    getAssignmentStorageName(const ExprNode* expr) const;
+    void collectAssignedStorageNames(
+        const StmtNode* stmt,
+        std::vector<std::string>& names
+    ) const;
+    std::vector<std::string> collectIfMergeSymbols(
+        const IfNode& node,
+        const tbc::SymbolTable& entryState,
+        const AltStackSnapshot& entryAltStack
+    ) const;
+    void materializeBranchSymbols(
+        const std::vector<std::string>& symbols,
+        const IfNode& node
+    );
+    bool statementAlwaysReturns(const StmtNode* stmt) const;
+    void validateBranchMerge(
+        const IfNode& node,
+        const tbc::SymbolTable& entryState,
+        const tbc::SymbolTable& thenState,
+        const AltStackSnapshot& thenAltStack,
+        const tbc::SymbolTable& elseState,
+        const AltStackSnapshot& elseAltStack,
+        const std::vector<std::string>& mergeSymbols
+    ) const;
+    tbc::SymbolTable buildMergedBranchState(
+        const tbc::SymbolTable& entryState,
+        const tbc::SymbolTable& continuingState,
+        const std::vector<std::string>& mergeSymbols
+    ) const;
 
     void findAllReturnNodes(
         const StmtNode* stmt,

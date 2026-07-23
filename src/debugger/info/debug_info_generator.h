@@ -30,6 +30,9 @@ public:
         return m_debugInfo;
     }
 
+    // AST 完整生成后执行最终平衡检查。
+    void finalizeScopes();
+
     void setContractName(const std::string& name);
 
     void onEnterFunction(
@@ -41,13 +44,16 @@ public:
 
     void onExitFunction(size_t endPC);
 
-    void onEnterScope(
+    std::shared_ptr<ScopeDebugInfo> onEnterScope(
         const std::string& scopeName,
         const SourceLocation& loc,
         size_t startPC
     );
 
-    void onExitScope(size_t endPC);
+    void onExitScope(
+        const std::shared_ptr<ScopeDebugInfo>& expectedScope,
+        size_t endPC
+    );
 
     void onVariableDecl(
         const std::string& varName,

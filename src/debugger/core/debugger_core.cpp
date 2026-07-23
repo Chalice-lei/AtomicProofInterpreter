@@ -37,7 +37,10 @@ DebuggerCore::CompileResult DebuggerCore::compileSource(
         result.debugInfo->sourceFilename = sourceFile;
     }
 
-    validateDebugInfo(result.debugInfo, result.hexBytecode);
+    if (!validateDebugInfo(result.debugInfo, result.hexBytecode)) {
+        result.errorMessage = "调试信息校验失败：作用域或 PC 范围不一致";
+        return result;
+    }
     result.success = true;
     return result;
 }

@@ -25,6 +25,15 @@ void DebugInfoGenerator::setContractName(const std::string& name)
     m_debugInfo->contractName = name;
 }
 
+void DebugInfoGenerator::finalizeScopes()
+{
+    if (m_scopeStack.size() != 1 || m_scopeStack.empty() ||
+        m_scopeStack.top() != m_debugInfo->globalScope ||
+        !m_functionStack.empty() || m_currentFunction) {
+        m_debugInfo->scopeNestingValid = false;
+    }
+}
+
 void DebugInfoGenerator::onEmitInstruction(
     size_t pc,
     const std::string& opcode,
@@ -87,6 +96,9 @@ void DebugInfoGenerator::onEnterFunction(
 
 void DebugInfoGenerator::onExitFunction(size_t endPC)
 {
+    auto expectedFunctionScope =
+        m_currentFunction ? m_currentFunction->scope : nullptr;
+
     if (m_currentFunction) {
         m_currentFunction->endPC = endPC;
         if (m_currentFunction->scope) {
@@ -94,8 +106,13 @@ void DebugInfoGenerator::onExitFunction(size_t endPC)
         }
     }
 
-    if (!m_scopeStack.empty()) {
+    // 只能弹出当前函数自己的作用域。若顶部仍是 block，说明某次
+    // onEnterScope 没有对应退出；保留现场并让 validate() 报告失败。
+    if (!m_scopeStack.empty() && expectedFunctionScope &&
+        m_scopeStack.top() == expectedFunctionScope) {
         m_scopeStack.pop();
+    } else {
+        m_debugInfo->scopeNestingValid = false;
     }
 
     // 回到上层函数
@@ -114,7 +131,7 @@ void DebugInfoGenerator::onExitFunction(size_t endPC)
     }
 }
 
-void DebugInfoGenerator::onEnterScope(
+std::shared_ptr<ScopeDebugInfo> DebugInfoGenerator::onEnterScope(
     const std::string& scopeName,
     const SourceLocation& loc,
     size_t startPC
@@ -130,15 +147,25 @@ void DebugInfoGenerator::onEnterScope(
 
     m_debugInfo->addScope(scope);
     m_scopeStack.push(scope);
+    return scope;
 }
 
-void DebugInfoGenerator::onExitScope(size_t endPC)
+void DebugInfoGenerator::onExitScope(
+    const std::shared_ptr<ScopeDebugInfo>& expectedScope,
+    size_t endPC
+)
 {
-    if (!m_scopeStack.empty()) {
-        auto scope = m_scopeStack.top();
-        scope->endPC = endPC;
-        m_scopeStack.pop();
+    // 除了类型，还校验 enter 返回的具体作用域身份，避免两个 block
+    // 错序退出时被误认为配对成功。
+    if (m_scopeStack.empty() || !expectedScope ||
+        expectedScope->type != ScopeType::BLOCK ||
+        m_scopeStack.top() != expectedScope) {
+        m_debugInfo->scopeNestingValid = false;
+        return;
     }
+
+    expectedScope->endPC = endPC;
+    m_scopeStack.pop();
 }
 
 void DebugInfoGenerator::onVariableDecl(

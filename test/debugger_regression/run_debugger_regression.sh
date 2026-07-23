@@ -84,6 +84,56 @@ for inst in debug_info["instructions"]:
     )
 PY
 
+SCOPE_DEBUG_FILE="$TMP_DIR/fixed_scope_pairing.debug"
+SCOPE_FIXTURE="$SCRIPT_DIR/debug_fixed_scope_pairing.ct"
+(
+    cd "$TMP_DIR"
+    "$COMPILER" compile "$SCOPE_FIXTURE" \
+        --debug-output "$SCOPE_DEBUG_FILE" \
+        >"$TMP_DIR/fixed_scope_pairing.log" 2>&1
+)
+[[ -s "$SCOPE_DEBUG_FILE" ]]
+
+python3 - "$SCOPE_DEBUG_FILE" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], "r", encoding="utf-8") as f:
+    debug_info = json.load(f)
+
+assert debug_info.get("scopeNestingValid") is True, debug_info
+scopes = debug_info["scopes"]
+assert scopes, "expected debug scopes"
+
+for scope in scopes:
+    assert scope["startPC"] <= scope["endPC"], scope
+
+global_scopes = [scope for scope in scopes if scope["type"] == "global"]
+function_scopes = [scope for scope in scopes if scope["type"] == "function"]
+block_scopes = [scope for scope in scopes if scope["type"] == "block"]
+assert len(global_scopes) == 1, global_scopes
+assert len(function_scopes) == 1, function_scopes
+assert len(block_scopes) == 5, block_scopes
+
+function_scope = function_scopes[0]
+function_blocks = [
+    scope for scope in block_scopes
+    if scope["parentIndex"] == function_scope["index"]
+]
+assert len(function_blocks) == 1, function_blocks
+
+outer_block = function_blocks[0]
+branch_blocks = [
+    scope for scope in block_scopes
+    if scope["parentIndex"] == outer_block["index"]
+]
+assert len(branch_blocks) == 4, branch_blocks
+assert all(
+    scope["parentIndex"] == outer_block["index"]
+    for scope in branch_blocks
+)
+PY
+
 SESSION_LOG="$TMP_DIR/debugger.log"
 printf 'en\n1\n1\n2\nbytecode\nquit\n' | (
     cd "$TMP_DIR"

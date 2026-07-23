@@ -138,7 +138,7 @@ If you only need to generate debug info files for use with other tools, use the 
 ./utxo_Interpreter my_contract.ct -d
 ```
 
-The debug info contains a mapping from source line numbers to bytecode offsets, as well as the function symbol table, for analysis by third-party tools.
+The debug info contains source-to-bytecode mappings, the function symbol table, and the scope hierarchy for third-party tools. `scopeNestingValid` reports whether scope enter/exit events were balanced during generation; the debugger rejects debug info when it is `false` or when scope ranges or parent relationships are invalid.
 
 ---
 

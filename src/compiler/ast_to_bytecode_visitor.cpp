@@ -32,6 +32,11 @@ void ASTToBytecodeVisitor::visit(ContractNode& node)
     for (const auto& member : node.members) {
         member->accept(*this);
     }
+#ifdef ENABLE_DEBUGGER
+    if (m_debugInfoGen) {
+        m_debugInfoGen->finalizeScopes();
+    }
+#endif
     LOG_DEBUG("Visiting contract node end. name: " + node.name);
 }
 
@@ -165,13 +170,24 @@ void ASTToBytecodeVisitor::visit(BlockNode& node)
     LOG_DEBUG("Visiting block node start.");
 
 #ifdef ENABLE_DEBUGGER
+    std::shared_ptr<apc_debug::ScopeDebugInfo> debugScope;
     setCurrentLocationForGenerator(node);
 
     size_t startPC = m_generator.getCurrentPC();
     if (m_debugInfoGen) {
         apc_debug::SourceLocation loc = extractDebugLocation(node);
-        m_debugInfoGen->onEnterScope("block", loc, startPC);
+        debugScope = m_debugInfoGen->onEnterScope("block", loc, startPC);
     }
+
+    // 调试作用域由 AST 块的生命周期决定，不能依赖是否产生运行时栈槽。
+    // 守卫覆盖正常结束、提前 return 和异常展开，确保恰好退出一次。
+    DEFER_BLOCK(
+        if (debugScope && m_debugInfoGen) {
+            m_debugInfoGen->onExitScope(
+                debugScope, m_generator.getCurrentPC()
+            );
+        }
+    );
 #endif
 
     m_scopePtr->enterScope();
@@ -327,12 +343,456 @@ void ASTToBytecodeVisitor::visit(BlockNode& node)
         }
     }
 
-#ifdef ENABLE_DEBUGGER
-    size_t endPC = m_generator.getCurrentPC();
-    if (m_debugInfoGen) {
-        m_debugInfoGen->onExitScope(endPC);
+}
+
+ASTToBytecodeVisitor::AltStackSnapshot
+ASTToBytecodeVisitor::captureAltStack() const
+{
+    AltStackSnapshot snapshot;
+    auto altStack = SymbolTable::getSharedAltStack();
+    if (altStack) {
+        snapshot.elements = altStack->getStackContent();
+        snapshot.combinedStackSize = altStack->getCombinedStackSize();
     }
-#endif
+    return snapshot;
+}
+
+void ASTToBytecodeVisitor::restoreAltStack(const AltStackSnapshot& snapshot)
+{
+    auto altStack = SymbolTable::getSharedAltStack();
+    altStack->replaceStackContent(snapshot.elements);
+    altStack->setCombinedStackSize(snapshot.combinedStackSize);
+}
+
+std::optional<std::string> ASTToBytecodeVisitor::getAssignmentStorageName(
+    const ExprNode* expr
+) const
+{
+    if (!expr) {
+        return std::nullopt;
+    }
+
+    if (auto identifier = dynamic_cast<const IdentifierNode*>(expr)) {
+        return identifier->name;
+    }
+
+    if (auto field = dynamic_cast<const FieldAccessNode*>(expr)) {
+        auto baseName = getAssignmentStorageName(field->base.get());
+        if (baseName.has_value()) {
+            return baseName.value() + "." + field->field;
+        }
+        return std::nullopt;
+    }
+
+    if (auto index = dynamic_cast<const IndexAccessNode*>(expr)) {
+        auto baseName = getAssignmentStorageName(index->base.get());
+        auto literal = dynamic_cast<const LiteralNode*>(index->index.get());
+        if (!baseName.has_value() || !literal ||
+            literal->type != LiteralNode::Type::Number) {
+            return std::nullopt;
+        }
+        try {
+            return baseName.value() + "[" +
+                   numberToScriptHex(std::stoll(literal->value)) + "]";
+        } catch (const std::exception&) {
+            return std::nullopt;
+        }
+    }
+
+    return std::nullopt;
+}
+
+void ASTToBytecodeVisitor::collectAssignedStorageNames(
+    const StmtNode* stmt,
+    std::vector<std::string>& names
+) const
+{
+    if (!stmt) {
+        return;
+    }
+
+    auto appendUnique = [&](const std::string& name) {
+        if (!name.empty() &&
+            std::find(names.begin(), names.end(), name) == names.end()) {
+            names.push_back(name);
+        }
+    };
+
+    if (auto assign = dynamic_cast<const AssignNode*>(stmt)) {
+        auto storageName = getAssignmentStorageName(assign->name.get());
+        if (storageName.has_value()) {
+            appendUnique(storageName.value());
+        }
+        return;
+    }
+
+    if (auto destructure = dynamic_cast<const DestructureAssignNode*>(stmt)) {
+        for (const auto& target : destructure->targets) {
+            appendUnique(target);
+        }
+        return;
+    }
+
+    if (auto block = dynamic_cast<const BlockNode*>(stmt)) {
+        for (const auto& innerStmt : block->statements) {
+            collectAssignedStorageNames(innerStmt.get(), names);
+        }
+        return;
+    }
+
+    if (auto ifNode = dynamic_cast<const IfNode*>(stmt)) {
+        collectAssignedStorageNames(ifNode->thenBranch.get(), names);
+        collectAssignedStorageNames(ifNode->elseBranch.get(), names);
+        return;
+    }
+
+    if (auto forNode = dynamic_cast<const ForNode*>(stmt)) {
+        appendUnique(forNode->target);
+        collectAssignedStorageNames(forNode->body.get(), names);
+    }
+}
+
+std::vector<std::string> ASTToBytecodeVisitor::collectIfMergeSymbols(
+    const IfNode& node,
+    const SymbolTable& entryState,
+    const AltStackSnapshot& entryAltStack
+) const
+{
+    std::vector<std::string> assignedNames;
+    collectAssignedStorageNames(node.thenBranch.get(), assignedNames);
+    collectAssignedStorageNames(node.elseBranch.get(), assignedNames);
+
+    std::vector<std::string> candidates;
+    auto appendCandidate = [&](const std::string& name) {
+        if (!name.empty() &&
+            std::find(candidates.begin(), candidates.end(), name) ==
+                candidates.end()) {
+            candidates.push_back(name);
+        }
+    };
+
+    for (const auto& [name, _] : entryState.m_currentScope) {
+        appendCandidate(name);
+    }
+    if (entryState.m_fixedStackPtr) {
+        for (const auto& element :
+             entryState.m_fixedStackPtr->getStackContent()) {
+            appendCandidate(element.getName());
+        }
+    }
+    if (entryState.m_stackPtr) {
+        for (const auto& element : entryState.m_stackPtr->getStackContent()) {
+            appendCandidate(element.getName());
+        }
+    }
+    for (const auto& element : entryAltStack.elements) {
+        appendCandidate(element.getName());
+    }
+
+    auto isRepresented = [&](const std::string& name) {
+        if (entryState.getPos(name).has_value()) {
+            return true;
+        }
+        if (entryState.m_fixedStackPtr) {
+            for (const auto& element :
+                 entryState.m_fixedStackPtr->getStackContent()) {
+                if (element.getName() == name) {
+                    return true;
+                }
+            }
+        }
+        return std::any_of(
+            entryAltStack.elements.begin(),
+            entryAltStack.elements.end(),
+            [&](const StackElement& element) {
+                return element.getName() == name;
+            }
+        );
+    };
+
+    auto matchesAssignedTarget = [&](const std::string& candidate) {
+        return std::any_of(
+            assignedNames.begin(),
+            assignedNames.end(),
+            [&](const std::string& target) {
+                return candidate == target ||
+                       candidate.starts_with(target + ".") ||
+                       candidate.starts_with(target + "[");
+            }
+        );
+    };
+
+    std::vector<std::string> mergeSymbols;
+    for (const auto& candidate : candidates) {
+        if (!matchesAssignedTarget(candidate)) {
+            continue;
+        }
+
+        if (!isRepresented(candidate)) {
+            // 复合变量自身可能只承载元数据，实际值存放在其字段槽中。
+            const bool hasRepresentedChild = std::any_of(
+                candidates.begin(),
+                candidates.end(),
+                [&](const std::string& other) {
+                    return other != candidate && isRepresented(other) &&
+                           (other.starts_with(candidate + ".") ||
+                            other.starts_with(candidate + "["));
+                }
+            );
+            if (hasRepresentedChild) {
+                continue;
+            }
+        }
+
+        mergeSymbols.push_back(candidate);
+    }
+
+    return mergeSymbols;
+}
+
+void ASTToBytecodeVisitor::materializeBranchSymbols(
+    const std::vector<std::string>& symbols,
+    const IfNode& node
+)
+{
+    auto fail = [&](const std::string& symbol) {
+        std::ostringstream oss;
+        oss << "cannot merge outer variable '" << symbol
+            << "' after if branch at line " << node.pos.first << ", column "
+            << node.pos.second
+            << ": the variable has no value on this control-flow path";
+        SourceLocation loc = getNodeLocation(node);
+        SEMANTIC_ERROR(
+            oss.str(),
+            loc,
+            "Assign the variable on both branches before using it after the if"
+        );
+        LOG_ERROR(oss.str());
+        throw std::runtime_error(oss.str());
+    };
+
+    for (const auto& symbol : symbols) {
+        auto mainPos = m_scopePtr->getPos(symbol);
+        if (mainPos.has_value()) {
+            if (mainPos.value() != STACK_TOP_POS) {
+                emitRoll(mainPos.value());
+                m_scopePtr->roll(mainPos.value());
+            }
+            continue;
+        }
+
+        std::string mutableSymbol = symbol;
+        auto fixedElement = m_scopePtr->getFixed(mutableSymbol);
+        if (fixedElement.has_value()) {
+            m_generator.emit(fixedElement->getData());
+            m_scopePtr->removeFixed(mutableSymbol);
+            m_scopePtr->push(StackElement(
+                symbol, fixedElement->getType(), fixedElement->getData()
+            ));
+            continue;
+        }
+
+        auto altPos = m_scopePtr->getPos(symbol, true);
+        if (!altPos.has_value()) {
+            fail(symbol);
+        }
+
+        SymbolTable& state = m_scopePtr->getCurrentSymtab();
+        auto mainStack = state.m_stackPtr;
+        auto altStack = state.m_altStackPtr;
+        const int64_t position = altPos.value();
+
+        // 先把目标及其上方元素全部移回主栈，目标此时位于主栈顶。
+        for (int64_t i = 0; i <= position; ++i) {
+            m_generator.emit(tbc::BytOpcode::OP_FROMALTSTACK);
+            StackElement topElement = altStack->top();
+            altStack->pop();
+            mainStack->push(topElement);
+        }
+
+        // 将原本位于目标上方的元素按原顺序放回副栈，目标留在主栈顶。
+        for (int64_t i = 0; i < position; ++i) {
+            emitRoll(1);
+            mainStack->swap(0, 1);
+            m_generator.emit(tbc::BytOpcode::OP_TOALTSTACK);
+            StackElement topElement = mainStack->top();
+            mainStack->pop();
+            altStack->push(topElement);
+        }
+    }
+}
+
+bool ASTToBytecodeVisitor::statementAlwaysReturns(const StmtNode* stmt) const
+{
+    if (!stmt) {
+        return false;
+    }
+    if (dynamic_cast<const ReturnNode*>(stmt)) {
+        return true;
+    }
+    if (auto block = dynamic_cast<const BlockNode*>(stmt)) {
+        for (const auto& innerStmt : block->statements) {
+            if (statementAlwaysReturns(innerStmt.get())) {
+                return true;
+            }
+        }
+        return false;
+    }
+    if (auto ifNode = dynamic_cast<const IfNode*>(stmt)) {
+        return ifNode->thenBranch && ifNode->elseBranch &&
+               statementAlwaysReturns(ifNode->thenBranch.get()) &&
+               statementAlwaysReturns(ifNode->elseBranch.get());
+    }
+    if (auto forNode = dynamic_cast<const ForNode*>(stmt)) {
+        return !forNode->getStaticIterations().empty() &&
+               statementAlwaysReturns(forNode->body.get());
+    }
+    return false;
+}
+
+void ASTToBytecodeVisitor::validateBranchMerge(
+    const IfNode& node,
+    const SymbolTable& entryState,
+    const SymbolTable& thenState,
+    const AltStackSnapshot& thenAltStack,
+    const SymbolTable& elseState,
+    const AltStackSnapshot& elseAltStack,
+    const std::vector<std::string>& mergeSymbols
+) const
+{
+    auto fail = [&](const std::string& detail) {
+        std::ostringstream oss;
+        oss << "stack state inconsistency detected in if-else branches at line "
+            << node.pos.first << ", column " << node.pos.second << ": "
+            << detail;
+        SourceLocation loc = getNodeLocation(node);
+        SYNTAX_ERROR(
+            oss.str(), loc, "Make both branches leave the same stack layout"
+        );
+        LOG_ERROR(oss.str());
+        throw std::runtime_error(oss.str());
+    };
+
+    auto sameLayout = [](
+                          const std::vector<StackElement>& lhs,
+                          const std::vector<StackElement>& rhs
+                      ) {
+        if (lhs.size() != rhs.size()) {
+            return false;
+        }
+        for (size_t i = 0; i < lhs.size(); ++i) {
+            if (lhs[i].getName() != rhs[i].getName() ||
+                lhs[i].getType() != rhs[i].getType()) {
+                return false;
+            }
+        }
+        return true;
+    };
+
+    const std::vector<StackElement> emptyStack;
+    const auto& thenMain = thenState.m_stackPtr
+                               ? thenState.m_stackPtr->getStackContent()
+                               : emptyStack;
+    const auto& elseMain = elseState.m_stackPtr
+                               ? elseState.m_stackPtr->getStackContent()
+                               : emptyStack;
+    if (!sameLayout(thenMain, elseMain)) {
+        fail("main stack layouts differ after branch materialization");
+    }
+    if (!sameLayout(thenAltStack.elements, elseAltStack.elements)) {
+        fail("alternative stack layouts differ");
+    }
+
+    auto isMergeSymbol = [&](const std::string& name) {
+        return std::find(mergeSymbols.begin(), mergeSymbols.end(), name) !=
+               mergeSymbols.end();
+    };
+    auto findFixed = [](const SymbolTable& state, const std::string& name)
+        -> std::optional<StackElement> {
+        if (!state.m_fixedStackPtr) {
+            return std::nullopt;
+        }
+        for (const auto& element : state.m_fixedStackPtr->getStackContent()) {
+            if (element.getName() == name) {
+                return element;
+            }
+        }
+        return std::nullopt;
+    };
+
+    if (entryState.m_fixedStackPtr) {
+        for (const auto& entryElement :
+             entryState.m_fixedStackPtr->getStackContent()) {
+            const std::string name = entryElement.getName();
+            if (isMergeSymbol(name)) {
+                continue;
+            }
+            auto thenElement = findFixed(thenState, name);
+            auto elseElement = findFixed(elseState, name);
+            if (!thenElement.has_value() || !elseElement.has_value() ||
+                thenElement->getType() != elseElement->getType() ||
+                thenElement->getData() != elseElement->getData()) {
+                fail("fixed-area value for '" + name + "' differs");
+            }
+        }
+    }
+}
+
+SymbolTable ASTToBytecodeVisitor::buildMergedBranchState(
+    const SymbolTable& entryState,
+    const SymbolTable& continuingState,
+    const std::vector<std::string>& mergeSymbols
+) const
+{
+    SymbolTable mergedState = continuingState;
+
+    // 分支局部声明不能泄漏到父作用域；父层的归属和绑定元数据来自入口。
+    mergedState.m_currentScope = entryState.m_currentScope;
+    mergedState.m_declaredSymbols = entryState.m_declaredSymbols;
+    mergedState.m_newSymbol = entryState.m_newSymbol;
+    mergedState.m_keepSymbol = entryState.m_keepSymbol;
+    mergedState.m_bindSymbol = entryState.m_bindSymbol;
+
+    // 固定区同样从入口重建；分支合并变量已经物化到运行时主栈。
+    mergedState.m_fixedStackPtr = std::make_shared<OpStack>();
+    if (entryState.m_fixedStackPtr) {
+        for (const auto& element :
+             entryState.m_fixedStackPtr->getStackContent()) {
+            mergedState.m_fixedStackPtr->push(element);
+        }
+    }
+
+    auto appendNewSymbol = [&](const std::string& name) {
+        if (std::find(
+                mergedState.m_newSymbol.begin(),
+                mergedState.m_newSymbol.end(),
+                name
+            ) == mergedState.m_newSymbol.end()) {
+            mergedState.m_newSymbol.push_back(name);
+        }
+    };
+
+    for (const auto& symbol : mergeSymbols) {
+        std::string mutableSymbol = symbol;
+        mergedState.removeFixed(mutableSymbol);
+        if (mergedState.getPos(symbol).has_value()) {
+            appendNewSymbol(symbol);
+        }
+        if (continuingState.isSymbolInitialized(symbol)) {
+            mergedState.markSymbolInitialized(symbol);
+        }
+    }
+
+    // 防止同一名字同时残留在固定区和主栈。
+    if (mergedState.m_stackPtr) {
+        for (const auto& element :
+             mergedState.m_stackPtr->getStackContent()) {
+            std::string name = element.getName();
+            mergedState.removeFixed(name);
+        }
+    }
+
+    return mergedState;
 }
 
 void ASTToBytecodeVisitor::visit(IfNode& node)
@@ -363,7 +823,14 @@ void ASTToBytecodeVisitor::visit(IfNode& node)
         useNotIf ? tbc::BytOpcode::OP_NOTIF : tbc::BytOpcode::OP_IF
     );
 
-    m_scopePtr->saveSharedAltStack();
+    const SymbolTable entryState = m_scopePtr->getCurrentSymtab();
+    const AltStackSnapshot entryAltStack = captureAltStack();
+    const auto mergeSymbols =
+        collectIfMergeSymbols(node, entryState, entryAltStack);
+    const bool thenAlwaysReturns =
+        statementAlwaysReturns(node.thenBranch.get());
+    const bool elseAlwaysReturns =
+        statementAlwaysReturns(node.elseBranch.get());
 
     if (!node.thenBranch) {
         SourceLocation loc = getNodeLocation(node);
@@ -383,9 +850,20 @@ void ASTToBytecodeVisitor::visit(IfNode& node)
     } else {
         node.thenBranch->accept(*this);
     }
+
+#ifdef ENABLE_DEBUGGER
+    setCurrentLocationForGenerator(node);
+#endif
+    if (!thenAlwaysReturns) {
+        materializeBranchSymbols(mergeSymbols, node);
+    }
     LOG_DEBUG("End of if branch");
-    SymbolTable symbolTable = m_scopePtr->exitScope();
-    m_scopePtr->restoreSharedAltStack();
+    SymbolTable thenState = m_scopePtr->exitScope();
+    const AltStackSnapshot thenAltStack = captureAltStack();
+
+    // else 必须从与 then 相同的入口状态开始，不能继承 then 的编译期固定值。
+    m_scopePtr->replaceCurrentSymtab(entryState);
+    restoreAltStack(entryAltStack);
 
     if (node.elseBranch) {
         m_generator.emit(tbc::BytOpcode::OP_ELSE);
@@ -406,38 +884,52 @@ void ASTToBytecodeVisitor::visit(IfNode& node)
         LOG_ERROR(oss.str());
         throw std::runtime_error(oss.str());
     }
-    m_scopePtr->popScopeStack();
+
+#ifdef ENABLE_DEBUGGER
+    setCurrentLocationForGenerator(node);
+#endif
+    if (!elseAlwaysReturns) {
+        materializeBranchSymbols(mergeSymbols, node);
+    }
+    SymbolTable elseState = m_scopePtr->exitScope();
+    const AltStackSnapshot elseAltStack = captureAltStack();
     LOG_DEBUG("End of else branch");
 
-    bool thenHasReturn = blockContainsReturn(node.thenBranch.get());
-    bool elseHasReturn = blockContainsReturn(node.elseBranch.get());
+    SymbolTable mergedState = entryState;
+    AltStackSnapshot mergedAltStack = entryAltStack;
 
-    // 任一分支含 return 则跳过栈平衡检查.
-    if (thenHasReturn || elseHasReturn) {
-        LOG_DEBUG(
-            "Skipping stack balance check - at least one branch contains return"
+    if (!thenAlwaysReturns && !elseAlwaysReturns) {
+        validateBranchMerge(
+            node,
+            entryState,
+            thenState,
+            thenAltStack,
+            elseState,
+            elseAltStack,
+            mergeSymbols
         );
+        mergedState =
+            buildMergedBranchState(entryState, thenState, mergeSymbols);
+        mergedAltStack = thenAltStack;
+    } else if (!thenAlwaysReturns) {
+        // else 已终止，只有 then 会到达 OP_ENDIF 后的代码。
+        mergedState =
+            buildMergedBranchState(entryState, thenState, mergeSymbols);
+        mergedAltStack = thenAltStack;
+    } else if (!elseAlwaysReturns) {
+        // then 已终止，只有 else 会到达 OP_ENDIF 后的代码。
+        mergedState =
+            buildMergedBranchState(entryState, elseState, mergeSymbols);
+        mergedAltStack = elseAltStack;
     } else {
-        SymbolTable currentSymbolTable = m_scopePtr->getCurrentSymtab();
-        auto consistencyLevel = currentSymbolTable.compareStackState(symbolTable
+        LOG_DEBUG(
+            "Both if branches terminate; continuation state is unreachable"
         );
-        if (static_cast<int>(SymbolTable::ConsistencyLevel::EXCELLENT) <
-            static_cast<int>(consistencyLevel)) {
-            SourceLocation loc = getNodeLocation(node);
-            LOG_ERROR("Stack imbalance");
-            SYNTAX_ERROR("Stack imbalance", loc);
-            std::ostringstream oss;
-            oss << "stack state inconsistency detected in if-else branches at "
-                   "line "
-                << node.pos.first << ", column " << node.pos.second
-                << " - consistency level: "
-                << static_cast<int>(consistencyLevel);
-            LOG_ERROR(oss.str());
-            throw std::runtime_error(oss.str());
-        }
     }
 
     m_generator.emit(tbc::BytOpcode::OP_ENDIF);
+    m_scopePtr->replaceCurrentSymtab(mergedState);
+    restoreAltStack(mergedAltStack);
 }
 
 void ASTToBytecodeVisitor::visit(ForNode& node)
@@ -5860,40 +6352,6 @@ bool ASTToBytecodeVisitor::isStructArrayFieldSubfield(
             if (field.first == afterBracket) {
                 return true;
             }
-        }
-    }
-
-    return false;
-}
-
-bool ASTToBytecodeVisitor::blockContainsReturn(const StmtNode* stmt) const
-{
-    if (!stmt) {
-        return false;
-    }
-
-    if (dynamic_cast<const ReturnNode*>(stmt)) {
-        return true;
-    }
-
-    if (auto blockNode = dynamic_cast<const BlockNode*>(stmt)) {
-        for (const auto& innerStmt : blockNode->statements) {
-            if (blockContainsReturn(innerStmt.get())) {
-                return true;
-            }
-        }
-    }
-
-    if (auto ifNode = dynamic_cast<const IfNode*>(stmt)) {
-        if (blockContainsReturn(ifNode->thenBranch.get()) ||
-            blockContainsReturn(ifNode->elseBranch.get())) {
-            return true;
-        }
-    }
-
-    if (auto forNode = dynamic_cast<const ForNode*>(stmt)) {
-        if (blockContainsReturn(forNode->body.get())) {
-            return true;
         }
     }
 

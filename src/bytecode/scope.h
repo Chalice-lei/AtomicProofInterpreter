@@ -79,6 +79,12 @@ public:
         return m_currentSymtab;
     }
 
+    // 用显式合并后的符号表替换当前状态，不改变外围作用域栈。
+    void replaceCurrentSymtab(const SymbolTable& symbolTable)
+    {
+        m_currentSymtab = symbolTable;
+    }
+
     void clean();
     void enterScope();
 

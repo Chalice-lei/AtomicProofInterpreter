@@ -480,7 +480,7 @@ void DebugInfo::syncInstructionOpcodes(const std::vector<std::string>& bytecode)
 
 bool DebugInfo::validate() const
 {
-    if (sourceFilename.empty()) {
+    if (sourceFilename.empty() || !scopeNestingValid) {
         return false;
     }
 
@@ -494,9 +494,63 @@ bool DebugInfo::validate() const
         if (func.startPC >= func.endPC) {
             return false;
         }
+        if (!func.scope || func.scope->type != ScopeType::FUNCTION ||
+            func.scope->startPC != func.startPC ||
+            func.scope->endPC != func.endPC) {
+            return false;
+        }
     }
 
-    return true;
+    if (!globalScope ||
+        std::find(scopes.begin(), scopes.end(), globalScope) == scopes.end()) {
+        return false;
+    }
+
+    size_t globalScopeCount = 0;
+    auto containsScope = [&](const std::shared_ptr<ScopeDebugInfo>& scope) {
+        return std::find(scopes.begin(), scopes.end(), scope) != scopes.end();
+    };
+
+    for (const auto& scope : scopes) {
+        if (!scope || scope->startPC > scope->endPC) {
+            return false;
+        }
+
+        if (scope->type == ScopeType::GLOBAL) {
+            ++globalScopeCount;
+            if (scope != globalScope || scope->parent) {
+                return false;
+            }
+            continue;
+        }
+
+        if (!scope->parent || !containsScope(scope->parent)) {
+            return false;
+        }
+
+        if (scope->parent->type != ScopeType::GLOBAL &&
+            (scope->startPC < scope->parent->startPC ||
+             scope->endPC > scope->parent->endPC)) {
+            return false;
+        }
+
+        // parent 链必须最终到达 global，且不能形成环。
+        std::vector<const ScopeDebugInfo*> ancestry;
+        auto current = scope;
+        while (current) {
+            if (std::find(ancestry.begin(), ancestry.end(), current.get()) !=
+                ancestry.end()) {
+                return false;
+            }
+            ancestry.push_back(current.get());
+            current = current->parent;
+        }
+        if (ancestry.empty() || ancestry.back() != globalScope.get()) {
+            return false;
+        }
+    }
+
+    return globalScopeCount == 1;
 }
 
 // ===== JSON 序列化 =====
@@ -545,6 +599,7 @@ std::string DebugInfo::toJson() const
     j["format"] = "apc-debug";
     j["sourceFile"] = sourceFilename;
     j["contractName"] = contractName;
+    j["scopeNestingValid"] = scopeNestingValid;
 
     json pcToSourceJson = json::object();
     for (const auto& [pc, loc] : pcToSource) {
@@ -649,6 +704,7 @@ std::shared_ptr<DebugInfo> DebugInfo::fromJson(const std::string& jsonStr)
         info->version = j.value("version", "1.0");
         info->sourceFilename = j.value("sourceFile", "");
         info->contractName = j.value("contractName", "");
+        info->scopeNestingValid = j.value("scopeNestingValid", true);
 
         if (j.contains("pcToSource")) {
             for (auto& [pcStr, locJson] : j["pcToSource"].items()) {

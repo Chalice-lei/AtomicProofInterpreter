@@ -126,6 +126,8 @@ class DebugInfo
 public:
     DebugInfo() = default;
 
+    // DebugInfoGenerator 在无法安全恢复的 enter/exit 错配时置 false。
+    bool scopeNestingValid{true};
     std::string sourceFilename;
     std::string contractName;
     std::string version;
