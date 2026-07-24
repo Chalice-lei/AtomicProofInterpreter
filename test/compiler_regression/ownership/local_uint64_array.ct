@@ -1,0 +1,8 @@
+Contract LocalUint64Array:
+    def main(data: string):
+        amount: uint64[6] = data.Slice(0, 48)
+        total = Push(0)
+        for i in Range(5, -1, -1):
+            total = BinToNum(amount[i]) + total
+        Delete(amount)
+        Return(total)

@@ -1,0 +1,5 @@
+Contract RebindDeletedElementWrongType:
+    def main(values: number[1]):
+        Delete(values[0])
+        values[0] = "wrong"
+        return values[0]

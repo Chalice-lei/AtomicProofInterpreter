@@ -1,0 +1,3 @@
+Contract LowercaseVoidReturn:
+    def main(value: string, marker: number):
+        return Delete(value)

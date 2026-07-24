@@ -1,0 +1,5 @@
+Contract CopyFromConsumed:
+    def main(source: string, target: string):
+        hashed = Sha256(source)
+        target = source
+        Return(hashed)

@@ -1,0 +1,5 @@
+Contract KeepBorrow:
+    def main(value: string):
+        Keep(value)
+        Keep(value)
+        Return(value)

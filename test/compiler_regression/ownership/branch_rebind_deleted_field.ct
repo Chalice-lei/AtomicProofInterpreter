@@ -1,0 +1,11 @@
+Contract BranchRebindDeletedField:
+    Struct Data:
+        x: number
+    def main(source: number, data: Data, flag: bool):
+        if flag:
+            Delete(data.x)
+            data.x = source
+        else:
+            Delete(data.x)
+            data.x = source
+        return data.x

@@ -1,0 +1,7 @@
+Contract TerminalBothBranches:
+    def main(flag: bool, value: string):
+        if flag:
+            Return(value)
+        else:
+            Return(value)
+        Return(value)

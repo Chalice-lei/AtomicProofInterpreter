@@ -1,0 +1,4 @@
+Contract SizeAfterMove:
+    def main(value: string):
+        hashed = Sha256(value)
+        Return(Size(value))

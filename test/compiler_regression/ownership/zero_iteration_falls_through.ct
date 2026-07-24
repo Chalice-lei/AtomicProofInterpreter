@@ -1,0 +1,5 @@
+Contract ZeroIterationFallsThrough:
+    def main(value: string):
+        for i in Range(0):
+            Return(value)
+        Return(value)

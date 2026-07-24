@@ -1,0 +1,4 @@
+Contract ScalarCopyBorrow:
+    def main(source: number, target: number):
+        target = source
+        Return(source)

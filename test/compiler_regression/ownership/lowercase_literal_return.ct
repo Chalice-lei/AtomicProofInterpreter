@@ -1,0 +1,3 @@
+Contract LowercaseLiteralReturn:
+    def main():
+        return 1

@@ -1,6 +1,7 @@
 #ifndef PRE_ANALYSIS_VISITOR_H
 #define PRE_ANALYSIS_VISITOR_H
 
+#include <algorithm>
 #include <map>
 #include <memory>
 #include <optional>
@@ -25,6 +26,15 @@ enum class VariableState {
     CONSUMED // 所有权转移.
 };
 
+// Tracks where a binding currently lives. Ownership decisions for assignment
+// must follow the backend's real stack operation, not merely the declared type.
+enum class StorageResidency {
+    UNBOUND,
+    FIXED_VALUE,
+    MAIN_STACK,
+    ALT_STACK
+};
+
 struct VariableInfo
 {
     std::string name;
@@ -33,24 +43,27 @@ struct VariableInfo
     VariableState state;
     SourceLocation declLocation;
     SourceLocation lastUseLocation;
+    StorageResidency storage;
+    bool wasBorrowed = false;
 
     // 数组元素所有权: true=拥有, false=已移动.
     std::vector<bool> elementOwnership;
+    std::vector<StorageResidency> elementStorage;
     size_t elementStackSize = 1;
 
     // 字段路径 -> 该字段的所有权状态.
     std::map<std::string, VariableState> fieldOwnership;
-
-    bool m_inAltStack = false;
+    std::map<std::string, StorageResidency> fieldStorage;
 
     VariableInfo(
         const std::string& n,
         const std::string& t,
         DataSource src,
-        const SourceLocation& loc
+        const SourceLocation& loc,
+        StorageResidency residency = StorageResidency::UNBOUND
     )
         : name(n), type(t), source(src), state(VariableState::DECLARED),
-          declLocation(loc)
+          declLocation(loc), storage(residency)
     {}
 
     // 数组类型重载.
@@ -60,12 +73,15 @@ struct VariableInfo
         DataSource src,
         const SourceLocation& loc,
         size_t arraySize,
-        size_t elemStackSize = 1
+        size_t elemStackSize = 1,
+        StorageResidency residency = StorageResidency::UNBOUND
     )
         : name(n), type(t), source(src), state(VariableState::DECLARED),
-          declLocation(loc), elementStackSize(elemStackSize)
+          declLocation(loc), storage(residency),
+          elementStackSize(elemStackSize)
     {
         elementOwnership.resize(arraySize, true);
+        elementStorage.resize(arraySize, residency);
     }
 
     // 仅栈上数据有所有权概念.
@@ -89,7 +105,7 @@ struct VariableInfo
         if (!isArrayType()) {
             return state == VariableState::CONSUMED;
         }
-        return std::all_of(
+        return state == VariableState::CONSUMED || std::all_of(
             elementOwnership.begin(),
             elementOwnership.end(),
             [](bool owned) { return !owned; }
@@ -101,13 +117,17 @@ struct VariableInfo
         if (!isArrayType()) {
             return state != VariableState::CONSUMED;
         }
-        return index < elementOwnership.size() && elementOwnership[index];
+        return state != VariableState::CONSUMED &&
+               index < elementOwnership.size() && elementOwnership[index];
     }
 
     size_t getConsumedElementCount() const
     {
         if (!isArrayType()) {
             return (state == VariableState::CONSUMED) ? 1 : 0;
+        }
+        if (state == VariableState::CONSUMED) {
+            return elementOwnership.size();
         }
         return std::count(
             elementOwnership.begin(), elementOwnership.end(), false
@@ -118,6 +138,9 @@ struct VariableInfo
     {
         if (!isArrayType()) {
             return (state != VariableState::CONSUMED) ? 1 : 0;
+        }
+        if (state == VariableState::CONSUMED) {
+            return 0;
         }
         return std::count(
             elementOwnership.begin(), elementOwnership.end(), true
@@ -157,19 +180,31 @@ struct VariableInfo
         return state;
     }
 
+    StorageResidency getFieldStorage(const std::string& fieldPath) const
+    {
+        auto it = fieldStorage.find(fieldPath);
+        return it == fieldStorage.end() ? storage : it->second;
+    }
+
+    StorageResidency getElementStorage(size_t index) const
+    {
+        return index < elementStorage.size() ? elementStorage[index]
+                                             : StorageResidency::UNBOUND;
+    }
+
     bool isInAltStack() const
     {
-        return m_inAltStack;
+        return storage == StorageResidency::ALT_STACK;
     }
 
     void markInAltStack()
     {
-        m_inAltStack = true;
+        storage = StorageResidency::ALT_STACK;
     }
 
     void markNotInAltStack()
     {
-        m_inAltStack = false;
+        storage = StorageResidency::MAIN_STACK;
     }
 };
 
@@ -226,13 +261,20 @@ private:
         const std::string& name,
         const std::string& type,
         const SourceLocation& location,
-        ExprNode* initValue = nullptr
+        ExprNode* initValue = nullptr,
+        StorageResidency storage = StorageResidency::UNBOUND
     );
     void useVariable(const std::string& name, const SourceLocation& location);
+    void borrowVariable(const std::string& name, const SourceLocation& location);
     void
     consumeVariable(const std::string& name, const SourceLocation& location);
 
     void useField(
+        const std::string& varName,
+        const std::string& fieldPath,
+        const SourceLocation& location
+    );
+    void borrowField(
         const std::string& varName,
         const std::string& fieldPath,
         const SourceLocation& location
@@ -253,7 +295,8 @@ private:
         const std::string& elementType,
         const SourceLocation& location,
         size_t arraySize,
-        size_t elementStackSize = 1
+        size_t elementStackSize = 1,
+        StorageResidency storage = StorageResidency::UNBOUND
     );
     void useArrayElement(
         const std::string& arrayName,
@@ -263,6 +306,11 @@ private:
     void consumeArrayElement(
         const std::string& arrayName,
         size_t index,
+        const SourceLocation& location
+    );
+    void borrowArrayElement(IndexAccessNode& node);
+    void consumeWholeArray(
+        const std::string& arrayName,
         const SourceLocation& location
     );
     bool isArrayElementAvailable(const std::string& arrayName, size_t index)
@@ -282,8 +330,17 @@ private:
     reportWarning(const std::string& message, const SourceLocation& location);
 
     void analyzeExpression(ExprNode& expr);
+    void analyzeBorrowedExpression(ExprNode& expr);
     void analyzeExpressionForValueReturn(ExprNode& expr); // 小写 return: 只使用不消耗.
     void analyzeConditionalExpression(ExprNode& expr);
+    StorageResidency classifyStorage(ExprNode* value);
+    bool expressionHasMainStackSlot(ExprNode& expr);
+    bool assignmentTargetHasMainStackSlot(ExprNode& target);
+    void bindAssignmentTarget(
+        ExprNode& target,
+        StorageResidency storage,
+        ExprNode* value
+    );
     std::string getVariableFromExpr(ExprNode& expr);
     // 例: ctx.FTbyChange.Tape.LockingScript -> {"ctx", "FTbyChange.Tape.LockingScript"}
     std::pair<std::string, std::string> getFieldPathFromExpr(ExprNode& expr);
@@ -301,7 +358,11 @@ private:
     void
     checkUnusedFunctionResult(ExprNode& expr, const SourceLocation& location);
     void
-    reassignVariable(const std::string& name, const SourceLocation& location);
+    reassignVariable(
+        const std::string& name,
+        const SourceLocation& location,
+        StorageResidency storage = StorageResidency::MAIN_STACK
+    );
 
     std::map<std::string, VariableInfo> saveVariableState();
     void restoreVariableState(
@@ -309,7 +370,8 @@ private:
     );
     void mergeBranchStates(
         const std::map<std::string, VariableInfo>& thenState,
-        const std::map<std::string, VariableInfo>& elseState
+        const std::map<std::string, VariableInfo>& elseState,
+        const std::map<std::string, VariableInfo>& entryState
     );
 
     SourceLocation getNodeLocation(ASTNode& node);

@@ -1,0 +1,5 @@
+Contract SizeAfterArrayDelete:
+    def main(data: string):
+        amount: uint64[2] = data.Slice(0, 16)
+        Delete(amount)
+        Return(Size(amount[0]))

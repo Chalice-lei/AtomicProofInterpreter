@@ -1,0 +1,5 @@
+Contract UseAfterDelete:
+    def main(data: string):
+        amount: uint64[6] = data.Slice(0, 48)
+        Delete(amount)
+        Return(amount[0])

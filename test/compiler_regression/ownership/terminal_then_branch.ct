@@ -1,0 +1,8 @@
+Contract TerminalThenBranch:
+    def main(flag: bool, value: string):
+        if flag:
+            Return(value)
+        else:
+            marker = Push(1)
+            Delete(marker)
+        Return(value)

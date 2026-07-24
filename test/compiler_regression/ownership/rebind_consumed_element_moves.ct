@@ -1,0 +1,5 @@
+Contract RebindConsumedElementMoves:
+    def main(source: number, values: number[1]):
+        Delete(values[0])
+        values[0] = source
+        Return(source)

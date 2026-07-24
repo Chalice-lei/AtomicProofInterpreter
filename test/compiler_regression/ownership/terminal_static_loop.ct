@@ -1,0 +1,4 @@
+Contract TerminalStaticLoop:
+    def main(value: string):
+        for i in Range(2):
+            Return(value)

@@ -1,0 +1,5 @@
+Contract RebindConsumedScalarMoves:
+    def main(source: number, target: number):
+        Delete(target)
+        target = source
+        Return(source)

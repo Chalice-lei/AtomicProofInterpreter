@@ -1,0 +1,7 @@
+Contract UninitializedFieldMoves:
+    Struct Data:
+        x: number
+    def main(source: number):
+        data: Data
+        data.x = source
+        Return(source)

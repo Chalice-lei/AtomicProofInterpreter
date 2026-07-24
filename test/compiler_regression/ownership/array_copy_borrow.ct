@@ -1,0 +1,4 @@
+Contract ArrayCopyBorrow:
+    def main(source: number, values: number[1]):
+        values[0] = source
+        Return(source)

@@ -6,6 +6,7 @@
 #include "../bytecode/bytecode_operation_functions.h"
 #include "../log/logger.h"
 #include "../util/type_utils.h"
+#include "control_flow_analysis.h"
 
 PreAnalysisVisitor::PreAnalysisVisitor()
     : m_hasErrors(false), m_allowSubscopeAltstack(false),
@@ -105,10 +106,17 @@ void PreAnalysisVisitor::visit(FunctionNode& node)
                 elementType,
                 getNodeLocation(node),
                 arraySize,
-                calculateElementStackSize(elementType)
+                calculateElementStackSize(elementType),
+                StorageResidency::MAIN_STACK
             );
         } else {
-            declareVariable(param.name, param.type, getNodeLocation(node));
+            declareVariable(
+                param.name,
+                param.type,
+                getNodeLocation(node),
+                nullptr,
+                StorageResidency::MAIN_STACK
+            );
         }
     }
 
@@ -144,6 +152,9 @@ void PreAnalysisVisitor::visit(BlockNode& node)
 {
     for (auto& stmt : node.statements) {
         stmt->accept(*this);
+        if (!compiler_flow::reachesContinuation(stmt.get())) {
+            break;
+        }
     }
 }
 
@@ -183,50 +194,60 @@ void PreAnalysisVisitor::visit(IfNode& node)
 
     m_inIfElseScope = previousInIfElseScope;
 
-    // Merge branch states to determine post-if state
-    mergeBranchStates(thenState, elseState);
+    const bool thenFallsThrough =
+        compiler_flow::reachesContinuation(node.thenBranch.get());
+    const bool elseFallsThrough = !node.elseBranch ||
+                                  compiler_flow::reachesContinuation(
+                                      node.elseBranch.get()
+                                  );
+
+    // A terminated path has no ownership state at the join point.
+    if (thenFallsThrough && elseFallsThrough) {
+        mergeBranchStates(thenState, elseState, savedState);
+    } else if (thenFallsThrough) {
+        restoreVariableState(thenState);
+    } else if (elseFallsThrough) {
+        restoreVariableState(elseState);
+    } else {
+        restoreVariableState(savedState);
+    }
+
+    // Ownership after the join only comes from reachable paths, but unused
+    // diagnostics should still remember a borrow that occurred on either
+    // branch (including a branch that terminates).
+    for (auto& [name, variable] : m_variables) {
+        const auto thenIt = thenState.find(name);
+        const auto elseIt = elseState.find(name);
+        variable.wasBorrowed = variable.wasBorrowed ||
+                               (thenIt != thenState.end() &&
+                                thenIt->second.wasBorrowed) ||
+                               (elseIt != elseState.end() &&
+                                elseIt->second.wasBorrowed);
+    }
 }
 
 void PreAnalysisVisitor::visit(AssignNode& node)
 {
-    // Analyze right-hand side first (may consume variables)
+    // An existing main-stack destination makes a main-stack RHS a real copy
+    // (OP_PICK in code generation). A first binding has no destination slot
+    // and remains a zero-cost rename/move.
+    const bool copiesStackValue =
+        node.name && node.value &&
+        assignmentTargetHasMainStackSlot(*node.name) &&
+        expressionHasMainStackSlot(*node.value);
+
     if (node.value) {
-        analyzeExpression(*node.value);
+        if (copiesStackValue) {
+            analyzeBorrowedExpression(*node.value);
+        } else {
+            analyzeExpression(*node.value);
+        }
     }
 
-    // Handle left-hand side assignment target
     if (node.name) {
-        auto [varName, fieldPath] = getFieldPathFromExpr(*node.name);
-        if (!varName.empty()) {
-            if (dynamic_cast<IdentifierNode*>(node.name.get())) {
-                // Simple identifier - could be new variable declaration or
-                // reassignment
-                VariableInfo* existingVar = findVariable(varName);
-                if (!existingVar) {
-                    // New variable declaration - classify based on RHS
-                    declareVariable(
-                        varName,
-                        "auto",
-                        getNodeLocation(*node.name),
-                        node.value.get()
-                    );
-                    LOG_DEBUG(
-                        "Auto-declared variable in assignment: " + varName
-                    );
-                } else {
-                    // Existing variable reassignment (Rust-like move-after-move):
-                    // allowed even if previously consumed
-                    reassignVariable(varName, getNodeLocation(*node.name));
-                }
-            } else {
-                // Complex expression (field access, etc.) - use, not reassignment
-                if (fieldPath.empty()) {
-                    useVariable(varName, getNodeLocation(*node.name));
-                } else {
-                    useField(varName, fieldPath, getNodeLocation(*node.name));
-                }
-            }
-        }
+        bindAssignmentTarget(
+            *node.name, classifyStorage(node.value.get()), node.value.get()
+        );
     }
 }
 
@@ -338,10 +359,18 @@ void PreAnalysisVisitor::visit(ForNode& node)
 
         if (!targetExistedBeforeLoop && idx == 0) {
             declareVariable(
-                node.target, "int", getNodeLocation(node), &literal
+                node.target,
+                "int",
+                getNodeLocation(node),
+                &literal,
+                StorageResidency::FIXED_VALUE
             );
         } else {
-            reassignVariable(node.target, getNodeLocation(node));
+            reassignVariable(
+                node.target,
+                getNodeLocation(node),
+                StorageResidency::FIXED_VALUE
+            );
         }
 
         if (node.body) {
@@ -367,6 +396,10 @@ void PreAnalysisVisitor::visit(ForNode& node)
         }
 
         accumulatedState = std::move(iterationExitState);
+
+        if (!compiler_flow::reachesContinuation(node.body.get())) {
+            break;
+        }
     }
 
     if (hadPreviousLoopValue) {
@@ -467,9 +500,23 @@ void PreAnalysisVisitor::visit(ReturnNode& node)
 
 void PreAnalysisVisitor::visit(VarDeclNode& node)
 {
-    declareVariable(
-        node.name, node.type, getNodeLocation(node), node.initValue.get()
-    );
+    if (auto fixedArrayType = parseFixedArrayType(node.type);
+        fixedArrayType.has_value()) {
+        const auto& [elementType, arraySize] = fixedArrayType.value();
+        declareArrayVariable(
+            node.name,
+            elementType,
+            getNodeLocation(node),
+            arraySize,
+            calculateElementStackSize(elementType),
+            node.initValue ? StorageResidency::MAIN_STACK
+                           : StorageResidency::UNBOUND
+        );
+    } else {
+        declareVariable(
+            node.name, node.type, getNodeLocation(node), node.initValue.get()
+        );
+    }
 
     if (node.initValue) {
         analyzeExpression(*node.initValue);
@@ -492,6 +539,101 @@ void PreAnalysisVisitor::visit(CallNode& node)
 
     if (node.isRangeCall || node.funcName == "Range") {
         validateRangeCall(node);
+        return;
+    }
+
+    // Keep only records which values survive scope cleanup. It emits no
+    // opcode and therefore borrows all arguments.
+    if (node.funcName == "Keep") {
+        if (node.args.empty()) {
+            reportError(
+                "Keep() expects at least one argument", getNodeLocation(node)
+            );
+            return;
+        }
+        for (auto& arg : node.args) {
+            analyzeBorrowedExpression(*arg);
+        }
+        return;
+    }
+
+    // OP_SIZE has stack effect `x -> x size`: it borrows its argument instead
+    // of moving it. Keep this ownership rule aligned with code generation.
+    if (node.funcName == "Size") {
+        if (node.args.size() != 1) {
+            reportError(
+                "Size() expects exactly one argument", getNodeLocation(node)
+            );
+            return;
+        }
+
+        analyzeBorrowedExpression(*node.args[0]);
+        return;
+    }
+
+    // Delete needs element-aware handling for fixed arrays. Other expressions
+    // keep the generic analysis path so repeated scalar uses are still caught.
+    if (node.funcName == "Delete") {
+        if (node.args.empty()) {
+            reportError(
+                "Delete() expects at least one argument", getNodeLocation(node)
+            );
+            return;
+        }
+
+        for (auto& arg : node.args) {
+            if (auto* indexAccess =
+                    dynamic_cast<IndexAccessNode*>(arg.get())) {
+                std::string arrayName =
+                    getVariableFromExpr(*indexAccess->base);
+                VariableInfo* var = arrayName.empty()
+                                        ? nullptr
+                                        : findVariable(arrayName);
+                if (var && var->isArrayType()) {
+                    if (indexAccess->index) {
+                        analyzeExpression(*indexAccess->index);
+                    }
+                    auto indexOpt =
+                        calculateIndexValue(indexAccess->index.get());
+                    if (indexOpt.has_value()) {
+                        consumeArrayElement(
+                            arrayName,
+                            indexOpt.value(),
+                            getNodeLocation(*indexAccess)
+                        );
+                    } else {
+                        reportError(
+                            "Failed to calculate array index for Delete()",
+                            getNodeLocation(*indexAccess)
+                        );
+                    }
+                    continue;
+                }
+            }
+
+            auto [varName, fieldPath] = getFieldPathFromExpr(*arg);
+            if (!varName.empty() && fieldPath.empty()) {
+                VariableInfo* var = findVariable(varName);
+                if (var && var->isArrayType()) {
+                    consumeWholeArray(varName, getNodeLocation(*arg));
+                    continue;
+                }
+            }
+
+            if (!varName.empty()) {
+                analyzeExpression(*arg);
+                if (fieldPath.empty()) {
+                    consumeVariable(varName, getNodeLocation(*arg));
+                } else {
+                    consumeField(
+                        varName, fieldPath, getNodeLocation(*arg)
+                    );
+                }
+                continue;
+            }
+
+            analyzeExpression(*arg);
+        }
         return;
     }
 
@@ -519,6 +661,7 @@ void PreAnalysisVisitor::visit(CallNode& node)
             // 旧 useVariable (不查 USED) 的遗留, 在 move-once 规则下会让后续
             // `Keep(x)` / `x op ...` 等正常消费首次访问就报错, 故移除.
             var->markInAltStack();
+            var->storage = StorageResidency::ALT_STACK;
             LOG_DEBUG("Variable '" + varName + "' moved to altstack");
         }
         return;
@@ -547,6 +690,7 @@ void PreAnalysisVisitor::visit(CallNode& node)
             // 消费可走一次完整 move 路径 (原 USED 升级在新规则下会阻断首次消费).
             var->markNotInAltStack();
             var->state = VariableState::DECLARED;
+            var->storage = StorageResidency::MAIN_STACK;
             LOG_DEBUG(
                 "Variable '" + varName + "' moved from altstack to main stack"
             );
@@ -785,7 +929,13 @@ void PreAnalysisVisitor::visit(ArrayDeclNode& node)
     size_t elementStackSize = calculateElementStackSize(node.elementType);
 
     declareArrayVariable(
-        node.name, node.elementType, loc, arraySize, elementStackSize
+        node.name,
+        node.elementType,
+        loc,
+        arraySize,
+        elementStackSize,
+        node.initArray ? StorageResidency::MAIN_STACK
+                       : StorageResidency::UNBOUND
     );
 
     if (node.sizeExpr) {
@@ -837,7 +987,8 @@ void PreAnalysisVisitor::declareVariable(
     const std::string& name,
     const std::string& type,
     const SourceLocation& location,
-    ExprNode* initValue
+    ExprNode* initValue,
+    StorageResidency storage
 )
 {
     // Check for redeclaration
@@ -848,9 +999,14 @@ void PreAnalysisVisitor::declareVariable(
 
     // Classify variable data source
     DataSource source = classifyVariable(name, initValue);
+    if (storage == StorageResidency::UNBOUND && initValue) {
+        storage = classifyStorage(initValue);
+    }
 
     // Add variable to current scope
-    m_variables.emplace(name, VariableInfo(name, type, source, location));
+    m_variables.emplace(
+        name, VariableInfo(name, type, source, location, storage)
+    );
 
     LOG_DEBUG(
         "Declared variable: " + name + " type: " + type +
@@ -914,6 +1070,41 @@ void PreAnalysisVisitor::useVariable(
     LOG_DEBUG("Using stack variable: " + name);
 }
 
+void PreAnalysisVisitor::borrowVariable(
+    const std::string& name,
+    const SourceLocation& location
+)
+{
+    if (isContractMember(name) || isBuiltinObject(name) ||
+        m_deferredOwnershipParams.count(name) > 0) {
+        return;
+    }
+
+    VariableInfo* var = findVariable(name);
+    if (!var) {
+        reportError("Undeclared variable: '" + name + "'", location);
+        return;
+    }
+
+    if (!var->hasOwnership()) {
+        return;
+    }
+
+    if (var->state != VariableState::DECLARED) {
+        reportError(
+            "variable '" + name +
+                "' has been consumed and cannot be borrowed "
+                "(move semantics violation)",
+            location
+        );
+        return;
+    }
+
+    var->lastUseLocation = location;
+    var->wasBorrowed = true;
+    LOG_DEBUG("Borrowing stack variable without consuming it: " + name);
+}
+
 void PreAnalysisVisitor::consumeVariable(
     const std::string& name,
     const SourceLocation& location
@@ -940,10 +1131,17 @@ void PreAnalysisVisitor::consumeVariable(
         return;
     }
 
-    // Check if variable has already been consumed
+    // Consuming calls first analyze their argument, which transitions a fresh
+    // binding to USED. Repeated access is reported by useVariable itself.
     checkOwnershipViolation(name, location);
 
     var->state = VariableState::CONSUMED;
+    var->storage = StorageResidency::UNBOUND;
+    std::fill(
+        var->elementStorage.begin(),
+        var->elementStorage.end(),
+        StorageResidency::UNBOUND
+    );
     var->lastUseLocation = location;
 
     LOG_DEBUG("Consuming stack variable: " + name);
@@ -994,6 +1192,48 @@ void PreAnalysisVisitor::useField(
     LOG_DEBUG("Using field: " + varName + "." + fieldPath);
 }
 
+void PreAnalysisVisitor::borrowField(
+    const std::string& varName,
+    const std::string& fieldPath,
+    const SourceLocation& location
+)
+{
+    if (fieldPath.empty()) {
+        borrowVariable(varName, location);
+        return;
+    }
+
+    if (isContractMember(varName) || isBuiltinObject(varName) ||
+        m_deferredOwnershipParams.count(varName) > 0) {
+        return;
+    }
+
+    VariableInfo* var = findVariable(varName);
+    if (!var) {
+        reportError("Undeclared variable: '" + varName + "'", location);
+        return;
+    }
+
+    if (!var->hasOwnership()) {
+        return;
+    }
+
+    if (var->getFieldState(fieldPath) != VariableState::DECLARED) {
+        reportError(
+            "Field '" + varName + "." + fieldPath +
+                "' has been consumed and cannot be borrowed",
+            location
+        );
+        return;
+    }
+
+    var->lastUseLocation = location;
+    var->wasBorrowed = true;
+    LOG_DEBUG(
+        "Borrowing field without consuming it: " + varName + "." + fieldPath
+    );
+}
+
 void PreAnalysisVisitor::consumeField(
     const std::string& varName,
     const std::string& fieldPath,
@@ -1030,10 +1270,10 @@ void PreAnalysisVisitor::consumeField(
         return;
     }
 
-    // Check if field has already been consumed
     checkFieldOwnershipViolation(varName, fieldPath, location);
 
     var->markFieldConsumed(fieldPath);
+    var->fieldStorage[fieldPath] = StorageResidency::UNBOUND;
     var->lastUseLocation = location;
 
     LOG_DEBUG("Consuming field: " + varName + "." + fieldPath);
@@ -1064,7 +1304,8 @@ void PreAnalysisVisitor::declareArrayVariable(
     const std::string& elementType,
     const SourceLocation& location,
     size_t arraySize,
-    size_t elementStackSize
+    size_t elementStackSize,
+    StorageResidency storage
 )
 {
     if (m_variables.find(name) != m_variables.end()) {
@@ -1081,7 +1322,8 @@ void PreAnalysisVisitor::declareArrayVariable(
             source,
             location,
             arraySize,
-            elementStackSize
+            elementStackSize,
+            storage
         )
     );
 
@@ -1172,6 +1414,7 @@ void PreAnalysisVisitor::consumeArrayElement(
 
     if (index < var->elementOwnership.size()) {
         var->elementOwnership[index] = false;
+        var->elementStorage[index] = StorageResidency::UNBOUND;
     }
 
     if (var->isFullyConsumed()) {
@@ -1185,6 +1428,91 @@ void PreAnalysisVisitor::consumeArrayElement(
         "Consumed array element: " + arrayName + "[" + std::to_string(index) +
         "]"
     );
+}
+
+void PreAnalysisVisitor::borrowArrayElement(IndexAccessNode& node)
+{
+    if (!node.base) {
+        return;
+    }
+
+    std::string arrayName = getVariableFromExpr(*node.base);
+    VariableInfo* var =
+        arrayName.empty() ? nullptr : findVariable(arrayName);
+    if (!var || !var->isArrayType()) {
+        analyzeExpression(node);
+        return;
+    }
+
+    if (node.index) {
+        analyzeExpression(*node.index);
+    }
+
+    auto indexOpt = calculateIndexValue(node.index.get());
+    if (!indexOpt.has_value()) {
+        LOG_WARNING(
+            "Failed to calculate borrowed array index, skipping ownership check"
+        );
+        return;
+    }
+
+    if (!var->isElementAvailable(indexOpt.value())) {
+        reportError(
+            "Array element '" + arrayName + "[" +
+                std::to_string(indexOpt.value()) +
+                "]' has been consumed and cannot be borrowed",
+            getNodeLocation(node)
+        );
+        return;
+    }
+
+    var->lastUseLocation = getNodeLocation(node);
+    var->wasBorrowed = true;
+    LOG_DEBUG(
+        "Borrowing array element without consuming it: " + arrayName + "[" +
+        std::to_string(indexOpt.value()) + "]"
+    );
+}
+
+void PreAnalysisVisitor::consumeWholeArray(
+    const std::string& arrayName,
+    const SourceLocation& location
+)
+{
+    VariableInfo* var = findVariable(arrayName);
+    if (!var) {
+        reportError("Undeclared array: '" + arrayName + "'", location);
+        return;
+    }
+
+    if (!var->isArrayType()) {
+        consumeVariable(arrayName, location);
+        return;
+    }
+
+    if (!var->hasOwnership()) {
+        return;
+    }
+
+    if (var->state == VariableState::CONSUMED || var->isFullyConsumed()) {
+        reportError(
+            "Array '" + arrayName + "' has already been consumed", location
+        );
+        return;
+    }
+
+    std::fill(
+        var->elementOwnership.begin(), var->elementOwnership.end(), false
+    );
+    std::fill(
+        var->elementStorage.begin(),
+        var->elementStorage.end(),
+        StorageResidency::UNBOUND
+    );
+    var->state = VariableState::CONSUMED;
+    var->storage = StorageResidency::UNBOUND;
+    var->lastUseLocation = location;
+    LOG_DEBUG("Consumed whole array: " + arrayName);
 }
 
 bool PreAnalysisVisitor::isArrayElementAvailable(
@@ -1205,7 +1533,8 @@ size_t PreAnalysisVisitor::calculateElementStackSize(
     const std::string& elementType
 ) const
 {
-    if (elementType == "int" || elementType == "string" ||
+    if (elementType == "int" || elementType == "uint64" ||
+        elementType == "string" ||
         elementType == "hex" || elementType == "bool") {
         return 1;
     }
@@ -1320,11 +1649,194 @@ void PreAnalysisVisitor::analyzeExpression(ExprNode& expr)
     expr.accept(*this);
 }
 
+void PreAnalysisVisitor::analyzeBorrowedExpression(ExprNode& expr)
+{
+    if (auto* identNode = dynamic_cast<IdentifierNode*>(&expr)) {
+        borrowVariable(identNode->name, getNodeLocation(*identNode));
+        return;
+    }
+
+    if (auto* fieldNode = dynamic_cast<FieldAccessNode*>(&expr)) {
+        auto [varName, fieldPath] = getFieldPathFromExpr(*fieldNode);
+        if (!varName.empty()) {
+            if (fieldPath.empty()) {
+                borrowVariable(varName, getNodeLocation(*fieldNode));
+            } else {
+                borrowField(varName, fieldPath, getNodeLocation(*fieldNode));
+            }
+            return;
+        }
+    }
+
+    if (auto* indexNode = dynamic_cast<IndexAccessNode*>(&expr)) {
+        borrowArrayElement(*indexNode);
+        return;
+    }
+
+    // Expressions that produce temporaries still analyze their inputs using
+    // normal ownership rules; only the resulting temporary is preserved by
+    // OP_SIZE.
+    analyzeExpression(expr);
+}
+
+StorageResidency PreAnalysisVisitor::classifyStorage(ExprNode* value)
+{
+    if (!value) {
+        return StorageResidency::UNBOUND;
+    }
+    if (isConstantValue(*value)) {
+        return StorageResidency::FIXED_VALUE;
+    }
+
+    if (auto* identifier = dynamic_cast<IdentifierNode*>(value)) {
+        VariableInfo* var = findVariable(identifier->name);
+        return var ? var->storage : StorageResidency::MAIN_STACK;
+    }
+
+    if (auto* field = dynamic_cast<FieldAccessNode*>(value)) {
+        auto [varName, fieldPath] = getFieldPathFromExpr(*field);
+        VariableInfo* var = varName.empty() ? nullptr : findVariable(varName);
+        return var ? var->getFieldStorage(fieldPath)
+                   : StorageResidency::MAIN_STACK;
+    }
+
+    if (auto* index = dynamic_cast<IndexAccessNode*>(value)) {
+        std::string arrayName = index->base
+                                    ? getVariableFromExpr(*index->base)
+                                    : std::string();
+        VariableInfo* var =
+            arrayName.empty() ? nullptr : findVariable(arrayName);
+        auto indexValue = calculateIndexValue(index->index.get());
+        if (var && indexValue.has_value()) {
+            return var->getElementStorage(indexValue.value());
+        }
+    }
+
+    // Calls, operators and method calls materialize a runtime value.
+    return StorageResidency::MAIN_STACK;
+}
+
+bool PreAnalysisVisitor::expressionHasMainStackSlot(ExprNode& expr)
+{
+    return classifyStorage(&expr) == StorageResidency::MAIN_STACK;
+}
+
+bool PreAnalysisVisitor::assignmentTargetHasMainStackSlot(ExprNode& target)
+{
+    if (auto* identifier = dynamic_cast<IdentifierNode*>(&target)) {
+        VariableInfo* var = findVariable(identifier->name);
+        return var && var->state == VariableState::DECLARED &&
+               var->storage == StorageResidency::MAIN_STACK;
+    }
+
+    if (auto* field = dynamic_cast<FieldAccessNode*>(&target)) {
+        auto [varName, fieldPath] = getFieldPathFromExpr(*field);
+        VariableInfo* var = varName.empty() ? nullptr : findVariable(varName);
+        return var && var->getFieldState(fieldPath) == VariableState::DECLARED &&
+               var->getFieldStorage(fieldPath) == StorageResidency::MAIN_STACK;
+    }
+
+    if (auto* index = dynamic_cast<IndexAccessNode*>(&target)) {
+        std::string arrayName = index->base
+                                    ? getVariableFromExpr(*index->base)
+                                    : std::string();
+        VariableInfo* var =
+            arrayName.empty() ? nullptr : findVariable(arrayName);
+        auto indexValue = calculateIndexValue(index->index.get());
+        return var && indexValue.has_value() &&
+               var->isElementAvailable(indexValue.value()) &&
+               var->getElementStorage(indexValue.value()) ==
+                   StorageResidency::MAIN_STACK;
+    }
+
+    return false;
+}
+
+void PreAnalysisVisitor::bindAssignmentTarget(
+    ExprNode& target,
+    StorageResidency storage,
+    ExprNode* value
+)
+{
+    const SourceLocation location = getNodeLocation(target);
+
+    if (auto* identifier = dynamic_cast<IdentifierNode*>(&target)) {
+        VariableInfo* existing = findVariable(identifier->name);
+        if (existing) {
+            reassignVariable(identifier->name, location, storage);
+        } else {
+            declareVariable(
+                identifier->name, "auto", location, value, storage
+            );
+            LOG_DEBUG(
+                "Auto-declared variable in assignment: " + identifier->name
+            );
+        }
+        return;
+    }
+
+    if (auto* field = dynamic_cast<FieldAccessNode*>(&target)) {
+        auto [varName, fieldPath] = getFieldPathFromExpr(*field);
+        if (isContractMember(varName) || isBuiltinObject(varName)) {
+            return;
+        }
+
+        VariableInfo* var = varName.empty() ? nullptr : findVariable(varName);
+        if (!var) {
+            reportError("Undeclared variable: '" + varName + "'", location);
+            return;
+        }
+        if (fieldPath.empty()) {
+            reportError("Invalid field assignment target", location);
+            return;
+        }
+
+        var->fieldOwnership[fieldPath] = VariableState::DECLARED;
+        var->fieldStorage[fieldPath] = storage;
+        var->lastUseLocation = location;
+        return;
+    }
+
+    if (auto* index = dynamic_cast<IndexAccessNode*>(&target)) {
+        if (index->index) {
+            analyzeExpression(*index->index);
+        }
+
+        std::string arrayName = index->base
+                                    ? getVariableFromExpr(*index->base)
+                                    : std::string();
+        VariableInfo* var =
+            arrayName.empty() ? nullptr : findVariable(arrayName);
+        if (!var || !var->isArrayType()) {
+            reportError("Invalid array assignment target", location);
+            return;
+        }
+
+        auto indexValue = calculateIndexValue(index->index.get());
+        if (!indexValue.has_value() ||
+            indexValue.value() >= var->elementOwnership.size()) {
+            reportError("Invalid array assignment index", location);
+            return;
+        }
+
+        const size_t elementIndex = indexValue.value();
+        var->elementOwnership[elementIndex] = true;
+        var->elementStorage[elementIndex] = storage;
+        if (var->state == VariableState::CONSUMED) {
+            var->state = VariableState::DECLARED;
+        }
+        var->lastUseLocation = location;
+        return;
+    }
+
+    reportError("Invalid assignment target", location);
+}
+
 // 小写 return 专用: 表达式中变量只使用不消耗.
 void PreAnalysisVisitor::analyzeExpressionForValueReturn(ExprNode& expr)
 {
     if (auto* identNode = dynamic_cast<IdentifierNode*>(&expr)) {
-        useVariable(identNode->name, getNodeLocation(*identNode));
+        borrowVariable(identNode->name, getNodeLocation(*identNode));
         return;
     }
 
@@ -1341,25 +1853,17 @@ void PreAnalysisVisitor::analyzeExpressionForValueReturn(ExprNode& expr)
         auto [varName, fieldPath] = getFieldPathFromExpr(*fieldNode);
         if (!varName.empty()) {
             if (fieldPath.empty()) {
-                useVariable(varName, getNodeLocation(*fieldNode));
+                borrowVariable(varName, getNodeLocation(*fieldNode));
             } else {
-                useField(varName, fieldPath, getNodeLocation(*fieldNode));
+                borrowField(varName, fieldPath, getNodeLocation(*fieldNode));
             }
-        }
-        if (fieldNode->base) {
-            analyzeExpressionForValueReturn(*fieldNode->base);
+            return;
         }
         return;
     }
 
     if (auto* indexNode = dynamic_cast<IndexAccessNode*>(&expr)) {
-        // 索引表达式照常分析 (通常是字面量); base 只使用, 不消耗.
-        if (indexNode->index) {
-            analyzeExpression(*indexNode->index);
-        }
-        if (indexNode->base) {
-            analyzeExpressionForValueReturn(*indexNode->base);
-        }
+        borrowArrayElement(*indexNode);
         return;
     }
 
@@ -1513,7 +2017,8 @@ void PreAnalysisVisitor::checkUnusedVariables()
     for (const auto& varPair : m_variables) {
         const VariableInfo& var = varPair.second;
 
-        if (var.state == VariableState::DECLARED && var.hasOwnership()) {
+        if (var.state == VariableState::DECLARED && var.hasOwnership() &&
+            !var.wasBorrowed) {
             reportWarning(
                 "Variable '" + var.name + "' declared but not used",
                 var.declLocation
@@ -1637,7 +2142,8 @@ void PreAnalysisVisitor::restoreVariableState(
 
 void PreAnalysisVisitor::mergeBranchStates(
     const std::map<std::string, VariableInfo>& thenState,
-    const std::map<std::string, VariableInfo>& elseState
+    const std::map<std::string, VariableInfo>& elseState,
+    const std::map<std::string, VariableInfo>& entryState
 )
 {
     // Start with a copy of the then state
@@ -1680,6 +2186,42 @@ void PreAnalysisVisitor::mergeBranchStates(
             // thenState)
             auto varIt = m_variables.find(varName);
             if (varIt != m_variables.end()) {
+                const auto entryIt = entryState.find(varName);
+                const VariableInfo* entryVar =
+                    entryIt == entryState.end() ? nullptr : &entryIt->second;
+                varIt->second.wasBorrowed =
+                    thenVar.wasBorrowed || elseVar.wasBorrowed;
+                varIt->second.storage =
+                    thenVar.storage == elseVar.storage
+                        ? thenVar.storage
+                        : (entryVar ? entryVar->storage
+                                    : StorageResidency::UNBOUND);
+
+                if (thenVar.isArrayType() && elseVar.isArrayType()) {
+                    auto& mergedOwnership =
+                        varIt->second.elementOwnership;
+                    auto& mergedStorage = varIt->second.elementStorage;
+                    for (size_t i = 0; i < mergedOwnership.size(); ++i) {
+                        bool ownedInElse =
+                            i < elseVar.elementOwnership.size() &&
+                            elseVar.elementOwnership[i];
+                        mergedOwnership[i] =
+                            thenVar.elementOwnership[i] && ownedInElse;
+                        const StorageResidency thenStorage =
+                            thenVar.getElementStorage(i);
+                        const StorageResidency elseStorage =
+                            elseVar.getElementStorage(i);
+                        mergedStorage[i] =
+                            !mergedOwnership[i]
+                                ? StorageResidency::UNBOUND
+                                : (thenStorage == elseStorage
+                                       ? thenStorage
+                                       : (entryVar
+                                              ? entryVar->getElementStorage(i)
+                                              : StorageResidency::UNBOUND));
+                    }
+                }
+
                 // CRITICAL: consumed in ANY branch -> consumed after if/else
                 // (ensures stack state consistency across all paths)
                 if (thenVar.state == VariableState::CONSUMED ||
@@ -1712,6 +2254,16 @@ void PreAnalysisVisitor::mergeBranchStates(
                     }
                 }
 
+                if (varIt->second.isArrayType() &&
+                    varIt->second.isFullyConsumed()) {
+                    std::fill(
+                        varIt->second.elementOwnership.begin(),
+                        varIt->second.elementOwnership.end(),
+                        false
+                    );
+                    varIt->second.state = VariableState::CONSUMED;
+                }
+
                 // 字段级合并: 任一分支消耗则消耗, 否则任一使用则使用.
                 std::set<std::string> allFields;
                 for (const auto& fieldPair : thenVar.fieldOwnership) {
@@ -1732,6 +2284,8 @@ void PreAnalysisVisitor::mergeBranchStates(
                     if (thenFieldState == VariableState::CONSUMED ||
                         elseFieldState == VariableState::CONSUMED) {
                         varIt->second.markFieldConsumed(fieldPath);
+                        varIt->second.fieldStorage[fieldPath] =
+                            StorageResidency::UNBOUND;
                         LOG_DEBUG(
                             "Field '" + varName + "." + fieldPath +
                             "' consumed in at least one branch, marking as "
@@ -1741,7 +2295,24 @@ void PreAnalysisVisitor::mergeBranchStates(
                     else if (thenFieldState == VariableState::USED ||
                              elseFieldState == VariableState::USED) {
                         varIt->second.markFieldUsed(fieldPath);
+                        varIt->second.fieldStorage[fieldPath] =
+                            StorageResidency::UNBOUND;
+                    } else {
+                        const StorageResidency thenStorage =
+                            thenVar.getFieldStorage(fieldPath);
+                        const StorageResidency elseStorage =
+                            elseVar.getFieldStorage(fieldPath);
+                        varIt->second.fieldStorage[fieldPath] =
+                            thenStorage == elseStorage
+                                ? thenStorage
+                                : (entryVar
+                                       ? entryVar->getFieldStorage(fieldPath)
+                                       : StorageResidency::UNBOUND);
                     }
+                }
+
+                if (varIt->second.state != VariableState::DECLARED) {
+                    varIt->second.storage = StorageResidency::UNBOUND;
                 }
             }
         }
@@ -1750,7 +2321,8 @@ void PreAnalysisVisitor::mergeBranchStates(
 
 void PreAnalysisVisitor::reassignVariable(
     const std::string& name,
-    const SourceLocation& location
+    const SourceLocation& location,
+    StorageResidency storage
 )
 {
     // Check if it's a contract member or builtin object first
@@ -1769,18 +2341,15 @@ void PreAnalysisVisitor::reassignVariable(
         return;
     }
 
-    // Only check ownership for stack data
-    if (!var->hasOwnership()) {
-        LOG_DEBUG(
-            "Reassigning non-stack variable (no ownership check): " + name
-        );
-        return;
-    }
-
     // Rust-like move-after-move: reassignment allowed even if previously
     // consumed/used. 重新绑定的新值视为可消费一次 (state = DECLARED), 这样
     // `a = a + 1; Keep(a)` 这类合法序列里 Keep(a) 仍可读 a.
     var->state = VariableState::DECLARED;
+    var->wasBorrowed = false;
+    var->storage = storage;
+    var->source = storage == StorageResidency::FIXED_VALUE
+                      ? DataSource::CONSTANT_VALUE
+                      : DataSource::STACK_DATA;
     var->lastUseLocation = location;
 
     LOG_DEBUG(

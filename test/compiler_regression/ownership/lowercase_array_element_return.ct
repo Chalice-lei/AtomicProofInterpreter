@@ -1,0 +1,6 @@
+Contract LowercaseArrayElementReturn:
+    def _get(data: string):
+        values: uint64[1] = data.Slice(0, 8)
+        return values[0]
+    def main(data: string):
+        Return(_get(data))

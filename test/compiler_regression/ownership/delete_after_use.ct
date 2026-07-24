@@ -1,0 +1,5 @@
+Contract DeleteAfterUse:
+    def main(value: string):
+        converted = BinToNum(value)
+        Delete(value)
+        Return(converted)

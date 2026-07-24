@@ -1,0 +1,9 @@
+Contract BranchRebindDeletedElement:
+    def main(source: number, values: number[1], flag: bool):
+        if flag:
+            Delete(values[0])
+            values[0] = source
+        else:
+            Delete(values[0])
+            values[0] = source
+        return values[0]

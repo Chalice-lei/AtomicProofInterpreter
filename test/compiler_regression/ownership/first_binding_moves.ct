@@ -1,0 +1,4 @@
+Contract FirstBindingMoves:
+    def main(source: number):
+        target = source
+        Return(source)

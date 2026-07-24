@@ -1,0 +1,7 @@
+Contract LowercaseFieldReturn:
+    Struct Data:
+        x: number
+    def _get(data: Data):
+        return data.x
+    def main(data: Data):
+        Return(_get(data))

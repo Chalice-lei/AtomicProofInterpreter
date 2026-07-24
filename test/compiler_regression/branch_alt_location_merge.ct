@@ -9,4 +9,6 @@ Contract BranchAltLocationMerge:
             SetMain(value)
         else:
             second_marker: int = 9
+        SetMain(value)
+        Delete(value)
         Return(1)

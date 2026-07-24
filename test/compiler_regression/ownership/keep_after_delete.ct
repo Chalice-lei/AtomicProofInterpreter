@@ -1,0 +1,5 @@
+Contract KeepAfterDelete:
+    def main(value: string):
+        Delete(value)
+        Keep(value)
+        Return(1)

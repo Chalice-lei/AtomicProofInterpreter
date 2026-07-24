@@ -1,0 +1,7 @@
+Contract RebindDeletedFieldWrongType:
+    Struct Data:
+        x: number
+    def main(data: Data):
+        Delete(data.x)
+        data.x = "wrong"
+        return data.x

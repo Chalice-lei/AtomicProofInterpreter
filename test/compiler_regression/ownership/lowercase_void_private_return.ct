@@ -1,0 +1,5 @@
+Contract LowercaseVoidPrivateReturn:
+    def _drop(value: string):
+        Delete(value)
+    def main(value: string, marker: number):
+        return _drop(value)

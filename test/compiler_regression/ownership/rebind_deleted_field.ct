@@ -1,0 +1,7 @@
+Contract RebindDeletedField:
+    Struct Data:
+        x: number
+    def main(source: number, data: Data):
+        Delete(data.x)
+        data.x = source
+        return data.x

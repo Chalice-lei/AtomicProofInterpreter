@@ -1,0 +1,5 @@
+Contract RebindWholeDeletedElement:
+    def main(source: number, values: number[1]):
+        Delete(values)
+        values[0] = source
+        return values[0]

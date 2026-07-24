@@ -16,11 +16,16 @@
 #include "../util/compiler_placeholder.h"
 #include "../util/defer.h"
 #include "../util/type_utils.h"
+#include "control_flow_analysis.h"
 
 using namespace tbc;
 
 namespace
 {
+
+using compiler_flow::ControlFlowOutcomes;
+using compiler_flow::controlFlowOutcomes;
+using compiler_flow::sequenceControlFlowOutcomes;
 
 std::string declaredSymbolType(
     const SymbolTable& state,
@@ -158,88 +163,17 @@ std::optional<size_t> inlineReturnArity(const StmtNode* stmt)
     return std::nullopt;
 }
 
-struct ControlFlowOutcomes
+bool isImmutableSuffixStatement(const StmtNode* statement)
 {
-    bool fallsThrough{false};
-    bool inlineReturns{false};
-    bool scriptTerminates{false};
-};
+    const auto* expressionStatement =
+        dynamic_cast<const ExprStmtNode*>(statement);
+    if (!expressionStatement || !expressionStatement->expr) {
+        return false;
+    }
 
-ControlFlowOutcomes controlFlowOutcomes(const StmtNode* stmt);
-
-ControlFlowOutcomes sequenceControlFlowOutcomes(
-    const std::vector<std::unique_ptr<StmtNode>>& statements,
-    size_t startIndex = 0
-)
-{
-    ControlFlowOutcomes result;
-    result.fallsThrough = true;
-
-    for (size_t i = startIndex; i < statements.size(); ++i) {
-        if (!result.fallsThrough) {
-            break;
-        }
-        const ControlFlowOutcomes current =
-            controlFlowOutcomes(statements[i].get());
-        result.fallsThrough = current.fallsThrough;
-        result.inlineReturns =
-            result.inlineReturns || current.inlineReturns;
-        result.scriptTerminates =
-            result.scriptTerminates || current.scriptTerminates;
-    }
-    return result;
-}
-
-ControlFlowOutcomes controlFlowOutcomes(const StmtNode* stmt)
-{
-    if (!stmt) {
-        return {.fallsThrough = true};
-    }
-    if (auto returnNode = dynamic_cast<const ReturnNode*>(stmt)) {
-        return returnNode->isValueReturn
-                   ? ControlFlowOutcomes{.inlineReturns = true}
-                   : ControlFlowOutcomes{.scriptTerminates = true};
-    }
-    if (auto block = dynamic_cast<const BlockNode*>(stmt)) {
-        return sequenceControlFlowOutcomes(block->statements);
-    }
-    if (auto ifNode = dynamic_cast<const IfNode*>(stmt)) {
-        if (!ifNode->thenBranch || !ifNode->elseBranch) {
-            return {.fallsThrough = true};
-        }
-        const ControlFlowOutcomes thenOutcomes =
-            controlFlowOutcomes(ifNode->thenBranch.get());
-        const ControlFlowOutcomes elseOutcomes =
-            controlFlowOutcomes(ifNode->elseBranch.get());
-        return {
-            .fallsThrough = thenOutcomes.fallsThrough ||
-                            elseOutcomes.fallsThrough,
-            .inlineReturns = thenOutcomes.inlineReturns ||
-                             elseOutcomes.inlineReturns,
-            .scriptTerminates = thenOutcomes.scriptTerminates ||
-                                elseOutcomes.scriptTerminates,
-        };
-    }
-    if (auto forNode = dynamic_cast<const ForNode*>(stmt)) {
-        if (forNode->getStaticIterations().empty()) {
-            return {.fallsThrough = true};
-        }
-
-        ControlFlowOutcomes result{.fallsThrough = true};
-        const ControlFlowOutcomes body =
-            controlFlowOutcomes(forNode->body.get());
-        for (size_t i = 0; i < forNode->getStaticIterations().size(); ++i) {
-            if (!result.fallsThrough) {
-                break;
-            }
-            result.fallsThrough = body.fallsThrough;
-            result.inlineReturns = result.inlineReturns || body.inlineReturns;
-            result.scriptTerminates =
-                result.scriptTerminates || body.scriptTerminates;
-        }
-        return result;
-    }
-    return {.fallsThrough = true};
+    const auto* call =
+        dynamic_cast<const CallNode*>(expressionStatement->expr.get());
+    return call && call->funcName == "Push";
 }
 
 } // namespace
@@ -425,6 +359,13 @@ void ASTToBytecodeVisitor::visit(BlockNode& node)
     );
 #endif
 
+    const SymbolTable blockEntryState = m_scopePtr->getCurrentSymtab();
+    std::set<std::string> outerWholeArrays;
+    for (const auto& [arrayName, unusedInfo] : m_wholeArrayElements) {
+        (void)unusedInfo;
+        outerWholeArrays.insert(arrayName);
+    }
+
     m_scopePtr->enterScope();
 
     const bool preservesPublicFunctionAltOutputs =
@@ -460,6 +401,27 @@ void ASTToBytecodeVisitor::visit(BlockNode& node)
                 "skip cleanup"
             );
             continue;
+        }
+
+        // Splitting an outer fixed array inside a nested block creates
+        // element stack labels such as amount[0x00]. They are new runtime
+        // slots, but they still belong to the outer array and must survive
+        // this block (notably across statically unrolled loop iterations).
+        const size_t bracketPos = it.find('[');
+        if (bracketPos != std::string::npos) {
+            const std::string arrayName = it.substr(0, bracketPos);
+            const bool belongedToOuterArray =
+                blockEntryState.isArraySymbol(arrayName) ||
+                outerWholeArrays.count(arrayName) > 0;
+            if (belongedToOuterArray) {
+                LOG_DEBUG(
+                    it,
+                    " belongs to outer-scope array ",
+                    arrayName,
+                    "; skip cleanup"
+                );
+                continue;
+            }
         }
 
         bool isKeepSymtabFlag = false;
@@ -821,22 +783,6 @@ void ASTToBytecodeVisitor::materializeBranchSymbols(
     const AltStackSnapshot& desiredAltStack
 )
 {
-    auto fail = [&](const std::string& symbol) {
-        std::ostringstream oss;
-        oss << "cannot merge outer variable '" << symbol
-            << "' after if branch at line " << node.pos.first << ", column "
-            << node.pos.second
-            << ": the variable has no value on this control-flow path";
-        SourceLocation loc = getNodeLocation(node);
-        SEMANTIC_ERROR(
-            oss.str(),
-            loc,
-            "Assign the variable on both branches before using it after the if"
-        );
-        LOG_ERROR(oss.str());
-        throw std::runtime_error(oss.str());
-    };
-
     for (const auto& symbol : symbols) {
         SymbolTable& state = m_scopePtr->getCurrentSymtab();
         const bool keepOnAlt = std::any_of(
@@ -891,7 +837,18 @@ void ASTToBytecodeVisitor::materializeBranchSymbols(
 
         auto altPos = m_scopePtr->getPos(symbol, true);
         if (!altPos.has_value()) {
-            fail(symbol);
+            // The value may have been consumed on this branch. Defer the
+            // decision until both branch layouts are available: consuming it
+            // on both paths is valid, while a one-sided consume is rejected by
+            // validateBranchMerge() as a real runtime-stack mismatch.
+            LOG_DEBUG(
+                "Merge candidate '",
+                symbol,
+                "' has no runtime value after branch at line ",
+                node.pos.first,
+                "; defer to branch-layout validation"
+            );
+            continue;
         }
 
         auto mainStack = state.m_stackPtr;
@@ -1225,6 +1182,9 @@ void ASTToBytecodeVisitor::visit(IfNode& node)
     bool useNotIf = condOpNode && condOpNode->op == "!=" &&
                     condOpNode->lhs != nullptr;
 
+    const auto conditionStorageName =
+        getAssignmentStorageName(node.condition.get());
+
     if (useNotIf) {
         // 临时把 != 改 ==, 仅生成 OP_EQUAL.
         condOpNode->op = "==";
@@ -1233,7 +1193,31 @@ void ASTToBytecodeVisitor::visit(IfNode& node)
     } else {
         visitExpr(*node.condition);
     }
-    m_scopePtr->pop();
+    const auto conditionValue = m_scopePtr->pop();
+
+    // Identifier/field/static-index visitors push a virtual reference while
+    // leaving the real slot in place. OP_IF/OP_NOTIF consumes that real value
+    // at runtime, so consume the corresponding compiler-stack slot as well.
+    // Compound expressions already replace their operands with a temporary
+    // result and therefore do not enter this path.
+    if (conditionStorageName.has_value()) {
+        auto conditionPos =
+            m_scopePtr->getPos(conditionStorageName.value());
+        if (conditionPos.has_value()) {
+            if (conditionPos.value() != STACK_TOP_POS) {
+                emitRoll(conditionPos.value());
+                m_scopePtr->roll(conditionPos.value());
+            }
+            m_scopePtr->pop();
+        } else if (conditionValue.has_value() &&
+                   isScript(conditionValue->getName())) {
+            const std::string& conditionData = conditionValue->getData();
+            m_generator.emit(
+                conditionData.empty() ? conditionValue->getName()
+                                      : conditionData
+            );
+        }
+    }
 
     m_generator.emit(
         useNotIf ? tbc::BytOpcode::OP_NOTIF : tbc::BytOpcode::OP_IF
@@ -1710,6 +1694,11 @@ void ASTToBytecodeVisitor::visit(ForNode& node)
     }
 
     const SymbolTable parentState = m_scopePtr->getCurrentSymtab();
+    std::set<std::string> loopOuterWholeArrays;
+    for (const auto& [arrayName, unusedInfo] : m_wholeArrayElements) {
+        (void)unusedInfo;
+        loopOuterWholeArrays.insert(arrayName);
+    }
     std::string targetName = node.target;
     const bool targetExistedBeforeLoop =
         m_scopePtr->symbolExists(targetName);
@@ -1743,7 +1732,10 @@ void ASTToBytecodeVisitor::visit(ForNode& node)
 
         std::vector<std::string> bodyLocalSymbols;
         for (const auto& entry : state.m_currentScope) {
-            if (entrySymbols.count(entry.first) == 0) {
+            const bool materializedOuterWholeArray =
+                loopOuterWholeArrays.count(entry.first) > 0;
+            if (entrySymbols.count(entry.first) == 0 &&
+                !materializedOuterWholeArray) {
                 bool isKept = false;
                 if (preserveKeptLocals) {
                     for (const auto& keptName : state.m_keepSymbol) {
@@ -1993,9 +1985,161 @@ void ASTToBytecodeVisitor::visit(AssignNode& node)
         LOG_WARNING(oss.str());
     }
 
-    visitExpr(*node.name);
+    // Delete removes a field/element's stack slot and symbol-table entry while
+    // preserving the parent compound/array declaration. For a subsequent
+    // rebinding, evaluating that missing LHS as an rvalue would fail before
+    // the normal zero-cost rename path can restore the slot. Recognize only
+    // statically known members of a still-declared parent here.
+    const auto targetStorageName = getAssignmentStorageName(node.name.get());
+    std::string restoredTargetType;
+    bool restoringDeletedTarget = false;
 
-    auto nameElementOpt = m_scopePtr->pop();
+    auto targetHasStoredValue = [&](const std::string& targetName) {
+        if (m_scopePtr->getPos(targetName).has_value() ||
+            m_scopePtr->getPos(targetName, true).has_value()) {
+            return true;
+        }
+        std::string mutableName = targetName;
+        return m_scopePtr->getFixed(mutableName).has_value();
+    };
+
+    if (targetStorageName.has_value() &&
+        !targetHasStoredValue(targetStorageName.value())) {
+        if (auto* field =
+                dynamic_cast<FieldAccessNode*>(node.name.get())) {
+            const auto parentName =
+                getAssignmentStorageName(field->base.get());
+            if (parentName.has_value()) {
+                if (m_scopePtr->isCompoundTypeSymbol(parentName.value()) &&
+                    m_scopePtr->isCompoundTypeSplitted(parentName.value())) {
+                    const auto info =
+                        m_scopePtr->getCompoundTypeInfo(parentName.value());
+                    if (info.has_value()) {
+                        const auto fieldIt = std::find_if(
+                            info->fields.begin(),
+                            info->fields.end(),
+                            [&](const CompoundFieldInfo& item) {
+                                return item.name == field->field;
+                            }
+                        );
+                        if (fieldIt != info->fields.end()) {
+                            restoredTargetType = fieldIt->type;
+                            restoringDeletedTarget = true;
+                        }
+                    }
+                }
+
+                // Function parameters and ordinary struct variables are
+                // represented by a typed root symbol plus flattened field
+                // slots rather than CompoundTypeInfo. The root declaration
+                // remains after Delete(root.field), so use its declared type
+                // to validate the missing field before restoring it.
+                if (!restoringDeletedTarget) {
+                    std::string parentType;
+                    const auto symbols = m_scopePtr->getCurrentSymtab()
+                                             .getCurrentScopeSymbols();
+                    for (auto it = symbols.rbegin(); it != symbols.rend();
+                         ++it) {
+                        if (it->getSymbolName() == parentName.value()) {
+                            parentType = it->m_stackElement.getType();
+                            break;
+                        }
+                    }
+
+                    const auto structIt =
+                        m_structDefinitions.find(parentType);
+                    if (structIt != m_structDefinitions.end()) {
+                        const auto fieldIt = std::find_if(
+                            structIt->second.begin(),
+                            structIt->second.end(),
+                            [&](const auto& item) {
+                                return item.first == field->field;
+                            }
+                        );
+                        if (fieldIt != structIt->second.end()) {
+                            restoredTargetType =
+                                fieldIt->second.getTypeString();
+                            restoringDeletedTarget = true;
+                        }
+                    }
+                }
+            }
+        } else if (auto* index =
+                       dynamic_cast<IndexAccessNode*>(node.name.get())) {
+            const auto baseName =
+                getAssignmentStorageName(index->base.get());
+            const auto* literal =
+                dynamic_cast<const LiteralNode*>(index->index.get());
+            if (baseName.has_value() && literal &&
+                literal->type == LiteralNode::Type::Number) {
+                try {
+                    const int64_t parsedIndex = std::stoll(literal->value);
+                    if (parsedIndex >= 0) {
+                        const size_t elementIndex =
+                            static_cast<size_t>(parsedIndex);
+                        if (const auto arrayInfo =
+                                m_scopePtr->getArrayInfo(baseName.value());
+                            arrayInfo.has_value() &&
+                            arrayInfo->isValidIndex(elementIndex)) {
+                            restoredTargetType = arrayInfo->elementType;
+                            restoringDeletedTarget = true;
+                        } else if (const auto wholeInfo =
+                                       getWholeArrayInfo(baseName.value());
+                                   wholeInfo.has_value() &&
+                                   elementIndex < wholeInfo->first) {
+                            restoredTargetType = "uint64";
+                            restoringDeletedTarget = true;
+                        }
+                    }
+                } catch (const std::exception&) {
+                    // Invalid literal indexes keep the normal diagnostic path.
+                }
+            }
+        }
+    }
+
+    if (restoringDeletedTarget && !restoredTargetType.empty()) {
+        StackElement valueForTypeCheck = valueElementOpt.value();
+        if (valueForTypeCheck.getType().empty()) {
+            const auto valueStorageName =
+                getAssignmentStorageName(node.value.get());
+            if (valueStorageName.has_value()) {
+                const auto valuePos =
+                    m_scopePtr->getPos(valueStorageName.value());
+                if (valuePos.has_value()) {
+                    valueForTypeCheck =
+                        m_scopePtr->stacktop(valuePos.value());
+                } else {
+                    std::string mutableValueName =
+                        valueStorageName.value();
+                    const auto fixedValue =
+                        m_scopePtr->getFixed(mutableValueName);
+                    if (fixedValue.has_value()) {
+                        valueForTypeCheck = fixedValue.value();
+                    }
+                }
+            }
+        }
+        validateDeclaredType(
+            "type mismatch while rebinding deleted member",
+            restoredTargetType,
+            valueForTypeCheck,
+            node
+        );
+    }
+
+    std::optional<StackElement> nameElementOpt;
+    if (restoringDeletedTarget) {
+        nameElementOpt = StackElement(
+            targetStorageName.value(),
+            restoredTargetType,
+            targetStorageName.value()
+        );
+    } else {
+        visitExpr(*node.name);
+        nameElementOpt = m_scopePtr->pop();
+    }
+
     auto leftHandSideElement =
         generalLamd(*node.name, nameElementOpt, "left-hand side");
 
@@ -2304,6 +2448,17 @@ void ASTToBytecodeVisitor::visit(AssignNode& node)
         }
     }
 
+    if (restoringDeletedTarget) {
+        std::string targetName = targetStorageName.value();
+        if (!m_scopePtr->symbolExists(targetName)) {
+            if (restoredTargetType.empty() && valueElementOpt.has_value()) {
+                restoredTargetType = valueElementOpt->getType();
+            }
+            m_scopePtr->defineSymbol(targetName, restoredTargetType);
+            m_scopePtr->markSymbolInitialized(targetName);
+        }
+    }
+
     LOG_DEBUG("Visiting assign node end.");
 }
 
@@ -2463,23 +2618,37 @@ void ASTToBytecodeVisitor::visit(ReturnNode& node)
             m_generator.mergeSubOverall();
         }
     } else {
-        LOG_DEBUG("Value-return statement (lowercase return): using existing "
-                  "top-of-stack value");
+        LOG_DEBUG(
+            "Value-return statement (lowercase return): preserving its value"
+        );
 
-        // 小写 return: 返回值在作用域清理时必须被 keep, 不能 DROP.
-        // 支持 `return someVar` 与 `return {a, b, c}` 多变量大括号.
+        // 小写 return 不生成 OP_RETURN，但表达式结果必须跨过当前作用域
+        // 清理。已有变量保留原槽；字面量和计算表达式先物化再 keep。
         SymbolTable& symbolTable = m_scopePtr->getCurrentSymtab();
-        auto preserveReturnSymbol = [&](const std::string& varName) {
-            auto appendKeep = [&]() {
-                if (std::find(
-                        symbolTable.m_keepSymbol.begin(),
-                        symbolTable.m_keepSymbol.end(),
-                        varName
-                    ) == symbolTable.m_keepSymbol.end()) {
-                    symbolTable.m_keepSymbol.push_back(varName);
-                }
-            };
+        auto reportNoValue = [&]() {
+            std::ostringstream oss;
+            oss << "lowercase 'return' expression produced no value";
+            SourceLocation loc("", node.pos.first, node.pos.second);
+            SEMANTIC_ERROR(
+                oss.str(),
+                loc,
+                "Return a literal, variable, or value-producing expression"
+            );
+            LOG_ERROR(oss.str());
+            throw std::runtime_error(oss.str());
+        };
 
+        auto appendKeep = [&](const std::string& valueName) {
+            if (std::find(
+                    symbolTable.m_keepSymbol.begin(),
+                    symbolTable.m_keepSymbol.end(),
+                    valueName
+                ) == symbolTable.m_keepSymbol.end()) {
+                symbolTable.m_keepSymbol.push_back(valueName);
+            }
+        };
+
+        auto preserveReturnSymbol = [&](const std::string& varName) {
             auto mainPosOpt = symbolTable.getPos(varName);
             if (mainPosOpt.has_value()) {
                 auto& element =
@@ -2491,7 +2660,7 @@ void ASTToBytecodeVisitor::visit(ReturnNode& node)
                     emitRoll(mainPosOpt.value());
                     symbolTable.roll(mainPosOpt.value());
                 }
-                appendKeep();
+                appendKeep(varName);
                 return;
             }
 
@@ -2520,7 +2689,7 @@ void ASTToBytecodeVisitor::visit(ReturnNode& node)
                     mainStack->pop();
                     altStack->push(topElement);
                 }
-                appendKeep();
+                appendKeep(varName);
                 return;
             }
 
@@ -2541,7 +2710,7 @@ void ASTToBytecodeVisitor::visit(ReturnNode& node)
                 m_generator.emit(materialized.getData());
                 symbolTable.removeFixed(mutableName);
                 symbolTable.push(materialized);
-                appendKeep();
+                appendKeep(varName);
                 return;
             }
 
@@ -2556,8 +2725,115 @@ void ASTToBytecodeVisitor::visit(ReturnNode& node)
             throw std::runtime_error(oss.str());
         };
 
-        if (auto identifierNode = dynamic_cast<IdentifierNode*>(node.expr.get()
-            )) {
+        auto rejectKnownVoidCall = [&](ExprNode& expr) {
+            std::string functionName;
+            size_t argCount = 0;
+            if (auto* call = dynamic_cast<CallNode*>(&expr)) {
+                functionName = call->funcName;
+                argCount = call->args.size();
+            } else if (auto* method = dynamic_cast<MethodCallNode*>(&expr)) {
+                functionName = method->methodName;
+                argCount = method->args.size();
+            } else {
+                return;
+            }
+
+            if (functionName == "Range") {
+                reportNoValue();
+            }
+
+            if (auto privateFunction = m_privateFunctions.find(functionName);
+                privateFunction != m_privateFunctions.end()) {
+                const FunctionNode* function = privateFunction->second;
+                const auto arity =
+                    function && function->block
+                        ? inlineReturnArity(function->block.get())
+                        : std::nullopt;
+                if (!arity.has_value() || arity.value() == 0) {
+                    reportNoValue();
+                }
+                return;
+            }
+
+            if (auto opFunction = tbc::OpFunctionFactory::createFunction(
+                    functionName, argCount
+                )) {
+                if (opFunction->getReturnCount() == 0) {
+                    reportNoValue();
+                }
+                return;
+            }
+
+            if (auto builtinFunction =
+                    tbc::BuiltinFunctionFactory::createFunction(
+                        functionName, argCount
+                    )) {
+                if (builtinFunction->getReturnCount() == 0) {
+                    reportNoValue();
+                }
+            }
+        };
+
+        auto keepExistingOrMaterialize = [&](ExprNode& expr) {
+            if (auto* identifier = dynamic_cast<IdentifierNode*>(&expr)) {
+                preserveReturnSymbol(identifier->name);
+                return;
+            }
+
+            auto hasStoredValue = [&](const std::string& name) {
+                if (symbolTable.getPos(name).has_value() ||
+                    symbolTable.getPos(name, true).has_value()) {
+                    return true;
+                }
+                std::string mutableName = name;
+                return symbolTable.getFixed(mutableName).has_value();
+            };
+
+            const auto storageName = getAssignmentStorageName(&expr);
+            if (storageName.has_value() &&
+                hasStoredValue(storageName.value())) {
+                preserveReturnSymbol(storageName.value());
+                return;
+            }
+
+            rejectKnownVoidCall(expr);
+            visitExpr(expr);
+            if (m_scopePtr->empty()) {
+                reportNoValue();
+            }
+
+            // Field/index visitors use a virtual reference to an existing
+            // stack slot. Remove that model-only reference and preserve the
+            // real slot; otherwise block cleanup would DROP the sole value.
+            if (storageName.has_value() &&
+                m_scopePtr->top().getName() == storageName.value()) {
+                const auto reference = m_scopePtr->pop();
+                if (hasStoredValue(storageName.value())) {
+                    preserveReturnSymbol(storageName.value());
+                    return;
+                }
+                if (reference.has_value()) {
+                    m_scopePtr->push(reference.value());
+                }
+            }
+
+            const StackElement& valueElement = m_scopePtr->top();
+            const std::string valueName = valueElement.getName();
+            if (valueName.empty()) {
+                reportNoValue();
+            }
+            if (isScript(valueName)) {
+                const std::string& data = valueElement.getData();
+                m_generator.emit(data.empty() ? valueName : data);
+            }
+            appendKeep(valueName);
+            LOG_DEBUG("Keeping materialized return value: " + valueName);
+        };
+
+        if (!node.expr) {
+            reportNoValue();
+        } else if (auto identifierNode =
+                       dynamic_cast<IdentifierNode*>(node.expr.get())) {
             const std::string& varName = identifierNode->name;
             LOG_DEBUG("Marking return value variable as keep: " + varName);
             preserveReturnSymbol(varName);
@@ -2570,44 +2846,17 @@ void ASTToBytecodeVisitor::visit(ReturnNode& node)
                 std::to_string(braceExpr->elements.size()) + " elements"
             );
 
+            if (braceExpr->elements.empty()) {
+                reportNoValue();
+            }
             for (const auto& element : braceExpr->elements) {
-                if (auto identifierNode =
-                        dynamic_cast<IdentifierNode*>(element.get())) {
-                    const std::string& varName = identifierNode->name;
-                    LOG_DEBUG(
-                        "Marking return value variable as keep: " + varName
-                    );
-                    preserveReturnSymbol(varName);
-                } else {
-                    std::ostringstream oss;
-                    oss << "lowercase 'return' brace expression only accepts "
-                           "variable names (e.g. `return {a, b}`); "
-                           "got a non-identifier element";
-                    SourceLocation loc("", node.pos.first, node.pos.second);
-                    SEMANTIC_ERROR(
-                        oss.str(), loc,
-                        "Use uppercase 'Return' if you need to compute a value; "
-                        "lowercase 'return' only marks existing stack variables "
-                        "as kept across scope cleanup"
-                    );
-                    LOG_ERROR(oss.str());
-                    throw std::runtime_error(oss.str());
+                if (!element) {
+                    reportNoValue();
                 }
+                keepExistingOrMaterialize(*element);
             }
         } else {
-            std::ostringstream oss;
-            oss << "lowercase 'return' only accepts a variable name or a brace "
-                   "expression of variable names "
-                   "(e.g. `return x` or `return {a, b}`)";
-            SourceLocation loc("", node.pos.first, node.pos.second);
-            SEMANTIC_ERROR(
-                oss.str(), loc,
-                "Use uppercase 'Return' to compute and return a value; "
-                "lowercase 'return' only marks existing stack variables "
-                "as kept across scope cleanup"
-            );
-            LOG_ERROR(oss.str());
-            throw std::runtime_error(oss.str());
+            keepExistingOrMaterialize(*node.expr);
         }
     }
 
@@ -4826,6 +5075,17 @@ void ASTToBytecodeVisitor::cleanupStructParameter(
          ++it) {
         const std::string& fieldPath = it->first;
         const std::string& fieldType = it->second;
+
+        if (std::find(
+                m_scopePtr->getCurrentSymtab().m_keepSymbol.begin(),
+                m_scopePtr->getCurrentSymtab().m_keepSymbol.end(),
+                fieldPath
+            ) != m_scopePtr->getCurrentSymtab().m_keepSymbol.end()) {
+            LOG_DEBUG(
+                "Skipping stack cleanup for kept return field: " + fieldPath
+            );
+            continue;
+        }
 
         LOG_DEBUG(
             "Cleaning up struct field: " + fieldPath + " of type: " + fieldType
@@ -7053,6 +7313,15 @@ void ASTToBytecodeVisitor::executeStatements(
          statementIndex < statements.size();
          ++statementIndex) {
         const auto& stmt = statements[statementIndex];
+
+        // Uppercase Return makes ordinary following statements unreachable.
+        // A trailing Push is the contract's explicit immutable SuffixData and
+        // must still be emitted behind the finalizer's padding boundary.
+        if (sequenceFlow == FlowResult::ScriptTerminate &&
+            !isImmutableSuffixStatement(stmt.get())) {
+            continue;
+        }
+
         m_codeBlockLevel.back()++;
         std::string stmtStr = codeLevel +
                               (m_codeBlockLevel.empty()
@@ -7138,8 +7407,7 @@ void ASTToBytecodeVisitor::executeStatements(
         }
         if (m_lastFlowResult == FlowResult::ScriptTerminate &&
             sequenceFlow == FlowResult::FallsThrough) {
-            // 大写 Return 后允许继续编译不可执行的 immutable suffix/state
-            // 数据；运行时控制流仍保持终止状态。
+            // 普通后续语句会跳过；显式 Push suffix 仍允许在 padding 后生成。
             sequenceFlow = FlowResult::ScriptTerminate;
         }
     }

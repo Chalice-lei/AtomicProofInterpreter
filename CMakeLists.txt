@@ -522,6 +522,12 @@ add_test(
         bash ${CMAKE_SOURCE_DIR}/test/compiler_regression/run_compiler_regression.sh
 )
 add_test(
+    NAME ownership-regression
+    COMMAND ${CMAKE_COMMAND} -E env
+        APC_COMPILER=$<TARGET_FILE:${EXECUTABLE_NAME}>
+        bash ${CMAKE_SOURCE_DIR}/test/compiler_regression/run_ownership_regression.sh
+)
+add_test(
     NAME for-scope-regression
     COMMAND ${CMAKE_COMMAND} -E env
         APC_COMPILER=$<TARGET_FILE:${EXECUTABLE_NAME}>

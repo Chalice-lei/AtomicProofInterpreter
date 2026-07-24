@@ -1,0 +1,6 @@
+Contract BranchElementDelete:
+    def main(data: string, flag: bool):
+        amount: uint64[2] = data.Slice(0, 16)
+        if flag:
+            Delete(amount[0])
+        Return(amount[0])

@@ -1,0 +1,8 @@
+Contract BranchOneSideConsume:
+    def main(flag: bool, value: string, result: string):
+        if flag:
+            value = Hash256(value)
+            Delete(value)
+        else:
+            value = Hash256(value)
+        Return(result)

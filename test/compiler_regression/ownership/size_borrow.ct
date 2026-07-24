@@ -1,0 +1,5 @@
+Contract SizeBorrow:
+    def main(value: string):
+        length = Size(value)
+        Delete(length)
+        Return(value)

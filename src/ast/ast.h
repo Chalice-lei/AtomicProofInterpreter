@@ -531,7 +531,7 @@ public:
 class ReturnNode final : public StmtNode
 {
 public:
-    // isValueReturn=true: 小写 return，返回值已在栈顶
+    // isValueReturn=true: 小写 return，保留表达式值但不生成 OP_RETURN
     explicit ReturnNode(
         std::unique_ptr<ExprNode> expr,
         bool isValueReturn = false
@@ -551,7 +551,7 @@ public:
     void accept(ASTVisitor& visitor) override;
 
     std::unique_ptr<ExprNode> expr; // 可空
-    bool isValueReturn = false; // 小写 return：仅标记返回已有值
+    bool isValueReturn = false; // 小写 return：保留返回值，不终止脚本
 };
 
 // 数组字面量
