@@ -1,0 +1,30 @@
+Contract ForScopeRedeclare:
+    def main():
+        total: int = 4
+
+        for i in Range(3):
+            iteration_value: int = i
+            total = total + iteration_value
+
+        Return(total)
+
+    def nested():
+        total: int = 4
+
+        for i in Range(2):
+            outer_value: int = 1
+            for j in Range(2):
+                inner_value: int = 1
+                total = total + inner_value
+            total = total + outer_value
+
+        Return(total)
+
+    def existing_target():
+        i: int = 9
+        total: int = 0
+
+        for i in Range(3):
+            total = total + i
+
+        Return(i)

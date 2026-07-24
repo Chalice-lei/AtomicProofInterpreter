@@ -1,0 +1,9 @@
+Contract PrivateAltReturn:
+    def _from_alt(flag: int):
+        value = flag.Clone() + 5
+        SetAlt(value)
+        return value
+
+    def main(flag: int):
+        result = _from_alt(flag)
+        Return(result)

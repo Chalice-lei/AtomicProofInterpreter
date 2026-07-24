@@ -1,0 +1,6 @@
+Contract EmptyRuntimeFunction:
+    def setup():
+        value: int = 1
+
+    def main():
+        Return(1)

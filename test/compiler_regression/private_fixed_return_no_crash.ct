@@ -1,0 +1,12 @@
+Contract PrivateFixedReturnNoCrash:
+    def _pick(flag: int):
+        if flag > 0:
+            value: int = 1
+            return value
+        else:
+            value: int = 2
+            return value
+
+    def main(flag: int):
+        result = _pick(flag)
+        Return(result)

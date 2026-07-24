@@ -1,0 +1,6 @@
+Contract ForScopeTargetEscape:
+    def main():
+        for i in Range(2):
+            value: int = i
+
+        Return(i)

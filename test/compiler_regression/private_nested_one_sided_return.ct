@@ -1,0 +1,16 @@
+Contract PrivateNestedOneSidedReturn:
+    def _choose(flag: int, inner_flag: int):
+        result = Push(30)
+        if flag.Clone() > 0:
+            if inner_flag.Clone() > 0:
+                early = Push(7)
+                return early
+            else:
+                result = result + 1
+        else:
+            result = result + 2
+        result = result + 3
+        return result
+
+    def main(flag: int, inner_flag: int):
+        Return(_choose(flag, inner_flag))

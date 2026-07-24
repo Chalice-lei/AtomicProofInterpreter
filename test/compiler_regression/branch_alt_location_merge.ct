@@ -1,0 +1,12 @@
+Contract BranchAltLocationMerge:
+    def main(flag: int, value: int):
+        if flag.Clone() > 0:
+            SetAlt(value)
+        else:
+            marker: int = 8
+        SetAlt(value)
+        if flag.Clone() > 1:
+            SetMain(value)
+        else:
+            second_marker: int = 9
+        Return(1)

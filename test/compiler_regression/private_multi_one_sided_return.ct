@@ -1,0 +1,16 @@
+Contract PrivateMultiOneSidedReturn:
+    def _pair(flag: int) -> {int, int}:
+        first = Push(10)
+        second = Push(20)
+        if flag.Clone() > 0:
+            early_first = Push(1)
+            early_second = Push(2)
+            return {early_first, early_second}
+        else:
+            first = first + 1
+        first = first + 1
+        return {first, second}
+
+    def main(flag: int):
+        {first, second} = _pair(flag)
+        Return(first * 10 + second)

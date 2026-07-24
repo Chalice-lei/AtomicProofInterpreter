@@ -1,0 +1,12 @@
+Contract PublicFunctionAltHandoffArgs:
+    def _prepare(value: int):
+        prepared = value.Clone() + 0
+        return prepared
+
+    def stage_one(value: int):
+        prepared = _prepare(value)
+        SetAlt(prepared)
+
+    def stage_two(increment: int):
+        SetMain(prepared)
+        Return(prepared + increment)

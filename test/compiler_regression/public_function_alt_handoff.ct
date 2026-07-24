@@ -1,0 +1,7 @@
+Contract PublicFunctionAltHandoff:
+    def stage_one(value: int):
+        SetAlt(value)
+
+    def stage_two():
+        SetMain(value)
+        Return(value)
