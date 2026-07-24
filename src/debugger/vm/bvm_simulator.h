@@ -133,7 +133,11 @@ public:
     void setInitialStacks(const StackState& main, const StackState& alt);
 
     // 仅调试特定函数时使用
-    void setExecutionRange(size_t startPC, size_t endPC);
+    void setExecutionRange(
+        size_t startPC,
+        size_t endPC,
+        const std::string& entryFunctionName = ""
+    );
     void clearExecutionRange();
 
     bool hasExecutionRange() const
@@ -478,6 +482,9 @@ private:
     bool m_hasExecutionRange;
     size_t m_executionRangeStart;
     size_t m_executionRangeEnd;
+    // setExecutionRange 后按精确 [start,end) 锁定入口函数，避免内联私有
+    // 函数与 public 函数范围重叠时 getFunctionAtPC 的遍历顺序选错帧。
+    std::string m_executionFunctionName;
 
     // 断点命中后跳过同一源码行剩余断点，避免 continue 反复停在该行
     bool m_skipBreakpointOnce;

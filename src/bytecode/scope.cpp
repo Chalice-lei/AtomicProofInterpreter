@@ -38,6 +38,10 @@ std::optional<StackElement> Scope::pop()
 
 StackElement& Scope::top()
 {
+    if (!m_currentSymtab.m_stackPtr ||
+        m_currentSymtab.m_stackPtr->empty()) {
+        throw std::underflow_error("cannot read the top of an empty main stack");
+    }
     return m_currentSymtab.m_stackPtr->top();
 }
 
@@ -63,11 +67,19 @@ bool Scope::empty() const
 
 const StackElement& Scope::front() const
 {
+    if (!m_currentSymtab.m_stackPtr ||
+        m_currentSymtab.m_stackPtr->empty()) {
+        throw std::underflow_error("cannot read the front of an empty main stack");
+    }
     return m_currentSymtab.m_stackPtr->front();
 }
 
 const StackElement& Scope::back() const
 {
+    if (!m_currentSymtab.m_stackPtr ||
+        m_currentSymtab.m_stackPtr->empty()) {
+        throw std::underflow_error("cannot read the back of an empty main stack");
+    }
     return m_currentSymtab.m_stackPtr->back();
 }
 
@@ -140,13 +152,18 @@ int32_t Scope::setAlt(std::string& symbolName, bool moveOnlyMatch /*= false*/)
     if (moveOnlyMatch) {
         auto elementPosOpt = getPos(symbolName);
         if (!elementPosOpt.has_value()) {
-            throw;
+            throw std::invalid_argument(
+                "cannot move symbol to alt stack: symbol not found: " +
+                symbolName
+            );
         }
         num = elementPosOpt.value();
         roll(num);
         auto stackElementTopOpt = pop();
         if (!stackElementTopOpt.has_value()) {
-            throw;
+            throw std::underflow_error(
+                "cannot move symbol to alt stack: main stack is empty"
+            );
         }
         m_currentSymtab.m_altStackPtr->push(stackElementTopOpt.value());
         return num;
@@ -161,9 +178,17 @@ int32_t Scope::setMain(std::string& symbolName)
 
 void Scope::clean()
 {
-    m_currentSymtab = SymbolTable();
+    m_currentSymtab.resetFunctionState();
     while (!m_symtabScopes.empty()) {
         m_symtabScopes.pop();
+    }
+
+    std::string validationError;
+    if (!m_currentSymtab.validateState(&validationError)) {
+        throw std::logic_error(
+            "invalid symbol-table state after function reset: " +
+            validationError
+        );
     }
 }
 

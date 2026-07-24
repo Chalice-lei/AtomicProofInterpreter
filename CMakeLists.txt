@@ -477,6 +477,32 @@ target_compile_definitions(apc_core PUBLIC
     APC_DEFAULT_STDLIB_PATH="${CMAKE_INSTALL_PREFIX}/${APC_STDLIB_INSTALL_DIR}")
 
 enable_testing()
+add_executable(
+    symbol_table_state_test
+    test/compiler_regression/symbol_table_state_test.cpp
+)
+target_link_libraries(symbol_table_state_test PRIVATE apc_core)
+add_test(
+    NAME symbol-table-state
+    COMMAND $<TARGET_FILE:symbol_table_state_test>
+)
+if(BUILD_DEBUGGER)
+    add_executable(
+        debug_info_validation_test
+        test/debugger_regression/debug_info_validation_test.cpp
+    )
+    target_link_libraries(debug_info_validation_test PRIVATE apc_core)
+    add_test(
+        NAME debug-info-validation
+        COMMAND $<TARGET_FILE:debug_info_validation_test>
+    )
+    add_test(
+        NAME debugger-regression
+        COMMAND ${CMAKE_COMMAND} -E env
+            APC_COMPILER=$<TARGET_FILE:${EXECUTABLE_NAME}>
+            bash ${CMAKE_SOURCE_DIR}/test/debugger_regression/run_debugger_regression.sh
+    )
+endif()
 add_test(
     NAME ast-self-test
     COMMAND $<TARGET_FILE:${EXECUTABLE_NAME}> test ast
@@ -488,6 +514,30 @@ add_test(
 add_test(
     NAME ast-regression
     COMMAND bash ${CMAKE_SOURCE_DIR}/test/interpreter/run_ast_regression.sh
+)
+add_test(
+    NAME compiler-regression
+    COMMAND ${CMAKE_COMMAND} -E env
+        APC_COMPILER=$<TARGET_FILE:${EXECUTABLE_NAME}>
+        bash ${CMAKE_SOURCE_DIR}/test/compiler_regression/run_compiler_regression.sh
+)
+add_test(
+    NAME for-scope-regression
+    COMMAND ${CMAKE_COMMAND} -E env
+        APC_COMPILER=$<TARGET_FILE:${EXECUTABLE_NAME}>
+        bash ${CMAKE_SOURCE_DIR}/test/compiler_regression/run_for_scope_regression.sh
+)
+add_test(
+    NAME stack-safety-regression
+    COMMAND ${CMAKE_COMMAND} -E env
+        APC_COMPILER=$<TARGET_FILE:${EXECUTABLE_NAME}>
+        bash ${CMAKE_SOURCE_DIR}/test/compiler_regression/run_stack_safety_regression.sh
+)
+add_test(
+    NAME ast-bytecode-differential
+    COMMAND ${CMAKE_COMMAND} -E env
+        APC_COMPILER=$<TARGET_FILE:${EXECUTABLE_NAME}>
+        python3 ${CMAKE_SOURCE_DIR}/test/differential/run_ast_bytecode_differential.py
 )
 
 # =============================================================================

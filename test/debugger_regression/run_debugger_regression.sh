@@ -13,6 +13,24 @@ fi
 TMP_DIR=$(mktemp -d)
 trap 'rm -rf "$TMP_DIR"' EXIT
 
+# 仅包含 fixed 声明的函数没有运行时指令，其合法空范围不能被调试信息
+# 校验误判为反向范围。
+for function_name in setup main; do
+    empty_output="$TMP_DIR/empty-${function_name}.out"
+    if ! "$COMPILER" run \
+        "$SCRIPT_DIR/empty_runtime_function.ct" "$function_name" \
+        >"$empty_output" 2>&1; then
+        echo "Empty runtime function debug range failed: $function_name" >&2
+        sed -n '1,120p' "$empty_output" >&2 || true
+        exit 1
+    fi
+    if ! grep -q "status: finished" "$empty_output"; then
+        echo "Empty runtime function did not finish: $function_name" >&2
+        sed -n '1,120p' "$empty_output" >&2 || true
+        exit 1
+    fi
+done
+
 FIXTURE="$SCRIPT_DIR/debug_peephole_pc_drift.ct"
 DEBUG_FILE="$TMP_DIR/peephole.debug"
 BYTECODE_JSON="$TMP_DIR/debug_peephole_pc_drift.json"
@@ -132,6 +150,53 @@ assert all(
     scope["parentIndex"] == outer_block["index"]
     for scope in branch_blocks
 )
+PY
+
+LOOP_DEBUG_FILE="$TMP_DIR/branch_loop_scope.debug"
+LOOP_FIXTURE="$SCRIPT_DIR/debug_branch_loop_scope.ct"
+(
+    cd "$TMP_DIR"
+    "$COMPILER" compile "$LOOP_FIXTURE" \
+        --debug-output "$LOOP_DEBUG_FILE" \
+        >"$TMP_DIR/branch_loop_scope.log" 2>&1
+)
+[[ -s "$LOOP_DEBUG_FILE" ]]
+
+python3 - "$LOOP_DEBUG_FILE" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], "r", encoding="utf-8") as f:
+    debug_info = json.load(f)
+
+assert debug_info.get("scopeNestingValid") is True, debug_info
+scopes = debug_info["scopes"]
+global_scope = next(scope for scope in scopes if scope["type"] == "global")
+function_scope = next(scope for scope in scopes if scope["type"] == "function")
+assert function_scope["parentIndex"] == global_scope["index"], function_scope
+
+outer_blocks = [
+    scope for scope in scopes
+    if scope["type"] == "block"
+    and scope["parentIndex"] == function_scope["index"]
+]
+assert len(outer_blocks) == 1, outer_blocks
+outer = outer_blocks[0]
+
+# The statically expanded Range(3) body must produce three balanced sibling
+# block scopes, in addition to the then/else blocks.
+children = [scope for scope in scopes if scope["parentIndex"] == outer["index"]]
+assert len(children) == 5, children
+assert sum(not scope["variables"] for scope in children) == 3, children
+ordered = sorted(children, key=lambda scope: (scope["startPC"], scope["endPC"]))
+for previous, current in zip(ordered, ordered[1:]):
+    assert previous["endPC"] <= current["startPC"], (previous, current)
+
+for scope in scopes:
+    if scope["type"] != "global":
+        assert scope["location"]["line"] > 0, scope
+    for variable in scope["variables"]:
+        assert variable["scopeName"] == scope["name"], (scope, variable)
 PY
 
 SESSION_LOG="$TMP_DIR/debugger.log"

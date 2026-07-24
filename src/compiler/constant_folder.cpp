@@ -28,6 +28,11 @@ void ConstantFolder::foldFunction(FunctionNode& fn)
     m_readCounts.clear();
     m_scalarConsts.clear();
     m_arrayConsts.clear();
+    m_declaredNamesStack.clear();
+    m_parameterNames.clear();
+    for (const auto& parameter : fn.parameters) {
+        m_parameterNames.insert(parameter.name);
+    }
 
     if (fn.block) {
         // 赋值=1 启用传播; (assign==1 && read==0) 触发死变量消除.
@@ -41,6 +46,9 @@ void ConstantFolder::foldFunction(FunctionNode& fn)
 
 void ConstantFolder::foldBlock(BlockNode& block)
 {
+    auto entryEnvironment = captureEnvironment();
+    m_declaredNamesStack.emplace_back();
+
     for (auto& stmt : block.statements) {
         foldStmt(stmt);
     }
@@ -53,6 +61,10 @@ void ConstantFolder::foldBlock(BlockNode& block)
         ),
         block.statements.end()
     );
+
+    auto declaredNames = std::move(m_declaredNamesStack.back());
+    m_declaredNamesStack.pop_back();
+    restoreDeclaredNames(entryEnvironment, declaredNames);
 }
 
 void ConstantFolder::foldStmt(std::unique_ptr<StmtNode>& stmt)
@@ -84,8 +96,21 @@ void ConstantFolder::foldStmt(std::unique_ptr<StmtNode>& stmt)
                 return;
             }
         }
+
+        // then/else 必须从同一入口常量环境开始. 两条可达路径结束后，
+        // 只有在两边仍存在且值相同的绑定才能继续传播.
+        auto entryEnvironment = captureEnvironment();
+
         foldStmt(i->thenBranch);
+        auto thenEnvironment = captureEnvironment();
+
+        restoreEnvironment(std::move(entryEnvironment));
         foldStmt(i->elseBranch);
+        auto elseEnvironment = captureEnvironment();
+
+        restoreEnvironment(
+            mergeEnvironments(thenEnvironment, elseEnvironment)
+        );
     } else if (auto* f = dynamic_cast<ForNode*>(stmt.get())) {
         foldExpr(f->iterable);
         // 死循环消除: Range(...) 全部参数是数值字面量 (含一元负号) 时,
@@ -144,19 +169,40 @@ void ConstantFolder::foldStmt(std::unique_ptr<StmtNode>& stmt)
                 }
             }
         }
+
+        // for target 与 AST/bytecode 分析使用相同的绑定规则:
+        // - 入口已有同名绑定: 每轮对外层变量重新赋值，旧常量必须
+        //   在折叠 body 前失效，退出循环后也不能恢复;
+        // - 入口无同名绑定: target 属于 for 作用域，退出时移除.
+        const auto loopEntryEnvironment = captureEnvironment();
+        const bool targetExistedBeforeLoop = isNameVisible(f->target);
+        m_declaredNamesStack.emplace_back();
+        if (!targetExistedBeforeLoop) {
+            recordDeclaration(f->target);
+        }
+        invalidateName(f->target);
+
         if (f->body) {
             foldBlock(*f->body);
         }
+
+        auto loopDeclaredNames = std::move(m_declaredNamesStack.back());
+        m_declaredNamesStack.pop_back();
+        restoreDeclaredNames(loopEntryEnvironment, loopDeclaredNames);
     } else if (auto* a = dynamic_cast<AssignNode*>(stmt.get())) {
-        // LHS 可能含 a[1+2] 这类索引, 也要递归; 但整体不会折成 Literal.
-        foldExpr(a->name);
+        // LHS 可能含 a[1+2] 这类索引: 保留 base 的变量身份，但允许
+        // 折叠索引表达式.
+        foldExpr(a->name, FoldContext::LValue);
         foldExpr(a->value);
         // 赋值目标从传播环境失效; 传播仅作用于全函数唯一赋值的名字.
         invalidateName(extractAssignTargetName(a->name.get()));
     } else if (auto* es = dynamic_cast<ExprStmtNode*>(stmt.get())) {
         foldExpr(es->expr);
     } else if (auto* r = dynamic_cast<ReturnNode*>(stmt.get())) {
-        foldExpr(r->expr);
+        foldExpr(
+            r->expr,
+            r->isValueReturn ? FoldContext::Identity : FoldContext::RValue
+        );
     } else if (auto* vd = dynamic_cast<VarDeclNode*>(stmt.get())) {
         foldExpr(vd->initValue);
         // 死变量消除: 唯一声明 + 从未被读 + RHS 是字面量 (或 null) -> 删整条.
@@ -174,6 +220,8 @@ void ConstantFolder::foldStmt(std::unique_ptr<StmtNode>& stmt)
             stmt.reset();
             return;
         }
+        recordDeclaration(vd->name);
+        invalidateName(vd->name);
         // 唯一赋值 + 字面量初始化: 记录供后续标识符替换.
         if (cntIt != m_assignCounts.end() && cntIt->second == 1 &&
             vd->initValue) {
@@ -190,6 +238,8 @@ void ConstantFolder::foldStmt(std::unique_ptr<StmtNode>& stmt)
                 foldExpr(e);
             }
         }
+        recordDeclaration(ad->name);
+        invalidateName(ad->name);
         // 唯一赋值 + 全字面量元素: 记录元素列表供 arr[常量] 替换.
         auto cntIt = m_assignCounts.find(ad->name);
         if (cntIt != m_assignCounts.end() && cntIt->second == 1 &&
@@ -220,7 +270,9 @@ void ConstantFolder::foldStmt(std::unique_ptr<StmtNode>& stmt)
     // 其他语句类型无可折叠表达式.
 }
 
-void ConstantFolder::foldExpr(std::unique_ptr<ExprNode>& expr)
+void ConstantFolder::foldExpr(
+    std::unique_ptr<ExprNode>& expr, FoldContext context
+)
 {
     if (!expr) {
         return;
@@ -229,14 +281,15 @@ void ConstantFolder::foldExpr(std::unique_ptr<ExprNode>& expr)
     if (auto* op = dynamic_cast<OpNode*>(expr.get())) {
         // 先递归折子树, 使 (1+2)+3 外层能看到内层已折为 Literal.
         if (op->lhs) {
-            foldExpr(op->lhs);
+            foldExpr(op->lhs, context);
         }
         if (op->rhs) {
-            foldExpr(op->rhs);
+            foldExpr(op->rhs, context);
         }
         // 短路: 0 && x -> 0, 1 || x -> 1. 仅按左侧字面量短路, 右侧字面量
         // 不短路 (左侧可能有副作用必须求值).
-        if ((op->op == "&&" || op->op == "||") && op->lhs && op->rhs) {
+        if (context == FoldContext::RValue &&
+            (op->op == "&&" || op->op == "||") && op->lhs && op->rhs) {
             if (auto* lhsLit = dynamic_cast<LiteralNode*>(op->lhs.get());
                 lhsLit && lhsLit->type == LiteralNode::Type::Number) {
                 auto lv = literalAsInt(*lhsLit);
@@ -264,41 +317,67 @@ void ConstantFolder::foldExpr(std::unique_ptr<ExprNode>& expr)
                 }
             }
         }
-        if (auto folded = tryFoldOp(*op)) {
-            expr = std::move(folded);
+        if (context == FoldContext::RValue) {
+            if (auto folded = tryFoldOp(*op)) {
+                expr = std::move(folded);
+            }
         }
     } else if (auto* call = dynamic_cast<CallNode*>(expr.get())) {
+        const bool identitySensitive = isIdentitySensitiveCall(call->funcName);
+        const auto argumentContext = identitySensitive ? FoldContext::Identity
+                                                       : context;
         for (auto& arg : call->args) {
-            foldExpr(arg);
+            foldExpr(arg, argumentContext);
+        }
+        // 一旦栈操作观察或改变了变量的运行时栈槽，后续访问就不能
+        // 再用字面量替换，否则会绕过 Delete/Move 的消费检查，或忽略
+        // SetAlt/SetMain/Keep 建立的真实栈布局.
+        if (identitySensitive) {
+            for (const auto& arg : call->args) {
+                invalidateName(extractAssignTargetName(arg.get()));
+            }
         }
     } else if (auto* mc = dynamic_cast<MethodCallNode*>(expr.get())) {
-        foldExpr(mc->object);
+        // 方法调用的 receiver 参与所有权/栈槽查找，必须保留身份.
+        foldExpr(mc->object, FoldContext::Identity);
         for (auto& arg : mc->args) {
             foldExpr(arg);
         }
+        invalidateName(extractAssignTargetName(mc->object.get()));
     } else if (auto* fa = dynamic_cast<FieldAccessNode*>(expr.get())) {
-        foldExpr(fa->base);
+        foldExpr(
+            fa->base,
+            context == FoldContext::RValue ? FoldContext::RValue
+                                           : FoldContext::Identity
+        );
     } else if (auto* ia = dynamic_cast<IndexAccessNode*>(expr.get())) {
-        foldExpr(ia->base);
+        foldExpr(
+            ia->base,
+            context == FoldContext::RValue ? FoldContext::RValue
+                                           : FoldContext::Identity
+        );
         foldExpr(ia->index);
         // arr[字面常量] + arr 唯一字面量数组初始化 -> 替换为对应元素.
-        if (auto* baseId = dynamic_cast<IdentifierNode*>(ia->base.get())) {
-            auto arrIt = m_arrayConsts.find(baseId->name);
-            if (arrIt != m_arrayConsts.end()) {
-                if (auto* idxLit =
-                        dynamic_cast<LiteralNode*>(ia->index.get())) {
-                    auto idxVal = literalAsInt(*idxLit);
-                    if (idxVal.has_value() && *idxVal >= 0 &&
-                        static_cast<size_t>(*idxVal) < arrIt->second.size()) {
-                        const LiteralNode& lit =
-                            *arrIt->second[static_cast<size_t>(*idxVal)];
-                        LOG_DEBUG(
-                            "Constant propagation: " + baseId->name + "[" +
-                            idxLit->value + "] = " + lit.value
-                        );
-                        expr = cloneLiteralAt(
-                            lit, ia->pos.first, ia->pos.second
-                        );
+        if (context == FoldContext::RValue) {
+            if (auto* baseId = dynamic_cast<IdentifierNode*>(ia->base.get())) {
+                auto arrIt = m_arrayConsts.find(baseId->name);
+                if (arrIt != m_arrayConsts.end()) {
+                    if (auto* idxLit =
+                            dynamic_cast<LiteralNode*>(ia->index.get())) {
+                        auto idxVal = literalAsInt(*idxLit);
+                        if (idxVal.has_value() && *idxVal >= 0 &&
+                            static_cast<size_t>(*idxVal) <
+                                arrIt->second.size()) {
+                            const LiteralNode& lit =
+                                *arrIt->second[static_cast<size_t>(*idxVal)];
+                            LOG_DEBUG(
+                                "Constant propagation: " + baseId->name +
+                                "[" + idxLit->value + "] = " + lit.value
+                            );
+                            expr = cloneLiteralAt(
+                                lit, ia->pos.first, ia->pos.second
+                            );
+                        }
                     }
                 }
             }
@@ -314,7 +393,7 @@ void ConstantFolder::foldExpr(std::unique_ptr<ExprNode>& expr)
     } else if (auto* id = dynamic_cast<IdentifierNode*>(expr.get())) {
         // 唯一字面量初始化的标量, 替换为初始值.
         auto it = m_scalarConsts.find(id->name);
-        if (it != m_scalarConsts.end()) {
+        if (context == FoldContext::RValue && it != m_scalarConsts.end()) {
             LOG_DEBUG(
                 "Constant propagation: " + id->name + " = " + it->second->value
             );
@@ -323,6 +402,146 @@ void ConstantFolder::foldExpr(std::unique_ptr<ExprNode>& expr)
         }
     }
     // LiteralNode: 叶子, 无子树.
+}
+
+ConstantFolder::ConstEnvironment ConstantFolder::captureEnvironment() const
+{
+    ConstEnvironment result;
+    for (const auto& [name, literal] : m_scalarConsts) {
+        result.scalars[name] = cloneLiteralAt(
+            *literal, literal->pos.first, literal->pos.second
+        );
+    }
+    for (const auto& [name, literals] : m_arrayConsts) {
+        auto& destination = result.arrays[name];
+        destination.reserve(literals.size());
+        for (const auto& literal : literals) {
+            destination.push_back(cloneLiteralAt(
+                *literal, literal->pos.first, literal->pos.second
+            ));
+        }
+    }
+    return result;
+}
+
+void ConstantFolder::restoreEnvironment(ConstEnvironment environment)
+{
+    m_scalarConsts = std::move(environment.scalars);
+    m_arrayConsts = std::move(environment.arrays);
+}
+
+ConstantFolder::ConstEnvironment ConstantFolder::mergeEnvironments(
+    const ConstEnvironment& thenEnvironment,
+    const ConstEnvironment& elseEnvironment
+) const
+{
+    ConstEnvironment result;
+    for (const auto& [name, thenLiteral] : thenEnvironment.scalars) {
+        auto elseIt = elseEnvironment.scalars.find(name);
+        if (elseIt != elseEnvironment.scalars.end() &&
+            sameLiteral(*thenLiteral, *elseIt->second)) {
+            result.scalars[name] = cloneLiteralAt(
+                *thenLiteral,
+                thenLiteral->pos.first,
+                thenLiteral->pos.second
+            );
+        }
+    }
+    for (const auto& [name, thenLiterals] : thenEnvironment.arrays) {
+        auto elseIt = elseEnvironment.arrays.find(name);
+        if (elseIt != elseEnvironment.arrays.end() &&
+            sameLiteralArray(thenLiterals, elseIt->second)) {
+            auto& destination = result.arrays[name];
+            destination.reserve(thenLiterals.size());
+            for (const auto& literal : thenLiterals) {
+                destination.push_back(cloneLiteralAt(
+                    *literal, literal->pos.first, literal->pos.second
+                ));
+            }
+        }
+    }
+    return result;
+}
+
+void ConstantFolder::restoreDeclaredNames(
+    const ConstEnvironment& entryEnvironment,
+    const std::set<std::string>& declaredNames
+)
+{
+    for (const auto& name : declaredNames) {
+        invalidateName(name);
+
+        auto scalarIt = entryEnvironment.scalars.find(name);
+        if (scalarIt != entryEnvironment.scalars.end()) {
+            m_scalarConsts[name] = cloneLiteralAt(
+                *scalarIt->second,
+                scalarIt->second->pos.first,
+                scalarIt->second->pos.second
+            );
+        }
+
+        auto arrayIt = entryEnvironment.arrays.find(name);
+        if (arrayIt != entryEnvironment.arrays.end()) {
+            auto& destination = m_arrayConsts[name];
+            destination.reserve(arrayIt->second.size());
+            for (const auto& literal : arrayIt->second) {
+                destination.push_back(cloneLiteralAt(
+                    *literal, literal->pos.first, literal->pos.second
+                ));
+            }
+        }
+    }
+}
+
+void ConstantFolder::recordDeclaration(const std::string& name)
+{
+    if (!m_declaredNamesStack.empty()) {
+        m_declaredNamesStack.back().insert(name);
+    }
+}
+
+bool ConstantFolder::isNameVisible(const std::string& name) const
+{
+    if (m_parameterNames.count(name) != 0) {
+        return true;
+    }
+    return std::any_of(
+        m_declaredNamesStack.rbegin(),
+        m_declaredNamesStack.rend(),
+        [&](const auto& declaredNames) {
+            return declaredNames.count(name) != 0;
+        }
+    );
+}
+
+bool ConstantFolder::sameLiteral(
+    const LiteralNode& lhs, const LiteralNode& rhs
+)
+{
+    return lhs.type == rhs.type && lhs.value == rhs.value;
+}
+
+bool ConstantFolder::sameLiteralArray(
+    const std::vector<std::unique_ptr<LiteralNode>>& lhs,
+    const std::vector<std::unique_ptr<LiteralNode>>& rhs
+)
+{
+    if (lhs.size() != rhs.size()) {
+        return false;
+    }
+    for (size_t i = 0; i < lhs.size(); ++i) {
+        if (!sameLiteral(*lhs[i], *rhs[i])) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool ConstantFolder::isIdentitySensitiveCall(const std::string& functionName)
+{
+    return functionName == "Delete" || functionName == "Keep" ||
+           functionName == "Move" || functionName == "SetAlt" ||
+           functionName == "SetMain";
 }
 
 std::unique_ptr<LiteralNode> ConstantFolder::tryFoldOp(OpNode& op)

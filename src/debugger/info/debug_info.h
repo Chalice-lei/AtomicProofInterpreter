@@ -195,7 +195,13 @@ public:
         return variables.size();
     }
 
-    bool validate() const;
+    // 校验调试元数据的内部结构。传入最终字节码指令后，还会校验所有
+    // PC 都落在真实指令边界上，并核对指令内容。
+    bool validate(std::string* errorMessage = nullptr) const;
+    bool validate(
+        const std::vector<std::string>& bytecode,
+        std::string* errorMessage = nullptr
+    ) const;
 
     // DebugInfoGenerator 用于构建反向索引
     void buildLineToPC();

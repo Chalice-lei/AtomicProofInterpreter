@@ -4,6 +4,7 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -31,8 +32,30 @@ public:
     Result fold(ContractNode& contract);
 
 private:
+    enum class FoldContext
+    {
+        RValue,
+        LValue,
+        Identity,
+    };
+
+    using ScalarConstMap =
+        std::map<std::string, std::unique_ptr<LiteralNode>>;
+    using ArrayConstMap = std::map<
+        std::string,
+        std::vector<std::unique_ptr<LiteralNode>>>;
+
+    struct ConstEnvironment
+    {
+        ScalarConstMap scalars;
+        ArrayConstMap arrays;
+    };
+
     // 若子树可折叠, 把 expr 替换成新的 LiteralNode.
-    void foldExpr(std::unique_ptr<ExprNode>& expr);
+    void foldExpr(
+        std::unique_ptr<ExprNode>& expr,
+        FoldContext context = FoldContext::RValue
+    );
 
     void foldStmt(std::unique_ptr<StmtNode>& stmt);
     void foldBlock(BlockNode& block);
@@ -63,6 +86,27 @@ private:
 
     static std::optional<int64_t> literalAsInt(const LiteralNode& lit);
 
+    ConstEnvironment captureEnvironment() const;
+    void restoreEnvironment(ConstEnvironment environment);
+    ConstEnvironment mergeEnvironments(
+        const ConstEnvironment& thenEnvironment,
+        const ConstEnvironment& elseEnvironment
+    ) const;
+    void restoreDeclaredNames(
+        const ConstEnvironment& entryEnvironment,
+        const std::set<std::string>& declaredNames
+    );
+    void recordDeclaration(const std::string& name);
+    bool isNameVisible(const std::string& name) const;
+    static bool sameLiteral(
+        const LiteralNode& lhs, const LiteralNode& rhs
+    );
+    static bool sameLiteralArray(
+        const std::vector<std::unique_ptr<LiteralNode>>& lhs,
+        const std::vector<std::unique_ptr<LiteralNode>>& rhs
+    );
+    static bool isIdentitySensitiveCall(const std::string& functionName);
+
     void invalidateName(const std::string& name);
 
     Result m_result;
@@ -74,9 +118,13 @@ private:
     std::map<std::string, int> m_readCounts;
 
     // 仅保留赋值次数 == 1 且 RHS 为字面量的标量/数组元素.
-    std::map<std::string, std::unique_ptr<LiteralNode>> m_scalarConsts;
-    std::map<std::string, std::vector<std::unique_ptr<LiteralNode>>>
-        m_arrayConsts;
+    ScalarConstMap m_scalarConsts;
+    ArrayConstMap m_arrayConsts;
+
+    // 每个 Block 记录本层声明的名字. 退出 Block 时只恢复这些
+    // 名字在入口处的常量绑定，而对外层变量的重新绑定/失效仍保留.
+    std::vector<std::set<std::string>> m_declaredNamesStack;
+    std::set<std::string> m_parameterNames;
 };
 
 #endif // CONSTANT_FOLDER_H

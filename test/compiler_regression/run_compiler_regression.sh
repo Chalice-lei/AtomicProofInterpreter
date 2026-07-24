@@ -237,6 +237,88 @@ write_case branch_terminating_fixed.ct \
     "            value = 2" \
     "        Return(value)"
 
+write_case constant_branch_local_escape.ct \
+    "Contract ConstantBranchLocalEscape:" \
+    "    def main(flag: int):" \
+    "        if flag > 0:" \
+    "            local: int = 7" \
+    "        else:" \
+    "            other: int = 8" \
+    "        Return(local)"
+
+write_case constant_delete_identity.ct \
+    "Contract ConstantDeleteIdentity:" \
+    "    def main():" \
+    "        value: int = 5" \
+    "        Delete(value)" \
+    "        Return(value)"
+
+write_case constant_for_existing_target.ct \
+    "Contract ConstantForExistingTarget:" \
+    "    def main():" \
+    "        i: int = 99" \
+    "        result: int = 0" \
+    "        for i in Range(1):" \
+    "            if i == 0:" \
+    "                result = 7" \
+    "            else:" \
+    "                result = 2" \
+    "        Return(result)"
+
+write_case literal_expr_no_runtime_drop.ct \
+    "Contract LiteralExprNoRuntimeDrop:" \
+    "    def main(flag: int):" \
+    "        0" \
+    "        Return(1)"
+
+write_case private_early_return.ct \
+    "Contract PrivateEarlyReturn:" \
+    "    def _first():" \
+    "        value = Push(1)" \
+    "        return value" \
+    "        unreachable = Push(2)" \
+    "        return unreachable" \
+    "" \
+    "    def main(flag: int):" \
+    "        Return(_first())"
+
+write_case private_conditional_return.ct \
+    "Contract PrivateConditionalReturn:" \
+    "    def _choose(flag: int):" \
+    "        if flag.Clone() > 0:" \
+    "            positive = flag.Clone() + 10" \
+    "            return positive" \
+    "        else:" \
+    "            negative = flag.Clone() + 20" \
+    "            return negative" \
+    "        unreachable = Push(99)" \
+    "        return unreachable" \
+    "" \
+    "    def main(flag: int):" \
+    "        result = _choose(flag)" \
+    "        Return(result)"
+
+write_case private_one_sided_return.ct \
+    "Contract PrivateOneSidedReturn:" \
+    "    def _choose(flag: int):" \
+    "        result = Push(20)" \
+    "        if flag.Clone() > 0:" \
+    "            early = Push(11)" \
+    "            return early" \
+    "        else:" \
+    "            result = result + 1" \
+    "        result = result + 1" \
+    "        return result" \
+    "" \
+    "    def main(flag: int):" \
+    "        Return(_choose(flag))"
+
+write_case suffix_after_return.ct \
+    "Contract SuffixAfterReturn:" \
+    "    def main(flag: int):" \
+    "        Return(1)" \
+    "        Push(7)"
+
 expect_failure bang.ct "unexpected character '!'"
 expect_success notequal.ct
 expect_failure two_contracts.ct "unexpected token after contract definition"
@@ -258,6 +340,14 @@ expect_success branch_fixed_nested.ct
 expect_success branch_stack_to_fixed.ct
 expect_success branch_uninitialized_fixed.ct
 expect_success branch_terminating_fixed.ct
+expect_failure constant_branch_local_escape.ct "undefined variable 'local'"
+expect_failure constant_delete_identity.ct "undefined variable 'value'"
+expect_success constant_for_existing_target.ct
+expect_success literal_expr_no_runtime_drop.ct
+expect_success private_early_return.ct
+expect_success private_conditional_return.ct
+expect_success private_one_sided_return.ct
+expect_success suffix_after_return.ct
 
 python3 - "$TMP_DIR/branch_fixed_return.json" <<'PY'
 import json
@@ -287,6 +377,41 @@ with open(sys.argv[1], "r", encoding="utf-8") as f:
 asm = data["lock"]["asm"].split()
 assert asm and asm[0] == "<self.value>", data["lock"]["asm"]
 assert "<self.value>" in data["lock"]["hex"], data["lock"]["hex"]
+PY
+
+python3 - "$TMP_DIR/constant_for_existing_target.json" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], "r", encoding="utf-8") as f:
+    tokens = json.load(f)["lock"]["asm"].split()
+
+# i 在循环入口已存在，Range 对 i 的赋值必须让旧常量 99
+# 失效。否则 ConstantFolder 会把 `i == 0` 折成 false 并删除 OP_IF。
+assert "OP_IF" in tokens, tokens
+PY
+
+python3 - "$TMP_DIR/literal_expr_no_runtime_drop.json" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], "r", encoding="utf-8") as f:
+    tokens = json.load(f)["lock"]["asm"].split()
+
+return_pos = tokens.index("OP_RETURN")
+assert tokens[:return_pos] == ["OP_1"], tokens[:return_pos]
+PY
+
+python3 - "$TMP_DIR/suffix_after_return.json" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], "r", encoding="utf-8") as f:
+    tokens = json.load(f)["lock"]["asm"].split()
+
+return_pos = tokens.index("OP_RETURN")
+padding_pos = tokens.index("OP_INVALIDOPCODE", return_pos + 1)
+assert "OP_7" in tokens[padding_pos + 1:], tokens[-10:]
 PY
 
 for flag in 1 -1; do
@@ -359,5 +484,12 @@ expect_ast_and_run_int branch_uninitialized_fixed.ct 1 1
 expect_ast_and_run_int branch_uninitialized_fixed.ct -1 2
 expect_ast_and_run_int branch_terminating_fixed.ct 1 9
 expect_ast_and_run_int branch_terminating_fixed.ct -1 2
+expect_ast_and_run_int literal_expr_no_runtime_drop.ct 0 1
+expect_ast_and_run_int private_early_return.ct 0 1
+expect_ast_and_run_int private_conditional_return.ct 1 11
+expect_ast_and_run_int private_conditional_return.ct -1 19
+expect_ast_and_run_int private_one_sided_return.ct 1 11
+expect_ast_and_run_int private_one_sided_return.ct -1 22
+expect_ast_and_run_int suffix_after_return.ct 0 1
 
 echo "Compiler regression checks passed."

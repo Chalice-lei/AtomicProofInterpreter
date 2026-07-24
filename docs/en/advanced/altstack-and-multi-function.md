@@ -121,6 +121,19 @@ Push order (SetAlt):  pre_count → pre_code_partialhash → pre_code_size
 Pop order (SetMain):  pre_code_size → pre_code_partialhash → pre_count
 ```
 
+### Running a Phase Chain Locally
+
+`run` accepts a comma-separated list of public functions in source order and
+executes them in one BVM session, preserving main-stack and alt-stack state:
+
+```bash
+./build/bin/utxo_Interpreter run contract.ct getCountFromPreTX,verifyCurrentTX <args...>
+```
+
+Positional arguments are concatenated in function-list order. If a later
+function depends on alt-stack state from an earlier phase, running it alone
+reports that predecessor phase state is required; run the phase chain instead.
+
 ---
 
 ## Summary

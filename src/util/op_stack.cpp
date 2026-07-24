@@ -182,6 +182,38 @@ void OpStack::setCombinedStackSize(size_t size)
     }
 }
 
+void OpStack::replaceStackContent(
+    const std::vector<StackElement>& newContent
+)
+{
+    size_t oldContentSize = 0;
+    for (const auto& element : m_stack) {
+        oldContentSize += element.getMemoryUsage();
+    }
+
+    size_t newContentSize = 0;
+    for (const auto& element : newContent) {
+        newContentSize += element.getMemoryUsage();
+    }
+
+    const size_t combinedSize = getCombinedStackSize();
+    if (combinedSize < oldContentSize) {
+        throw std::logic_error(
+            "cannot replace stack content: combined stack size is smaller "
+            "than the current content"
+        );
+    }
+    // 先完成可能抛出 bad_alloc 的复制，再修改共享计数；最终 swap 不抛。
+    // increase/decrease 会沿 parent 链更新根计数并执行根栈上限检查。
+    std::vector<StackElement> replacement(newContent);
+    if (newContentSize > oldContentSize) {
+        increaseCombinedStackSize(newContentSize - oldContentSize);
+    } else if (oldContentSize > newContentSize) {
+        decreaseCombinedStackSize(oldContentSize - newContentSize);
+    }
+    m_stack.swap(replacement);
+}
+
 void OpStack::push(const StackElement& element, std::string* statusStr)
 {
     increaseCombinedStackSize(element.getMemoryUsage());

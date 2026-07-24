@@ -52,7 +52,8 @@ BVMSimulator::BVMSimulator(
       m_stepMode(StepMode::NONE), m_varInspectionEnabled(true),
       m_stepStartLine(0), m_stepStartCallDepth(0), m_maxStackSize(0),
       m_maxCallDepth(0), m_hasExecutionRange(false), m_executionRangeStart(0),
-      m_executionRangeEnd(0), m_skipBreakpointOnce(false),
+      m_executionRangeEnd(0), m_executionFunctionName(),
+      m_skipBreakpointOnce(false),
       m_skipBreakpointFile(), m_skipBreakpointLine(0), m_nextFrameId(1),
       m_pauseRequested(false), m_terminateRequested(false)
 {
@@ -66,7 +67,16 @@ BVMSimulator::BVMSimulator(
 
     // 若构造时 PC 已在函数入口，先推入主函数调用帧（不依赖 reset()）
     if (m_debugInfo && m_pc < m_bytecode.size()) {
-        const auto* func = m_debugInfo->getFunctionAtPC(m_pc);
+        const FunctionDebugInfo* func = nullptr;
+        if (!m_executionFunctionName.empty()) {
+            auto it = m_debugInfo->functions.find(m_executionFunctionName);
+            if (it != m_debugInfo->functions.end()) {
+                func = &it->second;
+            }
+        }
+        if (!func) {
+            func = m_debugInfo->getFunctionAtPC(m_pc);
+        }
         if (func && m_pc == func->startPC) {
             size_t returnAddr = func->endPC;
             // endPC == bytecode.size() 合法；超过才无效
@@ -131,7 +141,16 @@ void BVMSimulator::reset()
 
     // PC 落在函数入口时，初始化主函数调用帧
     if (m_debugInfo && m_pc < m_bytecode.size()) {
-        const auto* func = m_debugInfo->getFunctionAtPC(m_pc);
+        const FunctionDebugInfo* func = nullptr;
+        if (!m_executionFunctionName.empty()) {
+            auto it = m_debugInfo->functions.find(m_executionFunctionName);
+            if (it != m_debugInfo->functions.end()) {
+                func = &it->second;
+            }
+        }
+        if (!func) {
+            func = m_debugInfo->getFunctionAtPC(m_pc);
+        }
         if (func && m_pc == func->startPC) {
             size_t returnAddr = func->endPC;
             if (m_hasExecutionRange) {
@@ -2087,7 +2106,11 @@ void BVMSimulator::op_partial_hash()
     m_mainStack.push(StackElement(std::move(vchHash)));
 }
 
-void BVMSimulator::setExecutionRange(size_t startPC, size_t endPC)
+void BVMSimulator::setExecutionRange(
+    size_t startPC,
+    size_t endPC,
+    const std::string& entryFunctionName
+)
 {
     if (startPC >= m_bytecode.size()) {
         throw std::runtime_error("执行范围起始位置超出字节码范围");
@@ -2102,6 +2125,31 @@ void BVMSimulator::setExecutionRange(size_t startPC, size_t endPC)
     m_hasExecutionRange = true;
     m_executionRangeStart = startPC;
     m_executionRangeEnd = endPC;
+    m_executionFunctionName.clear();
+
+    if (m_debugInfo && !entryFunctionName.empty()) {
+        auto it = m_debugInfo->functions.find(entryFunctionName);
+        if (it == m_debugInfo->functions.end() ||
+            it->second.startPC != startPC) {
+            throw std::runtime_error(
+                "执行入口函数与所选字节码范围不匹配"
+            );
+        }
+        m_executionFunctionName = entryFunctionName;
+    } else if (m_debugInfo) {
+        const FunctionDebugInfo* selected = nullptr;
+        for (const auto& [name, function] : m_debugInfo->functions) {
+            if (function.startPC != startPC || function.endPC != endPC) {
+                continue;
+            }
+            // 同范围时 public 是用户选择的可执行入口；private 只是内联
+            // 调试范围，不能替代顶层调用帧。
+            if (!selected || (function.isPublic && !selected->isPublic)) {
+                selected = &function;
+                m_executionFunctionName = name;
+            }
+        }
+    }
 
     m_pc = startPC;
 }
@@ -2111,6 +2159,7 @@ void BVMSimulator::clearExecutionRange()
     m_hasExecutionRange = false;
     m_executionRangeStart = 0;
     m_executionRangeEnd = 0;
+    m_executionFunctionName.clear();
 }
 
 } // namespace apc_debug

@@ -25,8 +25,9 @@
 // Final bytecode layout pass.
 //
 // The compiler may append immutable suffix/state data after OP_RETURN. Padding
-// must therefore be inserted between OP_RETURN and that suffix, after peephole
-// optimization has settled the executable code length.
+// must therefore be inserted between the executable region and that suffix,
+// after any OP_ENDIF instructions which structurally close the final Return's
+// branch and after peephole optimization has settled the code length.
 class BytecodeFinalizePass : public Pass
 {
     DECLARE_PASS(BytecodeFinalizePass)
@@ -76,15 +77,33 @@ public:
         const size_t returnIndex =
             static_cast<size_t>(std::distance(returnIt, instrs.rend()) - 1);
 
-        size_t suffixStart = returnIndex + 1;
+        // 最后一个 Return 可能位于嵌套 if 的分支中，后面仍有语法必需的
+        // ENDIF。旧 padding 可能已经位于 Return 与这些闭合操作码之间；
+        // 先剥离旧 padding，再把闭合操作码纳入 executable code。
+        size_t structuralStart = returnIndex + 1;
+        while (structuralStart < instrs.size() &&
+               isSingleOpcode(instrs[structuralStart],
+                              tbc::BytOpcode::OP_INVALIDOPCODE)) {
+            ++structuralStart;
+        }
+        size_t structuralEnd = structuralStart;
+        while (structuralEnd < instrs.size() &&
+               isSingleOpcode(instrs[structuralEnd],
+                              tbc::BytOpcode::OP_ENDIF)) {
+            ++structuralEnd;
+        }
+        size_t suffixStart = structuralEnd;
         while (suffixStart < instrs.size() &&
                isSingleOpcode(instrs[suffixStart],
                               tbc::BytOpcode::OP_INVALIDOPCODE)) {
             ++suffixStart;
         }
 
-        const auto codeBytesOpt = countBytes(instrs, 0, returnIndex + 1);
-        if (!codeBytesOpt.has_value()) {
+        const auto prefixBytesOpt = countBytes(instrs, 0, returnIndex + 1);
+        const auto structuralBytesOpt =
+            countBytes(instrs, structuralStart, structuralEnd);
+        if (!prefixBytesOpt.has_value() ||
+            !structuralBytesOpt.has_value()) {
             LOG_WARNING(
                 "BytecodeFinalizePass: non-hex instruction before OP_RETURN; "
                 "cannot determine final padding"
@@ -95,9 +114,12 @@ public:
             return;
         }
 
-        const size_t codeBytes = codeBytesOpt.value();
+        const size_t codeBytes =
+            prefixBytesOpt.value() + structuralBytesOpt.value();
         const size_t paddingBytes = bytesToAlign(codeBytes, 64);
-        const size_t oldPaddingBytes = suffixStart - (returnIndex + 1);
+        const size_t oldPaddingBytes =
+            (structuralStart - (returnIndex + 1)) +
+            (suffixStart - structuralEnd);
         const size_t suffixBytes =
             countBestEffortBytes(instrs, suffixStart, instrs.size());
         const size_t beforeBytes =
@@ -110,18 +132,23 @@ public:
         for (size_t i = 0; i <= returnIndex; ++i) {
             pcRemap[i] = i;
         }
-        for (size_t i = suffixStart; i < instrs.size(); ++i) {
-            pcRemap[i] =
-                returnIndex + 1 + paddingBytes + (i - suffixStart);
+        for (size_t i = structuralStart; i < structuralEnd; ++i) {
+            pcRemap[i] = returnIndex + 1 + (i - structuralStart);
         }
+        // immutable suffix 位于 OP_INVALIDOPCODE padding 之后，不可执行，
+        // 因此不保留源码/指令映射；函数与块范围也会收缩到真实代码区。
 #endif
 
         std::vector<std::string> finalized;
         finalized.reserve(
-            returnIndex + 1 + paddingBytes + (instrs.size() - suffixStart)
+            returnIndex + 1 + (structuralEnd - structuralStart) +
+            paddingBytes + (instrs.size() - suffixStart)
         );
         finalized.insert(finalized.end(), instrs.begin(),
                          instrs.begin() + returnIndex + 1);
+        finalized.insert(finalized.end(),
+                         instrs.begin() + structuralStart,
+                         instrs.begin() + structuralEnd);
         for (size_t i = 0; i < paddingBytes; ++i) {
             finalized.push_back(
                 tbc::opcodeToHex(tbc::BytOpcode::OP_INVALIDOPCODE)

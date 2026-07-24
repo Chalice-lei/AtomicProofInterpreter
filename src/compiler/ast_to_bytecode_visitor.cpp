@@ -19,9 +19,238 @@
 
 using namespace tbc;
 
+namespace
+{
+
+std::string declaredSymbolType(
+    const SymbolTable& state,
+    const std::string& name,
+    const std::string& fallback
+)
+{
+    auto it = std::find_if(
+        state.m_currentScope.rbegin(),
+        state.m_currentScope.rend(),
+        [&](const auto& entry) { return entry.first == name; }
+    );
+    if (it == state.m_currentScope.rend()) {
+        return fallback;
+    }
+
+    const std::string declaredType = it->second.m_stackElement.getType();
+    return declaredType.empty() ? fallback : declaredType;
+}
+
+bool compatibleStackTypes(const std::string& lhs, const std::string& rhs)
+{
+    if (lhs.empty() || rhs.empty() || lhs == rhs) {
+        return true;
+    }
+    auto isNumeric = [](const std::string& type) {
+        return type == "num" || type == "number" || type == "int" ||
+               type == "uint64";
+    };
+    return isNumeric(lhs) && isNumeric(rhs);
+}
+
+enum class StorageLocation
+{
+    Main,
+    Alt,
+    Unknown
+};
+
+StorageLocation storageAfterStatement(
+    const StmtNode* stmt,
+    const std::string& symbol,
+    StorageLocation initial
+)
+{
+    if (!stmt) {
+        return initial;
+    }
+
+    if (auto exprStmt = dynamic_cast<const ExprStmtNode*>(stmt)) {
+        auto call = dynamic_cast<const CallNode*>(exprStmt->expr.get());
+        if (!call || call->args.empty()) {
+            return initial;
+        }
+        auto identifier =
+            dynamic_cast<const IdentifierNode*>(call->args.front().get());
+        if (!identifier || identifier->name != symbol) {
+            return initial;
+        }
+        if (call->funcName == "SetAlt") {
+            return StorageLocation::Alt;
+        }
+        if (call->funcName == "SetMain") {
+            return StorageLocation::Main;
+        }
+        return initial;
+    }
+
+    if (auto block = dynamic_cast<const BlockNode*>(stmt)) {
+        StorageLocation current = initial;
+        for (const auto& inner : block->statements) {
+            current = storageAfterStatement(inner.get(), symbol, current);
+        }
+        return current;
+    }
+
+    if (auto ifNode = dynamic_cast<const IfNode*>(stmt)) {
+        const StorageLocation thenLocation = storageAfterStatement(
+            ifNode->thenBranch.get(), symbol, initial
+        );
+        const StorageLocation elseLocation = storageAfterStatement(
+            ifNode->elseBranch.get(), symbol, initial
+        );
+        return thenLocation == elseLocation ? thenLocation
+                                            : StorageLocation::Unknown;
+    }
+
+    if (auto forNode = dynamic_cast<const ForNode*>(stmt)) {
+        StorageLocation current = initial;
+        for (size_t i = 0; i < forNode->getStaticIterations().size(); ++i) {
+            current =
+                storageAfterStatement(forNode->body.get(), symbol, current);
+        }
+        return current;
+    }
+
+    return initial;
+}
+
+std::optional<size_t> inlineReturnArity(const StmtNode* stmt)
+{
+    if (!stmt) {
+        return std::nullopt;
+    }
+    if (auto returnNode = dynamic_cast<const ReturnNode*>(stmt)) {
+        if (!returnNode->isValueReturn || !returnNode->expr) {
+            return std::nullopt;
+        }
+        if (auto brace =
+                dynamic_cast<const BraceExprNode*>(returnNode->expr.get())) {
+            return brace->elements.size();
+        }
+        return size_t{1};
+    }
+    if (auto block = dynamic_cast<const BlockNode*>(stmt)) {
+        for (const auto& inner : block->statements) {
+            if (auto arity = inlineReturnArity(inner.get()); arity.has_value()) {
+                return arity;
+            }
+        }
+        return std::nullopt;
+    }
+    if (auto ifNode = dynamic_cast<const IfNode*>(stmt)) {
+        auto thenArity = inlineReturnArity(ifNode->thenBranch.get());
+        auto elseArity = inlineReturnArity(ifNode->elseBranch.get());
+        if (thenArity.has_value() && elseArity.has_value() &&
+            thenArity.value() != elseArity.value()) {
+            return std::nullopt;
+        }
+        return thenArity.has_value() ? thenArity : elseArity;
+    }
+    if (auto forNode = dynamic_cast<const ForNode*>(stmt)) {
+        return inlineReturnArity(forNode->body.get());
+    }
+    return std::nullopt;
+}
+
+struct ControlFlowOutcomes
+{
+    bool fallsThrough{false};
+    bool inlineReturns{false};
+    bool scriptTerminates{false};
+};
+
+ControlFlowOutcomes controlFlowOutcomes(const StmtNode* stmt);
+
+ControlFlowOutcomes sequenceControlFlowOutcomes(
+    const std::vector<std::unique_ptr<StmtNode>>& statements,
+    size_t startIndex = 0
+)
+{
+    ControlFlowOutcomes result;
+    result.fallsThrough = true;
+
+    for (size_t i = startIndex; i < statements.size(); ++i) {
+        if (!result.fallsThrough) {
+            break;
+        }
+        const ControlFlowOutcomes current =
+            controlFlowOutcomes(statements[i].get());
+        result.fallsThrough = current.fallsThrough;
+        result.inlineReturns =
+            result.inlineReturns || current.inlineReturns;
+        result.scriptTerminates =
+            result.scriptTerminates || current.scriptTerminates;
+    }
+    return result;
+}
+
+ControlFlowOutcomes controlFlowOutcomes(const StmtNode* stmt)
+{
+    if (!stmt) {
+        return {.fallsThrough = true};
+    }
+    if (auto returnNode = dynamic_cast<const ReturnNode*>(stmt)) {
+        return returnNode->isValueReturn
+                   ? ControlFlowOutcomes{.inlineReturns = true}
+                   : ControlFlowOutcomes{.scriptTerminates = true};
+    }
+    if (auto block = dynamic_cast<const BlockNode*>(stmt)) {
+        return sequenceControlFlowOutcomes(block->statements);
+    }
+    if (auto ifNode = dynamic_cast<const IfNode*>(stmt)) {
+        if (!ifNode->thenBranch || !ifNode->elseBranch) {
+            return {.fallsThrough = true};
+        }
+        const ControlFlowOutcomes thenOutcomes =
+            controlFlowOutcomes(ifNode->thenBranch.get());
+        const ControlFlowOutcomes elseOutcomes =
+            controlFlowOutcomes(ifNode->elseBranch.get());
+        return {
+            .fallsThrough = thenOutcomes.fallsThrough ||
+                            elseOutcomes.fallsThrough,
+            .inlineReturns = thenOutcomes.inlineReturns ||
+                             elseOutcomes.inlineReturns,
+            .scriptTerminates = thenOutcomes.scriptTerminates ||
+                                elseOutcomes.scriptTerminates,
+        };
+    }
+    if (auto forNode = dynamic_cast<const ForNode*>(stmt)) {
+        if (forNode->getStaticIterations().empty()) {
+            return {.fallsThrough = true};
+        }
+
+        ControlFlowOutcomes result{.fallsThrough = true};
+        const ControlFlowOutcomes body =
+            controlFlowOutcomes(forNode->body.get());
+        for (size_t i = 0; i < forNode->getStaticIterations().size(); ++i) {
+            if (!result.fallsThrough) {
+                break;
+            }
+            result.fallsThrough = body.fallsThrough;
+            result.inlineReturns = result.inlineReturns || body.inlineReturns;
+            result.scriptTerminates =
+                result.scriptTerminates || body.scriptTerminates;
+        }
+        return result;
+    }
+    return {.fallsThrough = true};
+}
+
+} // namespace
+
 void ASTToBytecodeVisitor::visit(ContractNode& node)
 {
     LOG_DEBUG("Visiting contract node start. name: " + node.name);
+
+    // 副栈可在同一合约的相邻 public 函数之间中继状态，但不能跨越
+    // 独立合约/编译会话。函数级 clean 会保留它，合约入口统一清空。
+    m_scopePtr->getCurrentSymtab().clearSharedAltStack();
 
 #ifdef ENABLE_DEBUGGER
     if (m_debugInfoGen) {
@@ -52,6 +281,8 @@ void ASTToBytecodeVisitor::visit(FunctionNode& node)
         m_privateFunctions[node.name] = &node;
         return;
     }
+
+    m_lastFlowResult = FlowResult::FallsThrough;
 
 #ifdef ENABLE_DEBUGGER
     size_t startPC = m_generator.getCurrentPC();
@@ -146,6 +377,9 @@ void ASTToBytecodeVisitor::visit(FunctionNode& node)
     std::string previousReturnType = m_currentFunctionReturnType;
     m_currentFunctionReturnType = node.returnType;
     if (node.block) {
+        const BlockNode* previousPublicFunctionBlock = m_publicFunctionBlock;
+        m_publicFunctionBlock = node.block.get();
+        DEFER_BLOCK(m_publicFunctionBlock = previousPublicFunctionBlock;);
         node.block->accept(*this);
     }
     m_currentFunctionReturnType = previousReturnType;
@@ -159,6 +393,7 @@ void ASTToBytecodeVisitor::visit(FunctionNode& node)
 #endif
 
     m_lastReturnNode = nullptr;
+    m_lastFlowResult = FlowResult::FallsThrough;
 
 
     LOG_DEBUG("Visiting function node end. name: " + node.name);
@@ -191,6 +426,9 @@ void ASTToBytecodeVisitor::visit(BlockNode& node)
 #endif
 
     m_scopePtr->enterScope();
+
+    const bool preservesPublicFunctionAltOutputs =
+        m_publicFunctionBlock == &node;
 
     executeStatements(node.statements);
 
@@ -244,6 +482,14 @@ void ASTToBytecodeVisitor::visit(BlockNode& node)
                 COMPILER_WARNING(warningMsg, loc);
                 LOG_WARNING(warningMsg);
             } else {
+                if (preservesPublicFunctionAltOutputs) {
+                    LOG_DEBUG(
+                        it,
+                        " remains on alt stack as a public-function handoff "
+                        "value"
+                    );
+                    continue;
+                }
                 isAltStackMap
                     .emplace(static_cast<int>(altStackPosOpt.value()), it);
             }
@@ -349,7 +595,7 @@ ASTToBytecodeVisitor::AltStackSnapshot
 ASTToBytecodeVisitor::captureAltStack() const
 {
     AltStackSnapshot snapshot;
-    auto altStack = SymbolTable::getSharedAltStack();
+    auto altStack = m_scopePtr->getCurrentSymtab().getSharedAltStack();
     if (altStack) {
         snapshot.elements = altStack->getStackContent();
         snapshot.combinedStackSize = altStack->getCombinedStackSize();
@@ -359,7 +605,7 @@ ASTToBytecodeVisitor::captureAltStack() const
 
 void ASTToBytecodeVisitor::restoreAltStack(const AltStackSnapshot& snapshot)
 {
-    auto altStack = SymbolTable::getSharedAltStack();
+    auto altStack = m_scopePtr->getCurrentSymtab().getSharedAltStack();
     altStack->replaceStackContent(snapshot.elements);
     altStack->setCombinedStackSize(snapshot.combinedStackSize);
 }
@@ -417,6 +663,25 @@ void ASTToBytecodeVisitor::collectAssignedStorageNames(
             names.push_back(name);
         }
     };
+
+    if (auto exprStmt = dynamic_cast<const ExprStmtNode*>(stmt)) {
+        auto call = dynamic_cast<const CallNode*>(exprStmt->expr.get());
+        if (!call ||
+            (call->funcName != "SetAlt" && call->funcName != "SetMain")) {
+            return;
+        }
+
+        // SetAlt/SetMain 不产生新值，却会改变外层变量所在的运行时栈。
+        // 它们必须像赋值一样参与 if 分支规范化，否则一条路径把 x
+        // 留在 main、另一条路径把 x 留在 alt，后续生成的栈偏移会失真。
+        for (const auto& arg : call->args) {
+            auto storageName = getAssignmentStorageName(arg.get());
+            if (storageName.has_value()) {
+                appendUnique(storageName.value());
+            }
+        }
+        return;
+    }
 
     if (auto assign = dynamic_cast<const AssignNode*>(stmt)) {
         auto storageName = getAssignmentStorageName(assign->name.get());
@@ -552,7 +817,8 @@ std::vector<std::string> ASTToBytecodeVisitor::collectIfMergeSymbols(
 
 void ASTToBytecodeVisitor::materializeBranchSymbols(
     const std::vector<std::string>& symbols,
-    const IfNode& node
+    const IfNode& node,
+    const AltStackSnapshot& desiredAltStack
 )
 {
     auto fail = [&](const std::string& symbol) {
@@ -572,8 +838,33 @@ void ASTToBytecodeVisitor::materializeBranchSymbols(
     };
 
     for (const auto& symbol : symbols) {
+        SymbolTable& state = m_scopePtr->getCurrentSymtab();
+        const bool keepOnAlt = std::any_of(
+            desiredAltStack.elements.begin(),
+            desiredAltStack.elements.end(),
+            [&](const StackElement& element) {
+                return element.getName() == symbol;
+            }
+        );
+        auto normalizeType = [&](StackElement& element) {
+            element.setType(
+                declaredSymbolType(state, symbol, element.getType())
+            );
+        };
+
         auto mainPos = m_scopePtr->getPos(symbol);
         if (mainPos.has_value()) {
+            normalizeType(m_scopePtr->stacktop(mainPos.value()));
+            if (keepOnAlt) {
+                std::string mutableSymbol = symbol;
+                const int32_t position =
+                    m_scopePtr->setAlt(mutableSymbol, true);
+                if (position != STACK_TOP_POS) {
+                    emitRoll(position);
+                }
+                m_generator.emit(tbc::BytOpcode::OP_TOALTSTACK);
+                continue;
+            }
             if (mainPos.value() != STACK_TOP_POS) {
                 emitRoll(mainPos.value());
                 m_scopePtr->roll(mainPos.value());
@@ -584,11 +875,17 @@ void ASTToBytecodeVisitor::materializeBranchSymbols(
         std::string mutableSymbol = symbol;
         auto fixedElement = m_scopePtr->getFixed(mutableSymbol);
         if (fixedElement.has_value()) {
+            StackElement materialized = fixedElement.value();
+            materialized.setName(symbol);
+            normalizeType(materialized);
             m_generator.emit(fixedElement->getData());
             m_scopePtr->removeFixed(mutableSymbol);
-            m_scopePtr->push(StackElement(
-                symbol, fixedElement->getType(), fixedElement->getData()
-            ));
+            if (keepOnAlt) {
+                m_generator.emit(tbc::BytOpcode::OP_TOALTSTACK);
+                state.m_altStackPtr->push(materialized);
+            } else {
+                m_scopePtr->push(materialized);
+            }
             continue;
         }
 
@@ -597,10 +894,14 @@ void ASTToBytecodeVisitor::materializeBranchSymbols(
             fail(symbol);
         }
 
-        SymbolTable& state = m_scopePtr->getCurrentSymtab();
         auto mainStack = state.m_stackPtr;
         auto altStack = state.m_altStackPtr;
         const int64_t position = altPos.value();
+
+        normalizeType(altStack->stacktop(position));
+        if (keepOnAlt) {
+            continue;
+        }
 
         // 先把目标及其上方元素全部移回主栈，目标此时位于主栈顶。
         for (int64_t i = 0; i <= position; ++i) {
@@ -622,32 +923,15 @@ void ASTToBytecodeVisitor::materializeBranchSymbols(
     }
 }
 
-bool ASTToBytecodeVisitor::statementAlwaysReturns(const StmtNode* stmt) const
+ASTToBytecodeVisitor::FlowResult
+ASTToBytecodeVisitor::statementFlow(const StmtNode* stmt) const
 {
-    if (!stmt) {
-        return false;
+    const ControlFlowOutcomes outcomes = controlFlowOutcomes(stmt);
+    if (outcomes.fallsThrough) {
+        return FlowResult::FallsThrough;
     }
-    if (dynamic_cast<const ReturnNode*>(stmt)) {
-        return true;
-    }
-    if (auto block = dynamic_cast<const BlockNode*>(stmt)) {
-        for (const auto& innerStmt : block->statements) {
-            if (statementAlwaysReturns(innerStmt.get())) {
-                return true;
-            }
-        }
-        return false;
-    }
-    if (auto ifNode = dynamic_cast<const IfNode*>(stmt)) {
-        return ifNode->thenBranch && ifNode->elseBranch &&
-               statementAlwaysReturns(ifNode->thenBranch.get()) &&
-               statementAlwaysReturns(ifNode->elseBranch.get());
-    }
-    if (auto forNode = dynamic_cast<const ForNode*>(stmt)) {
-        return !forNode->getStaticIterations().empty() &&
-               statementAlwaysReturns(forNode->body.get());
-    }
-    return false;
+    return outcomes.inlineReturns ? FlowResult::InlineReturn
+                                  : FlowResult::ScriptTerminate;
 }
 
 void ASTToBytecodeVisitor::validateBranchMerge(
@@ -673,16 +957,103 @@ void ASTToBytecodeVisitor::validateBranchMerge(
         throw std::runtime_error(oss.str());
     };
 
+    auto validateStorageState = [&fail](
+        const SymbolTable& state,
+        const AltStackSnapshot& altSnapshot,
+        const char* branchName
+    ) {
+        auto contentSize = [](const std::vector<StackElement>& elements) {
+            size_t total = 0;
+            for (const auto& element : elements) {
+                total += element.getMemoryUsage();
+            }
+            return total;
+        };
+
+        if (!state.m_stackPtr || !state.m_fixedStackPtr) {
+            fail(std::string(branchName) + " branch contains a null stack");
+        }
+        if (state.m_stackPtr->getCombinedStackSize() !=
+            contentSize(state.m_stackPtr->getStackContent())) {
+            fail(
+                std::string(branchName) +
+                " branch main-stack memory accounting is inconsistent"
+            );
+        }
+        if (state.m_fixedStackPtr->getCombinedStackSize() !=
+            contentSize(state.m_fixedStackPtr->getStackContent())) {
+            fail(
+                std::string(branchName) +
+                " branch fixed-stack memory accounting is inconsistent"
+            );
+        }
+        if (altSnapshot.combinedStackSize !=
+            contentSize(altSnapshot.elements)) {
+            fail(
+                std::string(branchName) +
+                " branch alt-stack memory accounting is inconsistent"
+            );
+        }
+
+        auto validateUniqueNames = [&fail, branchName](
+            const std::vector<StackElement>& elements,
+            std::set<std::string>& storageNames,
+            const char* storageName
+        ) {
+            for (const auto& element : elements) {
+                if (!element.getName().empty() &&
+                    !storageNames.insert(element.getName()).second) {
+                    fail(
+                        std::string(branchName) + " branch stores symbol '" +
+                        element.getName() + "' more than once in " +
+                        storageName
+                    );
+                }
+            }
+        };
+        std::set<std::string> runtimeNames;
+        validateUniqueNames(
+            state.m_stackPtr->getStackContent(),
+            runtimeNames,
+            "the runtime stacks"
+        );
+        validateUniqueNames(
+            altSnapshot.elements, runtimeNames, "the runtime stacks"
+        );
+
+        // 重新绑定期间 fixed 与 runtime 可以暂时保留同名旧值，合并阶段
+        // 会按新运行时值移除 fixed；fixed 自身仍不得出现重复槽。
+        std::set<std::string> fixedNames;
+        validateUniqueNames(
+            state.m_fixedStackPtr->getStackContent(),
+            fixedNames,
+            "the fixed stack"
+        );
+    };
+
+    validateStorageState(thenState, thenAltStack, "then");
+    validateStorageState(elseState, elseAltStack, "else");
+
     auto sameLayout = [](
                           const std::vector<StackElement>& lhs,
-                          const std::vector<StackElement>& rhs
+                          const std::vector<std::string>& lhsKept,
+                          const std::vector<StackElement>& rhs,
+                          const std::vector<std::string>& rhsKept
                       ) {
         if (lhs.size() != rhs.size()) {
             return false;
         }
         for (size_t i = 0; i < lhs.size(); ++i) {
-            if (lhs[i].getName() != rhs[i].getName() ||
-                lhs[i].getType() != rhs[i].getType()) {
+            const bool bothAreInlineReturns =
+                std::find(lhsKept.begin(), lhsKept.end(), lhs[i].getName()) !=
+                    lhsKept.end() &&
+                std::find(rhsKept.begin(), rhsKept.end(), rhs[i].getName()) !=
+                    rhsKept.end();
+            if ((!bothAreInlineReturns &&
+                 lhs[i].getName() != rhs[i].getName()) ||
+                !compatibleStackTypes(
+                    lhs[i].getType(), rhs[i].getType()
+                )) {
                 return false;
             }
         }
@@ -696,11 +1067,40 @@ void ASTToBytecodeVisitor::validateBranchMerge(
     const auto& elseMain = elseState.m_stackPtr
                                ? elseState.m_stackPtr->getStackContent()
                                : emptyStack;
-    if (!sameLayout(thenMain, elseMain)) {
-        fail("main stack layouts differ after branch materialization");
+    auto describeLayout = [](const std::vector<StackElement>& elements) {
+        std::ostringstream oss;
+        oss << "[";
+        for (size_t i = 0; i < elements.size(); ++i) {
+            if (i != 0) {
+                oss << ", ";
+            }
+            oss << elements[i].getName() << ":" << elements[i].getType();
+        }
+        oss << "]";
+        return oss.str();
+    };
+    if (!sameLayout(
+            thenMain,
+            thenState.m_keepSymbol,
+            elseMain,
+            elseState.m_keepSymbol
+        )) {
+        fail(
+            "main stack layouts differ after branch materialization: then=" +
+            describeLayout(thenMain) + ", else=" + describeLayout(elseMain)
+        );
     }
-    if (!sameLayout(thenAltStack.elements, elseAltStack.elements)) {
-        fail("alternative stack layouts differ");
+    if (!sameLayout(
+            thenAltStack.elements,
+            thenState.m_keepSymbol,
+            elseAltStack.elements,
+            elseState.m_keepSymbol
+        )) {
+        fail(
+            "alternative stack layouts differ: then=" +
+            describeLayout(thenAltStack.elements) +
+            ", else=" + describeLayout(elseAltStack.elements)
+        );
     }
 
     auto isMergeSymbol = [&](const std::string& name) {
@@ -783,6 +1183,22 @@ SymbolTable ASTToBytecodeVisitor::buildMergedBranchState(
         }
     }
 
+    // lowercase return 产生的 keep 槽可能来自分支局部变量。虽然其声明
+    // 不能泄漏到父作用域，返回槽本身必须跨越分支与外层块清理继续存活。
+    for (const auto& kept : continuingState.m_keepSymbol) {
+        const bool represented =
+            continuingState.getPos(kept).has_value() ||
+            continuingState.getPos(kept, true).has_value();
+        if (represented &&
+            std::find(
+                mergedState.m_keepSymbol.begin(),
+                mergedState.m_keepSymbol.end(),
+                kept
+            ) == mergedState.m_keepSymbol.end()) {
+            mergedState.m_keepSymbol.push_back(kept);
+        }
+    }
+
     // 防止同一名字同时残留在固定区和主栈。
     if (mergedState.m_stackPtr) {
         for (const auto& element :
@@ -827,10 +1243,239 @@ void ASTToBytecodeVisitor::visit(IfNode& node)
     const AltStackSnapshot entryAltStack = captureAltStack();
     const auto mergeSymbols =
         collectIfMergeSymbols(node, entryState, entryAltStack);
-    const bool thenAlwaysReturns =
-        statementAlwaysReturns(node.thenBranch.get());
-    const bool elseAlwaysReturns =
-        statementAlwaysReturns(node.elseBranch.get());
+    AltStackSnapshot desiredAltStack = entryAltStack;
+    auto entryLocation = [&](const std::string& symbol) {
+        return std::any_of(
+                   entryAltStack.elements.begin(),
+                   entryAltStack.elements.end(),
+                   [&](const StackElement& element) {
+                       return element.getName() == symbol;
+                   }
+               )
+                   ? StorageLocation::Alt
+                   : StorageLocation::Main;
+    };
+    for (const auto& symbol : mergeSymbols) {
+        const StorageLocation initial = entryLocation(symbol);
+        const StorageLocation thenLocation = storageAfterStatement(
+            node.thenBranch.get(), symbol, initial
+        );
+        const StorageLocation elseLocation = storageAfterStatement(
+            node.elseBranch.get(), symbol, initial
+        );
+        if (thenLocation == StorageLocation::Unknown ||
+            thenLocation != elseLocation) {
+            continue;
+        }
+
+        desiredAltStack.elements.erase(
+            std::remove_if(
+                desiredAltStack.elements.begin(),
+                desiredAltStack.elements.end(),
+                [&](const StackElement& element) {
+                    return element.getName() == symbol;
+                }
+            ),
+            desiredAltStack.elements.end()
+        );
+        if (thenLocation == StorageLocation::Alt) {
+            desiredAltStack.elements.emplace_back(
+                symbol,
+                declaredSymbolType(entryState, symbol, ""),
+                symbol
+            );
+        }
+    }
+    auto contextualBranchFlow = [&](const StmtNode* branch) {
+        const FlowResult directFlow = statementFlow(branch);
+        if (directFlow != FlowResult::FallsThrough ||
+            !m_inlineContinuationStatements) {
+            return directFlow;
+        }
+
+        const ControlFlowOutcomes branchOutcomes =
+            controlFlowOutcomes(branch);
+        const ControlFlowOutcomes continuationOutcomes =
+            sequenceControlFlowOutcomes(
+                *m_inlineContinuationStatements,
+                m_inlineContinuationStart
+            );
+        // 嵌套分支的部分路径已 lowercase return、其余路径会落到祖先
+        // block 的 continuation；当 continuation 的所有路径也都返回时，
+        // 对当前 if 来说该分支已等价为完整 InlineReturn。纯 fallthrough
+        // 分支不能提升，否则当前 if 将失去生成 guard 的机会。
+        if (branchOutcomes.inlineReturns && branchOutcomes.fallsThrough &&
+            !branchOutcomes.scriptTerminates &&
+            continuationOutcomes.inlineReturns &&
+            !continuationOutcomes.fallsThrough &&
+            !continuationOutcomes.scriptTerminates) {
+            return FlowResult::InlineReturn;
+        }
+        return directFlow;
+    };
+    const FlowResult thenFlow = contextualBranchFlow(node.thenBranch.get());
+    const FlowResult elseFlow = contextualBranchFlow(node.elseBranch.get());
+    const bool thenReachesEnd = thenFlow != FlowResult::ScriptTerminate;
+    const bool elseReachesEnd = elseFlow != FlowResult::ScriptTerminate;
+    const bool hasOneSidedInlineReturn =
+        (thenFlow == FlowResult::InlineReturn &&
+         elseFlow == FlowResult::FallsThrough) ||
+        (thenFlow == FlowResult::FallsThrough &&
+         elseFlow == FlowResult::InlineReturn);
+    const auto* inlineContinuationStatements =
+        m_inlineContinuationStatements;
+    const size_t inlineContinuationStart = m_inlineContinuationStart;
+    size_t oneSidedReturnArity = 0;
+    std::string inlineGuardName;
+    std::vector<std::string> inlineDummyNames;
+    if (hasOneSidedInlineReturn) {
+        if (!inlineContinuationStatements) {
+            SourceLocation loc = getNodeLocation(node);
+            std::ostringstream oss;
+            oss << "lowercase return in only one if branch at line "
+                << node.pos.first << ", column " << node.pos.second
+                << " has no continuation that can produce the other return "
+                   "value";
+            SEMANTIC_ERROR(
+                oss.str(),
+                loc,
+                "Return on both branches or add a return after the if"
+            );
+            LOG_ERROR(oss.str());
+            throw std::runtime_error(oss.str());
+        }
+        const StmtNode* returningBranch =
+            thenFlow == FlowResult::InlineReturn ? node.thenBranch.get()
+                                                 : node.elseBranch.get();
+        auto returnArity = inlineReturnArity(returningBranch);
+        if (!returnArity.has_value() || returnArity.value() == 0) {
+            throw std::runtime_error(
+                "cannot determine lowercase return arity for conditional "
+                "private-function return"
+            );
+        }
+        oneSidedReturnArity = returnArity.value();
+        inlineGuardName = CompilerPlaceholder().toString();
+        for (size_t i = 0; i < oneSidedReturnArity; ++i) {
+            inlineDummyNames.push_back(CompilerPlaceholder().toString());
+        }
+    }
+
+    auto appendInlineGuardState = [&](FlowResult branchFlow) {
+        if (!hasOneSidedInlineReturn) {
+            return;
+        }
+        SymbolTable& state = m_scopePtr->getCurrentSymtab();
+        if (branchFlow == FlowResult::InlineReturn) {
+            const std::vector<std::string> emptyBase;
+            const auto& baseStorageNames =
+                m_privateFunctionBaseStorageNames.empty()
+                    ? emptyBase
+                    : m_privateFunctionBaseStorageNames.back();
+            auto shouldRetain = [&](const std::string& name) {
+                return std::find(
+                           baseStorageNames.begin(),
+                           baseStorageNames.end(),
+                           name
+                       ) != baseStorageNames.end() ||
+                       std::find(
+                           state.m_keepSymbol.begin(),
+                           state.m_keepSymbol.end(),
+                           name
+                       ) != state.m_keepSymbol.end();
+            };
+
+            // 早返回路径不会执行函数尾部的普通局部清理，因此在分支内
+            // 先移除该私有函数新增且未作为返回值保留的运行时槽。
+            std::vector<std::string> mainLocals;
+            if (state.m_stackPtr) {
+                for (const auto& element :
+                     state.m_stackPtr->getStackContent()) {
+                    if (!shouldRetain(element.getName())) {
+                        mainLocals.push_back(element.getName());
+                    }
+                }
+            }
+            std::sort(
+                mainLocals.begin(),
+                mainLocals.end(),
+                [&](const std::string& lhs, const std::string& rhs) {
+                    return state.getPos(lhs).value_or(INT64_MAX) <
+                           state.getPos(rhs).value_or(INT64_MAX);
+                }
+            );
+            for (const auto& localName : mainLocals) {
+                auto position = state.getPos(localName);
+                if (!position.has_value()) {
+                    continue;
+                }
+                if (position.value() != STACK_TOP_POS) {
+                    emitRoll(position.value());
+                    state.roll(position.value());
+                }
+                state.pop();
+                m_generator.emit(tbc::BytOpcode::OP_DROP);
+            }
+
+            std::vector<std::string> altLocals;
+            if (state.m_altStackPtr) {
+                for (const auto& element :
+                     state.m_altStackPtr->getStackContent()) {
+                    if (!shouldRetain(element.getName())) {
+                        altLocals.push_back(element.getName());
+                    }
+                }
+            }
+            std::sort(
+                altLocals.begin(),
+                altLocals.end(),
+                [&](const std::string& lhs, const std::string& rhs) {
+                    return state.getPos(lhs, true).value_or(INT64_MAX) <
+                           state.getPos(rhs, true).value_or(INT64_MAX);
+                }
+            );
+            for (const auto& localName : altLocals) {
+                auto position = state.getPos(localName, true);
+                if (!position.has_value()) {
+                    continue;
+                }
+                for (int64_t i = 0; i <= position.value(); ++i) {
+                    m_generator.emit(tbc::BytOpcode::OP_FROMALTSTACK);
+                    StackElement topElement = state.m_altStackPtr->top();
+                    state.m_altStackPtr->pop();
+                    state.m_stackPtr->push(topElement);
+                }
+                state.pop();
+                m_generator.emit(tbc::BytOpcode::OP_DROP);
+                for (int64_t i = 0; i < position.value(); ++i) {
+                    m_generator.emit(tbc::BytOpcode::OP_TOALTSTACK);
+                    StackElement topElement = state.m_stackPtr->top();
+                    state.m_stackPtr->pop();
+                    state.m_altStackPtr->push(topElement);
+                }
+            }
+
+            // 返回槽统一放到主栈顶部，后接 true 标记。
+            for (const auto& returnName : state.m_keepSymbol) {
+                auto position = state.getPos(returnName);
+                if (position.has_value() &&
+                    position.value() != STACK_TOP_POS) {
+                    emitRoll(position.value());
+                    state.roll(position.value());
+                }
+            }
+            m_generator.emit(tbc::BytOpcode::OP_1);
+        } else {
+            // 未返回路径先放等宽占位槽，再放 false 标记。后续 OP_NOTIF
+            // 只在该路径删除占位并执行余下语句。
+            for (const auto& dummyName : inlineDummyNames) {
+                m_generator.emit(tbc::BytOpcode::OP_0);
+                state.push(dummyName, "", "0x00");
+            }
+            m_generator.emit(tbc::BytOpcode::OP_0);
+        }
+        state.push(inlineGuardName, "bool", inlineGuardName);
+    };
 
     if (!node.thenBranch) {
         SourceLocation loc = getNodeLocation(node);
@@ -848,15 +1493,17 @@ void ASTToBytecodeVisitor::visit(IfNode& node)
         );
         return; // 跳过这个 if, 让编译继续.
     } else {
+        m_lastFlowResult = FlowResult::FallsThrough;
         node.thenBranch->accept(*this);
     }
 
 #ifdef ENABLE_DEBUGGER
     setCurrentLocationForGenerator(node);
 #endif
-    if (!thenAlwaysReturns) {
-        materializeBranchSymbols(mergeSymbols, node);
+    if (thenReachesEnd) {
+        materializeBranchSymbols(mergeSymbols, node, desiredAltStack);
     }
+    appendInlineGuardState(thenFlow);
     LOG_DEBUG("End of if branch");
     SymbolTable thenState = m_scopePtr->exitScope();
     const AltStackSnapshot thenAltStack = captureAltStack();
@@ -867,6 +1514,7 @@ void ASTToBytecodeVisitor::visit(IfNode& node)
 
     if (node.elseBranch) {
         m_generator.emit(tbc::BytOpcode::OP_ELSE);
+        m_lastFlowResult = FlowResult::FallsThrough;
         node.elseBranch->accept(*this);
     } else {
         // TODO: 暂不支持缺 else 分支.
@@ -888,9 +1536,10 @@ void ASTToBytecodeVisitor::visit(IfNode& node)
 #ifdef ENABLE_DEBUGGER
     setCurrentLocationForGenerator(node);
 #endif
-    if (!elseAlwaysReturns) {
-        materializeBranchSymbols(mergeSymbols, node);
+    if (elseReachesEnd) {
+        materializeBranchSymbols(mergeSymbols, node, desiredAltStack);
     }
+    appendInlineGuardState(elseFlow);
     SymbolTable elseState = m_scopePtr->exitScope();
     const AltStackSnapshot elseAltStack = captureAltStack();
     LOG_DEBUG("End of else branch");
@@ -898,7 +1547,107 @@ void ASTToBytecodeVisitor::visit(IfNode& node)
     SymbolTable mergedState = entryState;
     AltStackSnapshot mergedAltStack = entryAltStack;
 
-    if (!thenAlwaysReturns && !elseAlwaysReturns) {
+    if (hasOneSidedInlineReturn) {
+        // 原 if 的两条路径先汇合为 [返回槽..., returned]。随后 NOTIF
+        // 仅在未返回路径删除占位槽并执行函数余下语句。这样 lowercase
+        // return 不需要运行时跳转操作码，也不会错误执行 return 后的代码。
+        m_generator.emit(tbc::BytOpcode::OP_ENDIF);
+
+        const bool thenIsReturn = thenFlow == FlowResult::InlineReturn;
+        SymbolTable returningState = thenIsReturn ? thenState : elseState;
+        AltStackSnapshot returningAlt =
+            thenIsReturn ? thenAltStack : elseAltStack;
+        SymbolTable fallingState = thenIsReturn ? elseState : thenState;
+        AltStackSnapshot fallingAlt =
+            thenIsReturn ? elseAltStack : thenAltStack;
+
+        auto removeGuard = [&](SymbolTable& state) {
+            auto guard = state.pop();
+            if (!guard.has_value() ||
+                guard->getName() != inlineGuardName) {
+                throw std::logic_error(
+                    "conditional inline-return guard is missing from stack"
+                );
+            }
+        };
+        removeGuard(returningState);
+
+        m_scopePtr->replaceCurrentSymtab(fallingState);
+        restoreAltStack(fallingAlt);
+        auto runtimeGuard = m_scopePtr->pop();
+        if (!runtimeGuard.has_value() ||
+            runtimeGuard->getName() != inlineGuardName) {
+            throw std::logic_error(
+                "conditional inline-return fallthrough guard is missing"
+            );
+        }
+        m_generator.emit(tbc::BytOpcode::OP_NOTIF);
+        for (size_t i = 0; i < oneSidedReturnArity; ++i) {
+            auto dummy = m_scopePtr->pop();
+            if (!dummy.has_value()) {
+                throw std::logic_error(
+                    "conditional inline-return dummy slot is missing"
+                );
+            }
+            m_generator.emit(tbc::BytOpcode::OP_DROP);
+        }
+
+        // 允许余下语句中的下一个单边 return 建立自己的 continuation。
+        m_inlineContinuationStatements = nullptr;
+        m_inlineContinuationStart = 0;
+        m_lastFlowResult = FlowResult::FallsThrough;
+        executeStatements(
+            *inlineContinuationStatements, inlineContinuationStart
+        );
+        const FlowResult continuationFlow = m_lastFlowResult;
+        if (continuationFlow == FlowResult::FallsThrough) {
+            SourceLocation loc = getNodeLocation(node);
+            std::ostringstream oss;
+            oss << "not all paths after lowercase return at line "
+                << node.pos.first << ", column " << node.pos.second
+                << " produce a private-function return value";
+            SEMANTIC_ERROR(
+                oss.str(),
+                loc,
+                "Add a lowercase return on the remaining path"
+            );
+            LOG_ERROR(oss.str());
+            throw std::runtime_error(oss.str());
+        }
+
+        SymbolTable continuationState = m_scopePtr->getCurrentSymtab();
+        AltStackSnapshot continuationAlt = captureAltStack();
+        m_generator.emit(tbc::BytOpcode::OP_ENDIF);
+
+        if (continuationFlow == FlowResult::InlineReturn) {
+            validateBranchMerge(
+                node,
+                entryState,
+                returningState,
+                returningAlt,
+                continuationState,
+                continuationAlt,
+                {}
+            );
+            mergedState = buildMergedBranchState(
+                entryState, continuationState, {}
+            );
+            mergedAltStack = continuationAlt;
+        } else {
+            // continuation 以 OP_RETURN 终止时，仅早返回路径能到达后续。
+            mergedState = buildMergedBranchState(
+                entryState, returningState, {}
+            );
+            mergedAltStack = returningAlt;
+        }
+
+        m_scopePtr->replaceCurrentSymtab(mergedState);
+        restoreAltStack(mergedAltStack);
+        m_lastFlowResult = FlowResult::InlineReturn;
+        return;
+    }
+
+    if (thenReachesEnd && elseReachesEnd) {
         validateBranchMerge(
             node,
             entryState,
@@ -911,12 +1660,12 @@ void ASTToBytecodeVisitor::visit(IfNode& node)
         mergedState =
             buildMergedBranchState(entryState, thenState, mergeSymbols);
         mergedAltStack = thenAltStack;
-    } else if (!thenAlwaysReturns) {
+    } else if (thenReachesEnd) {
         // else 已终止，只有 then 会到达 OP_ENDIF 后的代码。
         mergedState =
             buildMergedBranchState(entryState, thenState, mergeSymbols);
         mergedAltStack = thenAltStack;
-    } else if (!elseAlwaysReturns) {
+    } else if (elseReachesEnd) {
         // then 已终止，只有 else 会到达 OP_ENDIF 后的代码。
         mergedState =
             buildMergedBranchState(entryState, elseState, mergeSymbols);
@@ -930,6 +1679,16 @@ void ASTToBytecodeVisitor::visit(IfNode& node)
     m_generator.emit(tbc::BytOpcode::OP_ENDIF);
     m_scopePtr->replaceCurrentSymtab(mergedState);
     restoreAltStack(mergedAltStack);
+
+    if (thenFlow != FlowResult::FallsThrough &&
+        elseFlow != FlowResult::FallsThrough) {
+        m_lastFlowResult = thenFlow == FlowResult::InlineReturn ||
+                                   elseFlow == FlowResult::InlineReturn
+                               ? FlowResult::InlineReturn
+                               : FlowResult::ScriptTerminate;
+    } else {
+        m_lastFlowResult = FlowResult::FallsThrough;
+    }
 }
 
 void ASTToBytecodeVisitor::visit(ForNode& node)
@@ -946,17 +1705,115 @@ void ASTToBytecodeVisitor::visit(ForNode& node)
         LOG_WARNING(
             "for loop has no iterations after static analysis, skipping body"
         );
+        m_lastFlowResult = FlowResult::FallsThrough;
         return;
     }
 
-    bool hasSymbol = m_scopePtr->symbolExists(node.target);
-    bool firstIteration = true;
+    const SymbolTable parentState = m_scopePtr->getCurrentSymtab();
+    std::string targetName = node.target;
+    const bool targetExistedBeforeLoop =
+        m_scopePtr->symbolExists(targetName);
     const std::string& inferredType = node.getInferredType();
+
+    // loop target 属于 for scope；每次展开的 body 又属于独立 BlockNode
+    // scope。这样 body 局部变量能在下一轮重新声明，外层变量的更新则从
+    // 上一轮延续。
+    m_scopePtr->enterScope();
+
+    auto storageBelongsTo = [](const std::string& storageName,
+                               const std::string& symbolName) {
+        if (storageName == symbolName) {
+            return true;
+        }
+        if (storageName.size() <= symbolName.size() ||
+            storageName.compare(0, symbolName.size(), symbolName) != 0) {
+            return false;
+        }
+        const char separator = storageName[symbolName.size()];
+        return separator == '.' || separator == '[';
+    };
+
+    auto removeBodyLocals = [&](SymbolTable state,
+                                const SymbolTable& iterationEntry,
+                                bool preserveKeptLocals) {
+        std::set<std::string> entrySymbols;
+        for (const auto& entry : iterationEntry.m_currentScope) {
+            entrySymbols.insert(entry.first);
+        }
+
+        std::vector<std::string> bodyLocalSymbols;
+        for (const auto& entry : state.m_currentScope) {
+            if (entrySymbols.count(entry.first) == 0) {
+                bool isKept = false;
+                if (preserveKeptLocals) {
+                    for (const auto& keptName : state.m_keepSymbol) {
+                        if (storageBelongsTo(keptName, entry.first)) {
+                            isKept = true;
+                            break;
+                        }
+                    }
+                }
+                if (isKept) {
+                    continue;
+                }
+                bodyLocalSymbols.push_back(entry.first);
+            }
+        }
+
+        auto isBodyLocalStorage = [&](const std::string& storageName) {
+            for (const auto& localName : bodyLocalSymbols) {
+                if (storageBelongsTo(storageName, localName)) {
+                    return true;
+                }
+            }
+            return false;
+        };
+
+        for (const auto& localName : bodyLocalSymbols) {
+            state.removeSymbol(localName);
+        }
+
+        if (state.m_fixedStackPtr) {
+            std::vector<StackElement> retainedFixed;
+            for (const auto& element :
+                 state.m_fixedStackPtr->getStackContent()) {
+                if (!isBodyLocalStorage(element.getName())) {
+                    retainedFixed.push_back(element);
+                }
+            }
+            state.m_fixedStackPtr->replaceStackContent(retainedFixed);
+        }
+
+        // BlockNode 已负责发射运行时局部值的清理操作。这里同步清除它
+        // 留下的声明/新槽元数据，同时保留外层变量在 body 中重新绑定后
+        // 产生的新槽记录。
+        state.m_declaredSymbols = iterationEntry.m_declaredSymbols;
+        state.m_newSymbol.erase(
+            std::remove_if(
+                state.m_newSymbol.begin(),
+                state.m_newSymbol.end(),
+                isBodyLocalStorage
+            ),
+            state.m_newSymbol.end()
+        );
+        state.m_keepSymbol.erase(
+            std::remove_if(
+                state.m_keepSymbol.begin(),
+                state.m_keepSymbol.end(),
+                isBodyLocalStorage
+            ),
+            state.m_keepSymbol.end()
+        );
+
+        return state;
+    };
+
+    FlowResult loopFlow = FlowResult::FallsThrough;
 
     for (size_t idx = 0; idx < iterations.size(); ++idx) {
         std::string literalStr = std::to_string(iterations[idx]);
 
-        if (!hasSymbol && firstIteration) {
+        if (!targetExistedBeforeLoop && idx == 0) {
             auto literalExpr = std::make_unique<LiteralNode>(
                 LiteralNode::Type::Number,
                 literalStr,
@@ -971,7 +1828,6 @@ void ASTToBytecodeVisitor::visit(ForNode& node)
                 std::move(literalExpr)
             );
             varDecl.accept(*this);
-            hasSymbol = true;
         } else {
             auto literalExpr = std::make_unique<LiteralNode>(
                 LiteralNode::Type::Number,
@@ -992,12 +1848,76 @@ void ASTToBytecodeVisitor::visit(ForNode& node)
         }
 
         if (node.body) {
-            // 循环体不开新作用域: 迭代间需共享栈状态 (例如累加器).
-            executeStatements(node.body->statements);
-        }
+            const SymbolTable iterationEntry =
+                m_scopePtr->getCurrentSymtab();
 
-        firstIteration = false;
+            // 走 BlockNode visitor，既生成每轮独立的词法/调试作用域，也
+            // 复用统一的运行时局部清理逻辑。
+            m_lastFlowResult = FlowResult::FallsThrough;
+            node.body->accept(*this);
+            const FlowResult bodyFlow = m_lastFlowResult;
+            SymbolTable iterationExit = m_scopePtr->getCurrentSymtab();
+
+            // BlockNode::visit() 的 enterScope 只建立清理边界；for 在此
+            // 显式弹出该边界，并将过滤掉本轮局部声明后的状态带入下一轮。
+            m_scopePtr->exitScope();
+            m_scopePtr->replaceCurrentSymtab(
+                removeBodyLocals(
+                    std::move(iterationExit),
+                    iterationEntry,
+                    bodyFlow != FlowResult::FallsThrough
+                )
+            );
+
+            if (bodyFlow != FlowResult::FallsThrough) {
+                loopFlow = bodyFlow;
+                break;
+            }
+        }
     }
+
+    SymbolTable loopExitState = m_scopePtr->getCurrentSymtab();
+    m_scopePtr->exitScope();
+
+    if (!targetExistedBeforeLoop) {
+        loopExitState.removeSymbol(node.target);
+        loopExitState.removeFixed(targetName);
+
+        auto isLoopTargetStorage = [&](const std::string& storageName) {
+            return storageBelongsTo(storageName, node.target);
+        };
+        loopExitState.m_newSymbol.erase(
+            std::remove_if(
+                loopExitState.m_newSymbol.begin(),
+                loopExitState.m_newSymbol.end(),
+                isLoopTargetStorage
+            ),
+            loopExitState.m_newSymbol.end()
+        );
+        loopExitState.m_keepSymbol.erase(
+            std::remove_if(
+                loopExitState.m_keepSymbol.begin(),
+                loopExitState.m_keepSymbol.end(),
+                isLoopTargetStorage
+            ),
+            loopExitState.m_keepSymbol.end()
+        );
+    }
+
+    // 恢复父作用域的声明归属；栈/fixed/alt 内容来自最后一轮，确保外层
+    // 变量的重新绑定跨迭代、跨 for 继续生效。
+    loopExitState.m_declaredSymbols = parentState.m_declaredSymbols;
+    std::vector<std::string> mergedNewSymbols = parentState.m_newSymbol;
+    for (const auto& name : loopExitState.m_newSymbol) {
+        if (std::find(
+                mergedNewSymbols.begin(), mergedNewSymbols.end(), name
+            ) == mergedNewSymbols.end()) {
+            mergedNewSymbols.push_back(name);
+        }
+    }
+    loopExitState.m_newSymbol = std::move(mergedNewSymbols);
+    m_scopePtr->replaceCurrentSymtab(loopExitState);
+    m_lastFlowResult = loopFlow;
 
     LOG_DEBUG("Visiting for node end.");
 }
@@ -1166,6 +2086,13 @@ void ASTToBytecodeVisitor::visit(AssignNode& node)
 
     auto valueElement = valueElementOpt.value();
     auto valueElementStr = valueElement.getName();
+    const auto* rhsCall = dynamic_cast<const CallNode*>(node.value.get());
+    const bool isPrivateCallResult =
+        rhsCall && m_privateFunctions.find(rhsCall->funcName) !=
+                       m_privateFunctions.end();
+    const bool isRuntimeExpressionResult =
+        CompilerPlaceholder::isPlaceholder(valueElementStr) ||
+        isPrivateCallResult;
 
     // 复合类型变量不能直接承接 script 元素 (常量): 否则常量进入 fixed 区
     // 顶替复合变量名, 后续 a.field 在 FieldAccessNode 中无法识别.
@@ -1190,7 +2117,7 @@ void ASTToBytecodeVisitor::visit(AssignNode& node)
     // 和元数据搬到 a, 跳过标量专用流程 (ROLL+DROP/重命名/setFixed 对复合
     // 变量会产生错误语义).
     if (isFirstBinding && !leftVarName.empty() && !valueElementStr.empty() &&
-        !CompilerPlaceholder::isPlaceholder(valueElementStr) &&
+        !isRuntimeExpressionResult &&
         !isScript(valueElementStr) && valueElementStr != leftVarName) {
         if (transferCompositeIdentity(valueElementStr, leftVarName)) {
             LOG_DEBUG("Visiting assign node end (composite transfer).");
@@ -1203,7 +2130,7 @@ void ASTToBytecodeVisitor::visit(AssignNode& node)
 
     // 栈到栈精确拷贝: b = a, 二者均在主栈上.
     bool isStackToStackCopy =
-        !CompilerPlaceholder::isPlaceholder(valueElementStr) &&
+        !isRuntimeExpressionResult &&
         elementPosOpt.has_value() && comElementPos.has_value();
 
     if (isStackToStackCopy) {
@@ -1276,13 +2203,12 @@ void ASTToBytecodeVisitor::visit(AssignNode& node)
         // 零成本赋值: LHS 是新变量、RHS 已在主栈时直接重命名原槽位免 PICK.
         bool isZeroCostAssignment =
             !comElementPos.has_value() && elementPosOpt.has_value() &&
-            !CompilerPlaceholder::isPlaceholder(valueElementStr);
+            !isRuntimeExpressionResult;
 
         if (comElementPos.has_value()) {
             auto vmElementPos = 0;
             // PICK/占位符结果在栈顶+1, 目标槽位下移 1; RHS 不在主栈时不偏移.
-            if (CompilerPlaceholder::isPlaceholder(valueElementStr) ||
-                elementPosOpt.has_value()) {
+            if (isRuntimeExpressionResult || elementPosOpt.has_value()) {
                 vmElementPos = comElementPos.value() + 1;
             } else {
                 vmElementPos = comElementPos.value();
@@ -1319,8 +2245,8 @@ void ASTToBytecodeVisitor::visit(AssignNode& node)
                     "\" at stack position ",
                     elementPosOpt.value()
                 );
-            } else if (CompilerPlaceholder::isPlaceholder(valueElementStr)) {
-                // 3b: 非栈左 = 占位符右 -> push 左值, 绑到栈顶占位符槽.
+            } else if (isRuntimeExpressionResult) {
+                // 3b: 非栈左 = 运行时表达式结果 -> push 左值并绑定栈顶槽.
                 m_scopePtr->push(
                     nameElementStr,
                     rightHandSideElement.value().getType(),
@@ -1347,9 +2273,9 @@ void ASTToBytecodeVisitor::visit(AssignNode& node)
                 );
             }
         } else {
-            if (CompilerPlaceholder::isPlaceholder(valueElementStr)) {
-                // 1b: 栈左 = 占位符右 -> 字节码已含 +1 偏移 ROLL+DROP,
-                // 编译器层 roll LHS 到栈顶, 占位符运行时值即 LHS 新内容.
+            if (isRuntimeExpressionResult) {
+                // 1b: 栈左 = 运行时表达式结果 -> 字节码已含 +1 偏移
+                // ROLL+DROP，编译器层 roll LHS 到栈顶作为新内容。
                 m_scopePtr->roll(comElementPos.value());
                 LOG_INFO(
                     "Stack to placeholder assignment: rolled \"",
@@ -1391,13 +2317,19 @@ void ASTToBytecodeVisitor::visit(ExprStmtNode& node)
     const bool isCall = dynamic_cast<CallNode*>(node.expr.get()) != nullptr ||
                         dynamic_cast<MethodCallNode*>(node.expr.get()) != nullptr;
     const size_t preSize = m_scopePtr->size();
+    const std::string preBytecode = m_generator.subStr();
     visitExpr(*node.expr);
     const size_t postSize = m_scopePtr->size();
+    const bool producedRuntimeValue = m_generator.subStr() != preBytecode;
     if (!isCall && postSize > preSize) {
         const size_t delta = postSize - preSize;
         for (size_t k = 0; k < delta; ++k) {
             m_scopePtr->pop();
-            m_generator.emit(tbc::BytOpcode::OP_DROP);
+            // 字面量和 fixed 标识符只产生编译期伪值，并没有向运行时栈
+            // 写入数据；这种情况下只清理符号模型，不能生成幽灵 DROP。
+            if (producedRuntimeValue) {
+                m_generator.emit(tbc::BytOpcode::OP_DROP);
+            }
         }
     }
     LOG_DEBUG("Visiting exprstmt node end.");
@@ -1412,6 +2344,8 @@ void ASTToBytecodeVisitor::visit(ReturnNode& node)
 #endif
 
     m_currentReturnNode = &node;
+    m_lastFlowResult = node.isValueReturn ? FlowResult::InlineReturn
+                                          : FlowResult::ScriptTerminate;
 
     // 大写 Return: 计算表达式并生成返回值; 小写 return: 值已在栈顶, 仅标记.
     if (!node.isValueReturn) {
@@ -1535,22 +2469,98 @@ void ASTToBytecodeVisitor::visit(ReturnNode& node)
         // 小写 return: 返回值在作用域清理时必须被 keep, 不能 DROP.
         // 支持 `return someVar` 与 `return {a, b, c}` 多变量大括号.
         SymbolTable& symbolTable = m_scopePtr->getCurrentSymtab();
+        auto preserveReturnSymbol = [&](const std::string& varName) {
+            auto appendKeep = [&]() {
+                if (std::find(
+                        symbolTable.m_keepSymbol.begin(),
+                        symbolTable.m_keepSymbol.end(),
+                        varName
+                    ) == symbolTable.m_keepSymbol.end()) {
+                    symbolTable.m_keepSymbol.push_back(varName);
+                }
+            };
+
+            auto mainPosOpt = symbolTable.getPos(varName);
+            if (mainPosOpt.has_value()) {
+                auto& element =
+                    symbolTable.m_stackPtr->stacktop(mainPosOpt.value());
+                element.setType(declaredSymbolType(
+                    symbolTable, varName, element.getType()
+                ));
+                if (mainPosOpt.value() != STACK_TOP_POS) {
+                    emitRoll(mainPosOpt.value());
+                    symbolTable.roll(mainPosOpt.value());
+                }
+                appendKeep();
+                return;
+            }
+
+            auto altPosOpt = symbolTable.getPos(varName, true);
+            if (altPosOpt.has_value()) {
+                auto mainStack = symbolTable.m_stackPtr;
+                auto altStack = symbolTable.m_altStackPtr;
+                auto& element = altStack->stacktop(altPosOpt.value());
+                element.setType(declaredSymbolType(
+                    symbolTable, varName, element.getType()
+                ));
+
+                // lower return 是函数调用结果，必须位于主栈顶部。只移动
+                // 目标，并将原先位于目标上方的副栈元素按原序放回。
+                for (int64_t i = 0; i <= altPosOpt.value(); ++i) {
+                    m_generator.emit(tbc::BytOpcode::OP_FROMALTSTACK);
+                    StackElement topElement = altStack->top();
+                    altStack->pop();
+                    mainStack->push(topElement);
+                }
+                for (int64_t i = 0; i < altPosOpt.value(); ++i) {
+                    emitRoll(1);
+                    mainStack->swap(0, 1);
+                    m_generator.emit(tbc::BytOpcode::OP_TOALTSTACK);
+                    StackElement topElement = mainStack->top();
+                    mainStack->pop();
+                    altStack->push(topElement);
+                }
+                appendKeep();
+                return;
+            }
+
+            std::string mutableName = varName;
+            auto fixedElement = symbolTable.getFixed(mutableName);
+            if (fixedElement.has_value()) {
+                StackElement materialized = fixedElement.value();
+                materialized.setName(varName);
+                materialized.setType(declaredSymbolType(
+                    symbolTable, varName, materialized.getType()
+                ));
+                if (materialized.getData().empty()) {
+                    throw std::runtime_error(
+                        "cannot materialize empty fixed return value '" +
+                        varName + "'"
+                    );
+                }
+                m_generator.emit(materialized.getData());
+                symbolTable.removeFixed(mutableName);
+                symbolTable.push(materialized);
+                appendKeep();
+                return;
+            }
+
+            std::ostringstream oss;
+            oss << "lowercase return references unavailable variable '"
+                << varName << "'";
+            SourceLocation loc("", node.pos.first, node.pos.second);
+            SEMANTIC_ERROR(
+                oss.str(), loc, "Return an existing variable from this scope"
+            );
+            LOG_ERROR(oss.str());
+            throw std::runtime_error(oss.str());
+        };
 
         if (auto identifierNode = dynamic_cast<IdentifierNode*>(node.expr.get()
             )) {
             const std::string& varName = identifierNode->name;
-            auto mainPosOpt = symbolTable.getPos(varName);
-            auto altPosOpt = symbolTable.getPos(varName, true);
-            if (mainPosOpt.has_value() || altPosOpt.has_value()) {
-                LOG_DEBUG("Marking return value variable as keep: " + varName);
-                symbolTable.m_keepSymbol.push_back(varName);
-            } else {
-                LOG_DEBUG(
-                    "Return value variable not found in current symtab (may "
-                    "already be consumed): " +
-                    varName
-                );
-            }
+            LOG_DEBUG("Marking return value variable as keep: " + varName);
+            preserveReturnSymbol(varName);
         }
         // 大括号: 多返回值.
         else if (auto braceExpr = dynamic_cast<BraceExprNode*>(node.expr.get()
@@ -1564,20 +2574,10 @@ void ASTToBytecodeVisitor::visit(ReturnNode& node)
                 if (auto identifierNode =
                         dynamic_cast<IdentifierNode*>(element.get())) {
                     const std::string& varName = identifierNode->name;
-                    auto mainPosOpt = symbolTable.getPos(varName);
-                    auto altPosOpt = symbolTable.getPos(varName, true);
-                    if (mainPosOpt.has_value() || altPosOpt.has_value()) {
-                        LOG_DEBUG(
-                            "Marking return value variable as keep: " + varName
-                        );
-                        symbolTable.m_keepSymbol.push_back(varName);
-                    } else {
-                        LOG_DEBUG(
-                            "Return value variable not found in current symtab "
-                            "(may already be consumed): " +
-                            varName
-                        );
-                    }
+                    LOG_DEBUG(
+                        "Marking return value variable as keep: " + varName
+                    );
+                    preserveReturnSymbol(varName);
                 } else {
                     std::ostringstream oss;
                     oss << "lowercase 'return' brace expression only accepts "
@@ -3712,8 +4712,37 @@ void ASTToBytecodeVisitor::privateFunctionResolution(
     }
 #endif
 
+    std::vector<std::string> privateBaseStorageNames;
+    const SymbolTable& privateEntryState = m_scopePtr->getCurrentSymtab();
+    auto appendPrivateBaseName = [&](const StackElement& element) {
+        if (std::find(
+                privateBaseStorageNames.begin(),
+                privateBaseStorageNames.end(),
+                element.getName()
+            ) == privateBaseStorageNames.end()) {
+            privateBaseStorageNames.push_back(element.getName());
+        }
+    };
+    if (privateEntryState.m_stackPtr) {
+        for (const auto& element :
+             privateEntryState.m_stackPtr->getStackContent()) {
+            appendPrivateBaseName(element);
+        }
+    }
+    if (privateEntryState.m_altStackPtr) {
+        for (const auto& element :
+             privateEntryState.m_altStackPtr->getStackContent()) {
+            appendPrivateBaseName(element);
+        }
+    }
+    m_privateFunctionBaseStorageNames.push_back(
+        std::move(privateBaseStorageNames)
+    );
+    DEFER_BLOCK(m_privateFunctionBaseStorageNames.pop_back(););
+
     if (node.block) {
         LOG_DEBUG("Executing private function body inline");
+        m_lastFlowResult = FlowResult::FallsThrough;
         node.block->accept(*this);
 
         cleanupFunctionParameters(node);
@@ -3730,6 +4759,9 @@ void ASTToBytecodeVisitor::privateFunctionResolution(
 #endif
 
     m_scopePtr->popScopeStack();
+    // 私有函数的 lowercase return 已在内联体内部完成控制流截断；
+    // 对调用者而言，函数调用本身仍是一个普通表达式。
+    m_lastFlowResult = FlowResult::FallsThrough;
     LOG_DEBUG("Private function inline resolution completed for: " + node.name);
 }
 
@@ -4468,6 +5500,22 @@ std::vector<tbc::StackElement> ASTToBytecodeVisitor::processArguments(
         );
 
         visitExpr(*argElement);
+        if (m_scopePtr->empty()) {
+            std::ostringstream errorStream;
+            errorStream << "argument " << (i + 1) << " for function '"
+                        << functionName
+                        << "' did not produce a compiler stack value";
+            SourceLocation loc(
+                "", argElement->pos.first, argElement->pos.second
+            );
+            SEMANTIC_ERROR(
+                errorStream.str(),
+                loc,
+                "Check that the argument expression produces a value"
+            );
+            LOG_ERROR(errorStream.str());
+            throw std::runtime_error(errorStream.str());
+        }
         auto topElementName = m_scopePtr->top().getName();
         if (CompilerPlaceholder::isPlaceholder(topElementName)) {
             processedArgs.push_back(m_scopePtr->top());
@@ -5989,9 +7037,11 @@ void ASTToBytecodeVisitor::keep(std::vector<tbc::StackElement>& elementVec)
 }
 
 void ASTToBytecodeVisitor::executeStatements(
-    const std::vector<std::unique_ptr<StmtNode>>& statements
+    const std::vector<std::unique_ptr<StmtNode>>& statements,
+    size_t startIndex
 )
 {
+    FlowResult sequenceFlow = FlowResult::FallsThrough;
     std::string codeLevel{};
     for (auto it : m_codeBlockLevel) {
         codeLevel = codeLevel + std::to_string(it) + "-";
@@ -5999,7 +7049,10 @@ void ASTToBytecodeVisitor::executeStatements(
     m_codeBlockLevel.push_back(0);
     DEFER_BLOCK(m_codeBlockLevel.pop_back(););
 
-    for (const auto& stmt : statements) {
+    for (size_t statementIndex = startIndex;
+         statementIndex < statements.size();
+         ++statementIndex) {
+        const auto& stmt = statements[statementIndex];
         m_codeBlockLevel.back()++;
         std::string stmtStr = codeLevel +
                               (m_codeBlockLevel.empty()
@@ -6014,6 +7067,24 @@ void ASTToBytecodeVisitor::executeStatements(
         LOG_DEBUG(newSymbol);
         LOG_DEBUG(stackStatus);
 
+        const auto* previousContinuationStatements =
+            m_inlineContinuationStatements;
+        const size_t previousContinuationStart = m_inlineContinuationStart;
+        DEFER_BLOCK(
+            m_inlineContinuationStatements = previousContinuationStatements;
+            m_inlineContinuationStart = previousContinuationStart;
+        );
+
+        if (statementIndex + 1 < statements.size() &&
+            inlineReturnArity(stmt.get()).has_value()) {
+            // 不只记录当前层的直接单边 return。祖先语句包含嵌套
+            // lowercase return 时，最内层 if 也需要看到祖先 block 的
+            // continuation，才能逐层生成 returned guard。
+            m_inlineContinuationStatements = &statements;
+            m_inlineContinuationStart = statementIndex + 1;
+        }
+
+        m_lastFlowResult = FlowResult::FallsThrough;
         try {
             stmt->accept(*this);
         } catch (const std::runtime_error& e) {
@@ -6059,7 +7130,21 @@ void ASTToBytecodeVisitor::executeStatements(
         if (m_currentReturnNode != nullptr) {
             m_currentReturnNode = nullptr;
         }
+
+        if (m_lastFlowResult == FlowResult::InlineReturn &&
+            sequenceFlow == FlowResult::FallsThrough) {
+            sequenceFlow = FlowResult::InlineReturn;
+            break;
+        }
+        if (m_lastFlowResult == FlowResult::ScriptTerminate &&
+            sequenceFlow == FlowResult::FallsThrough) {
+            // 大写 Return 后允许继续编译不可执行的 immutable suffix/state
+            // 数据；运行时控制流仍保持终止状态。
+            sequenceFlow = FlowResult::ScriptTerminate;
+        }
     }
+
+    m_lastFlowResult = sequenceFlow;
 }
 
 void ASTToBytecodeVisitor::registerWholeArrayElement(
@@ -6216,8 +7301,31 @@ bool ASTToBytecodeVisitor::transferCompositeIdentity(
     const std::string oldPrefix = oldName + ".";
     const std::string newPrefix = newName + ".";
 
-    // bare 符号 (结构体变量本身) 改名.
-    {
+    const SymbolTable& currentState = m_scopePtr->getCurrentSymtab();
+    const bool hasStructuredChildren = std::any_of(
+        currentState.m_currentScope.begin(),
+        currentState.m_currentScope.end(),
+        [&](const auto& entry) {
+            return entry.first.starts_with(oldPrefix);
+        }
+    ) ||
+                                       (currentState.m_stackPtr &&
+                                        std::any_of(
+                                            currentState.m_stackPtr
+                                                ->getStackContent()
+                                                .begin(),
+                                            currentState.m_stackPtr
+                                                ->getStackContent()
+                                                .end(),
+                                            [&](const StackElement& element) {
+                                                return element.getName()
+                                                    .starts_with(oldPrefix);
+                                            }
+                                        ));
+
+    // 仅复合值转移 bare 符号。标量 a=b 必须走后续拷贝语义，不能把 a
+    // 在编译期偷偷改名成 b。
+    if (transferred || hasStructuredChildren) {
         std::string probe = oldName;
         if (m_scopePtr->symbolExists(probe)) {
             if (m_scopePtr->renameSymbolEntry(oldName, newName)) {

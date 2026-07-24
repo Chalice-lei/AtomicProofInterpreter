@@ -27,7 +27,7 @@ void DebugInfoGenerator::setContractName(const std::string& name)
 
 void DebugInfoGenerator::finalizeScopes()
 {
-    if (m_scopeStack.size() != 1 || m_scopeStack.empty() ||
+    if (m_scopeStack.empty() || m_scopeStack.size() != 1 ||
         m_scopeStack.top() != m_debugInfo->globalScope ||
         !m_functionStack.empty() || m_currentFunction) {
         m_debugInfo->scopeNestingValid = false;
@@ -86,7 +86,12 @@ void DebugInfoGenerator::onEnterFunction(
         std::make_shared<ScopeDebugInfo>(funcName, ScopeType::FUNCTION);
     funcScope->location = loc;
     funcScope->startPC = startPC;
-    funcScope->parent = m_scopeStack.top();
+    // 私有函数会在调用点内联，但函数作用域的结构归属仍是 global；
+    // m_scopeStack 只负责 enter/exit 生命周期，不等同于调试树父子关系。
+    funcScope->parent = m_debugInfo->globalScope;
+    if (funcScope->parent) {
+        funcScope->parent->children.push_back(funcScope);
+    }
 
     m_debugInfo->addScope(funcScope);
     m_scopeStack.push(funcScope);
@@ -138,12 +143,18 @@ std::shared_ptr<ScopeDebugInfo> DebugInfoGenerator::onEnterScope(
 )
 {
     auto scope = std::make_shared<ScopeDebugInfo>(scopeName, ScopeType::BLOCK);
-    scope->location = loc;
     scope->startPC = startPC;
 
     if (!m_scopeStack.empty()) {
         scope->parent = m_scopeStack.top();
+        scope->parent->children.push_back(scope);
     }
+    // 某些语法产生的 BlockNode 没有独立 token 位置（例如函数体）。
+    // 至少继承父作用域的位置，避免输出 line=0 的幽灵源码范围。
+    scope->location = loc.isValid()
+                          ? loc
+                          : (scope->parent ? scope->parent->location
+                                           : SourceLocation());
 
     m_debugInfo->addScope(scope);
     m_scopeStack.push(scope);

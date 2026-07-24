@@ -378,10 +378,9 @@ public:
 
     void clear();
 
-    void replaceStackContent(const std::vector<StackElement>& newContent)
-    {
-        m_stack = newContent;
-    }
+    // 原子替换栈内容并同步内存计数。调用方不应再单独修正
+    // combinedStackSize，否则内容与计数很容易在异常路径上漂移。
+    void replaceStackContent(const std::vector<StackElement>& newContent);
 
     const std::vector<StackElement>& getStackContent() const
     {

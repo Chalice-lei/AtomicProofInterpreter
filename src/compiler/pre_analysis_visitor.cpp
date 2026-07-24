@@ -306,9 +306,14 @@ void PreAnalysisVisitor::visit(ForNode& node)
     node.setStaticIterations(iterations);
     node.setInferredType("int");
 
+    // for 自身拥有一个词法作用域，循环体的 BlockNode 则在每次静态展开
+    // 时拥有独立作用域。PreAnalysisVisitor 的变量表目前是扁平结构，因此
+    // 在这里显式记录入口变量集合，并在每轮结束时丢弃该轮新声明的名字。
+    // 已存在的外层变量仍从本轮结果延续到下一轮。
     auto preLoopState = saveVariableState();
     auto accumulatedState = preLoopState;
-    bool variableExists = findVariable(node.target) != nullptr;
+    const bool targetExistedBeforeLoop =
+        preLoopState.find(node.target) != preLoopState.end();
 
     if (iterations.empty()) {
         restoreVariableState(preLoopState);
@@ -325,11 +330,13 @@ void PreAnalysisVisitor::visit(ForNode& node)
         restoreVariableState(accumulatedState);
         m_staticLoopValues[node.target] = iterations[idx];
 
+        const auto iterationEntryState = saveVariableState();
+
         LiteralNode literal(
             LiteralNode::Type::Number, std::to_string(iterations[idx])
         );
 
-        if (!variableExists && idx == 0) {
+        if (!targetExistedBeforeLoop && idx == 0) {
             declareVariable(
                 node.target, "int", getNodeLocation(node), &literal
             );
@@ -341,14 +348,37 @@ void PreAnalysisVisitor::visit(ForNode& node)
             node.body->accept(*this);
         }
 
-        accumulatedState = saveVariableState();
-        variableExists = true;
+        auto iterationExitState = saveVariableState();
+
+        // 循环 target 在首轮才加入 iterationEntryState，之后属于 loop
+        // scope；body 中出现的其它新名字只属于本轮 body scope，不能泄漏
+        // 到下一轮，否则相同声明会被误报为 redeclaration。
+        for (auto it = iterationExitState.begin();
+             it != iterationExitState.end();) {
+            const bool isLoopTarget = it->first == node.target;
+            const bool existedAtIterationEntry =
+                iterationEntryState.find(it->first) !=
+                iterationEntryState.end();
+            if (!isLoopTarget && !existedAtIterationEntry) {
+                it = iterationExitState.erase(it);
+            } else {
+                ++it;
+            }
+        }
+
+        accumulatedState = std::move(iterationExitState);
     }
 
     if (hadPreviousLoopValue) {
         m_staticLoopValues[node.target] = previousLoopValue;
     } else {
         m_staticLoopValues.erase(node.target);
+    }
+
+    // 新引入的 loop target 随 for scope 一起退出；若入口已有同名变量，
+    // AST interpreter 会对该外层绑定赋值，因此保留最后一轮状态。
+    if (!targetExistedBeforeLoop) {
+        accumulatedState.erase(node.target);
     }
 
     restoreVariableState(accumulatedState);

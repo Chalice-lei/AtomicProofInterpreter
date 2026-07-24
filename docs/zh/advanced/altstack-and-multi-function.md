@@ -121,6 +121,18 @@ def verifyCurrentTX(ctx: CurrentTX):
 出栈顺序（SetMain）：pre_code_size → pre_code_partialhash → pre_count
 ```
 
+### 本地运行阶段链
+
+`run` 支持用逗号按源码顺序选择多个公有函数，并在同一个 BVM 会话中
+执行，从而保留函数之间的主栈和副栈状态：
+
+```bash
+./build/bin/utxo_Interpreter run contract.ct getCountFromPreTX,verifyCurrentTX <args...>
+```
+
+位置参数按函数列表顺序拼接。若后置函数依赖前置函数留下的副栈状态，
+单独运行后置函数会报告“缺少前置阶段留下的栈状态”，此时应改用阶段链。
+
 ---
 
 ## 小结

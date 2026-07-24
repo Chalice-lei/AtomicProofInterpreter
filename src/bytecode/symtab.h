@@ -8,6 +8,7 @@
 #include <optional>
 #include <sstream>
 #include <stack>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -229,15 +230,21 @@ public:
     SymbolTable()
     {
         m_stackPtr = std::make_shared<tbc::OpStack>();
-        initSharedAltStack(); // 副栈共享, 仅首次初始化
+        initSharedAltStack(); // 同一 Scope 的 SymbolTable 快照共享副栈
         m_fixedStackPtr = std::make_shared<tbc::OpStack>();
     };
 
     SymbolTable(const SymbolTable& other)
-        : m_newSymbol(other.m_newSymbol),
+        : m_altStackPtr(other.m_altStackPtr),
+          m_newSymbol(other.m_newSymbol),
           m_declaredSymbols(other.m_declaredSymbols),
           m_keepSymbol(other.m_keepSymbol),
-          m_bindSymbol(other.m_bindSymbol), m_currentScope(other.m_currentScope)
+          m_bindSymbol(other.m_bindSymbol), m_currentScope(other.m_currentScope),
+          m_savedSharedAltStackElements(other.m_savedSharedAltStackElements),
+          m_savedAltStackCombinedStackSize(
+              other.m_savedAltStackCombinedStackSize
+          ),
+          m_savedCombinedStackSize(other.m_savedCombinedStackSize)
     {
         // 主栈深拷贝
         if (other.m_stackPtr) {
@@ -249,7 +256,7 @@ public:
             }
         }
 
-        // 副栈共享, 不拷贝
+        // 同一编译会话的作用域/分支快照共享副栈, 不跨会话共享.
         initSharedAltStack();
 
         if (other.m_fixedStackPtr) {
@@ -273,6 +280,12 @@ public:
         m_keepSymbol = other.m_keepSymbol;
         m_bindSymbol = other.m_bindSymbol;
         m_currentScope = other.m_currentScope;
+        m_altStackPtr = other.m_altStackPtr;
+        m_savedSharedAltStackElements =
+            other.m_savedSharedAltStackElements;
+        m_savedAltStackCombinedStackSize =
+            other.m_savedAltStackCombinedStackSize;
+        m_savedCombinedStackSize = other.m_savedCombinedStackSize;
 
         // 主栈深拷贝
         if (other.m_stackPtr) {
@@ -317,6 +330,13 @@ public:
     void push(const StackElement& element, std::string* statusStr = nullptr);
 
     std::optional<StackElement> pop(std::string* statusStr = nullptr);
+
+    // 清空一次公有函数独占的 main/fixed/作用域状态。共享副栈是语言规定
+    // 的跨公有函数中继通道，必须保留到同一合约的后续函数。
+    void resetFunctionState();
+
+    // 检查栈指针、内存计数和作用域声明元数据的基本一致性。
+    bool validateState(std::string* error = nullptr) const;
 
     void pick(const int offsetFromTop);
     void roll(const int offsetFromTop);
@@ -431,39 +451,50 @@ public:
 
     bool operator==(const SymbolTable& other) const;
 
-    static std::shared_ptr<tbc::OpStack> getSharedAltStack()
+    std::shared_ptr<tbc::OpStack> getSharedAltStack()
     {
         initSharedAltStack();
-        return s_sharedAltStackPtr;
+        return m_altStackPtr;
     }
 
-    static void clearSharedAltStack()
+    void clearSharedAltStack()
     {
-        if (s_sharedAltStackPtr) {
-            while (!s_sharedAltStackPtr->empty()) {
-                s_sharedAltStackPtr->pop();
-            }
+        if (m_altStackPtr) {
+            m_altStackPtr->replaceStackContent({});
         }
     }
 
     // 保存当前共享副栈快照
     void saveSharedAltStack()
     {
-        m_savedSharedAltStackElements.push(s_sharedAltStackPtr->getStackContent(
+        if (!m_altStackPtr || !m_stackPtr) {
+            throw std::logic_error(
+                "cannot save alt stack snapshot from an invalid symbol table"
+            );
+        }
+        m_savedSharedAltStackElements.push(m_altStackPtr->getStackContent(
         ));
         m_savedAltStackCombinedStackSize.push(
-            s_sharedAltStackPtr->getCombinedStackSize()
+            m_altStackPtr->getCombinedStackSize()
         );
         m_savedCombinedStackSize.push(m_stackPtr->getCombinedStackSize());
     }
 
     void restoreSharedAltStack()
     {
-        s_sharedAltStackPtr->replaceStackContent(
+        if (!m_altStackPtr || !m_stackPtr ||
+            m_savedSharedAltStackElements.empty() ||
+            m_savedAltStackCombinedStackSize.empty() ||
+            m_savedCombinedStackSize.empty()) {
+            throw std::logic_error(
+                "cannot restore alt stack: no complete snapshot is available"
+            );
+        }
+        m_altStackPtr->replaceStackContent(
             m_savedSharedAltStackElements.top()
         );
         m_savedSharedAltStackElements.pop();
-        s_sharedAltStackPtr->setCombinedStackSize(
+        m_altStackPtr->setCombinedStackSize(
             m_savedAltStackCombinedStackSize.top()
         );
         m_savedAltStackCombinedStackSize.pop();
@@ -472,10 +503,10 @@ public:
     }
 
 private:
-    static void initSharedAltStack()
+    void initSharedAltStack()
     {
-        if (!s_sharedAltStackPtr) {
-            s_sharedAltStackPtr = std::make_shared<tbc::OpStack>();
+        if (!m_altStackPtr) {
+            m_altStackPtr = std::make_shared<tbc::OpStack>();
         }
     }
 
@@ -507,8 +538,9 @@ private:
 
 public:
     std::shared_ptr<tbc::OpStack> m_stackPtr{nullptr};
-    // 副栈: 所有 SymbolTable 共享 (通过 getSharedAltStack)
-    std::shared_ptr<tbc::OpStack>& m_altStackPtr = s_sharedAltStackPtr;
+    // 副栈仅在同一 Scope/编译会话的 SymbolTable 快照之间共享。
+    // 不能使用进程级 static，否则并发编译会互相清空或污染状态。
+    std::shared_ptr<tbc::OpStack> m_altStackPtr{nullptr};
     std::shared_ptr<tbc::OpStack> m_fixedStackPtr{nullptr};
     // 当前作用域内新压入的栈槽（包括变量值和表达式临时值）
     std::vector<std::string> m_newSymbol;
@@ -521,8 +553,6 @@ public:
     std::vector<std::pair<std::string, SymbolInfo>> m_currentScope;
 
 private:
-    static std::shared_ptr<tbc::OpStack> s_sharedAltStackPtr;
-
     // 保存/恢复用的共享副栈快照
     std::stack<std::vector<StackElement>> m_savedSharedAltStackElements;
     std::stack<size_t> m_savedAltStackCombinedStackSize;

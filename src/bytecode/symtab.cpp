@@ -8,8 +8,6 @@
 
 using namespace tbc;
 
-std::shared_ptr<tbc::OpStack> SymbolTable::s_sharedAltStackPtr = nullptr;
-
 void SymbolTable::push(
     const std::string& nameStr,
     const std::string& typeStr,
@@ -41,6 +39,10 @@ void SymbolTable::
 std::optional<StackElement>
 SymbolTable::pop(std::string* statusStr /* = nullptr*/)
 {
+    if (!m_stackPtr || m_stackPtr->empty()) {
+        return std::nullopt;
+    }
+
     auto top = m_stackPtr->top();
     {
         auto it = std::find_if(
@@ -55,6 +57,93 @@ SymbolTable::pop(std::string* statusStr /* = nullptr*/)
     }
     m_stackPtr->pop(statusStr);
     return top;
+}
+
+void SymbolTable::resetFunctionState()
+{
+    m_stackPtr = std::make_shared<tbc::OpStack>();
+    initSharedAltStack();
+    m_fixedStackPtr = std::make_shared<tbc::OpStack>();
+
+    m_newSymbol.clear();
+    m_declaredSymbols.clear();
+    m_keepSymbol.clear();
+    m_bindSymbol.clear();
+    m_currentScope.clear();
+
+    m_savedSharedAltStackElements = {};
+    m_savedAltStackCombinedStackSize = {};
+    m_savedCombinedStackSize = {};
+}
+
+bool SymbolTable::validateState(std::string* error) const
+{
+    auto fail = [error](const std::string& message) {
+        if (error) {
+            *error = message;
+        }
+        return false;
+    };
+
+    if (!m_stackPtr) {
+        return fail("main stack pointer is null");
+    }
+    if (!m_altStackPtr) {
+        return fail("alternative stack pointer is null");
+    }
+    if (!m_fixedStackPtr) {
+        return fail("fixed stack pointer is null");
+    }
+
+    auto validateAccounting = [&fail](
+                                  const tbc::OpStack& stack,
+                                  const char* stackName
+                              ) {
+        size_t expectedSize = 0;
+        for (const auto& element : stack.getStackContent()) {
+            expectedSize += element.getMemoryUsage();
+        }
+        if (stack.getCombinedStackSize() != expectedSize) {
+            std::ostringstream oss;
+            oss << stackName << " stack accounting mismatch: expected "
+                << expectedSize << ", got " << stack.getCombinedStackSize();
+            return fail(oss.str());
+        }
+        return true;
+    };
+
+    if (!validateAccounting(*m_stackPtr, "main") ||
+        !validateAccounting(*m_altStackPtr, "alternative") ||
+        !validateAccounting(*m_fixedStackPtr, "fixed")) {
+        return false;
+    }
+
+    for (const auto& declared : m_declaredSymbols) {
+        auto it = std::find_if(
+            m_currentScope.begin(),
+            m_currentScope.end(),
+            [&declared](const std::pair<std::string, SymbolInfo>& symbol) {
+                return symbol.first == declared;
+            }
+        );
+        if (it == m_currentScope.end()) {
+            return fail(
+                "declared symbol is missing from the current scope: " + declared
+            );
+        }
+    }
+
+    if (m_savedSharedAltStackElements.size() !=
+            m_savedAltStackCombinedStackSize.size() ||
+        m_savedSharedAltStackElements.size() !=
+            m_savedCombinedStackSize.size()) {
+        return fail("incomplete alternative-stack snapshot metadata");
+    }
+
+    if (error) {
+        error->clear();
+    }
+    return true;
 }
 
 void SymbolTable::pick(const int offsetFromTop)
@@ -141,8 +230,9 @@ void SymbolTable::setFixed(StackElement stackElement)
 {
     auto stackPtr = m_fixedStackPtr;
     if (!stackPtr) {
-        throw;
-        return;
+        throw std::logic_error(
+            "cannot store a fixed value: fixed stack pointer is null"
+        );
     }
     int index = -1;
     for (size_t i = 0; i < stackPtr->size(); ++i) {

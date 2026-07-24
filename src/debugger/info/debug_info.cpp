@@ -7,6 +7,7 @@
 #include <limits>
 #include <nlohmann/json.hpp>
 #include <sstream>
+#include <unordered_set>
 
 using json = nlohmann::json;
 
@@ -112,6 +113,48 @@ VariableDebugInfo variableFromJson(const json& varJson)
     var.stackOffset = varJson.value("stackOffset", -1);
     var.isParameter = varJson.value("isParameter", false);
     return var;
+}
+
+bool sameVariable(
+    const VariableDebugInfo& left,
+    const VariableDebugInfo& right
+)
+{
+    return left.name == right.name && left.type == right.type &&
+           left.scopeName == right.scopeName &&
+           left.declLine == right.declLine &&
+           left.declColumn == right.declColumn &&
+           left.isStackVar == right.isStackVar &&
+           left.stackOffset == right.stackOffset &&
+           left.isParameter == right.isParameter;
+}
+
+bool sameSourceLocation(const SourceLocation& left, const SourceLocation& right)
+{
+    return left.filename == right.filename && left.line == right.line &&
+           left.column == right.column && left.endLine == right.endLine &&
+           left.endColumn == right.endColumn;
+}
+
+bool rangesOverlap(
+    const ScopeDebugInfo& left,
+    const ScopeDebugInfo& right
+)
+{
+    // 空作用域只保留源码结构锚点，不覆盖任何运行时 PC。
+    if (left.startPC == left.endPC || right.startPC == right.endPC) {
+        return false;
+    }
+    return std::max(left.startPC, right.startPC) <
+           std::min(left.endPC, right.endPC);
+}
+
+bool rangeContains(
+    const ScopeDebugInfo& outer,
+    const ScopeDebugInfo& inner
+)
+{
+    return outer.startPC <= inner.startPC && outer.endPC >= inner.endPC;
 }
 } // namespace
 
@@ -478,32 +521,148 @@ void DebugInfo::syncInstructionOpcodes(const std::vector<std::string>& bytecode)
     }
 }
 
-bool DebugInfo::validate() const
+bool DebugInfo::validate(std::string* errorMessage) const
 {
-    if (sourceFilename.empty() || !scopeNestingValid) {
+    return validate({}, errorMessage);
+}
+
+bool DebugInfo::validate(
+    const std::vector<std::string>& bytecode,
+    std::string* errorMessage
+) const
+{
+    auto fail = [&](const std::string& message) {
+        if (errorMessage) {
+            *errorMessage = message;
+        }
         return false;
+    };
+
+    if (errorMessage) {
+        errorMessage->clear();
+    }
+
+    if (sourceFilename.empty()) {
+        return fail("缺少源码文件名");
+    }
+    if (!scopeNestingValid) {
+        return fail("作用域 enter/exit 不配对");
+    }
+
+    const bool validateBytecode = !bytecode.empty();
+    const size_t instructionCount = bytecode.size();
+    size_t executableInstructionCount = instructionCount;
+    if (validateBytecode) {
+        const auto padding = std::find(bytecode.begin(), bytecode.end(), "ff");
+        if (padding != bytecode.end()) {
+            executableInstructionCount = static_cast<size_t>(
+                std::distance(bytecode.begin(), padding)
+            );
+        }
     }
 
     for (const auto& [pc, loc] : pcToSource) {
         if (!loc.isValid()) {
-            return false;
+            return fail("PC " + std::to_string(pc) + " 的源码位置无效");
+        }
+        if (validateBytecode && pc >= executableInstructionCount) {
+            return fail("源码映射 PC 超出真实可执行字节码范围: " +
+                        std::to_string(pc));
+        }
+        auto instIt = instructions.find(pc);
+        if (validateBytecode && instIt == instructions.end()) {
+            return fail("源码映射 PC 不对应真实调试指令: " +
+                        std::to_string(pc));
+        }
+    }
+
+    for (const auto& [line, pcs] : lineToPCs) {
+        if (line == 0 || !std::is_sorted(pcs.begin(), pcs.end()) ||
+            std::adjacent_find(pcs.begin(), pcs.end()) != pcs.end()) {
+            return fail("行号反向索引无效: " + std::to_string(line));
+        }
+        for (size_t pc : pcs) {
+            auto sourceIt = pcToSource.find(pc);
+            if (sourceIt == pcToSource.end() || sourceIt->second.line != line) {
+                return fail("行号反向索引与 PC 映射不一致: " +
+                            std::to_string(line));
+            }
+        }
+    }
+    for (const auto& [pc, loc] : pcToSource) {
+        auto lineIt = lineToPCs.find(loc.line);
+        if (lineIt == lineToPCs.end() ||
+            !std::binary_search(
+                lineIt->second.begin(), lineIt->second.end(), pc
+            )) {
+            return fail("PC 映射缺少反向行号索引: " + std::to_string(pc));
+        }
+    }
+
+    for (const auto& [pc, inst] : instructions) {
+        if (inst.pc != pc) {
+            return fail("指令记录的 PC 键值不一致: " + std::to_string(pc));
+        }
+        if (!inst.location.isValid()) {
+            return fail("指令缺少有效源码位置: " + std::to_string(pc));
+        }
+        auto sourceIt = pcToSource.find(pc);
+        if (sourceIt == pcToSource.end() ||
+            !sameSourceLocation(sourceIt->second, inst.location)) {
+            return fail("指令源码位置与 PC 映射不一致: " +
+                        std::to_string(pc));
+        }
+        if (validateBytecode) {
+            if (pc >= executableInstructionCount) {
+                return fail("调试指令 PC 超出真实可执行字节码范围: " +
+                            std::to_string(pc));
+            }
+            std::string expected = bytecode[pc];
+            std::string actual = inst.opcode;
+            std::transform(expected.begin(), expected.end(), expected.begin(),
+                           [](unsigned char ch) {
+                               return static_cast<char>(std::tolower(ch));
+                           });
+            std::transform(actual.begin(), actual.end(), actual.begin(),
+                           [](unsigned char ch) {
+                               return static_cast<char>(std::tolower(ch));
+                           });
+            if (actual != expected) {
+                return fail("调试指令与真实字节码不一致: PC " +
+                            std::to_string(pc));
+            }
+        }
+    }
+
+    std::unordered_set<const ScopeDebugInfo*> scopeSet;
+    for (const auto& scope : scopes) {
+        if (!scope || !scopeSet.insert(scope.get()).second) {
+            return fail("作用域列表包含空项或重复项");
         }
     }
 
     for (const auto& [name, func] : functions) {
-        if (func.startPC >= func.endPC) {
-            return false;
+        if (name.empty() || func.name != name) {
+            return fail("函数索引名称不一致");
+        }
+        if (func.startPC > func.endPC) {
+            return fail("函数范围反向: " + name);
+        }
+        if (validateBytecode && func.endPC > executableInstructionCount) {
+            return fail("函数范围超出真实可执行字节码: " + name);
         }
         if (!func.scope || func.scope->type != ScopeType::FUNCTION ||
+            scopeSet.find(func.scope.get()) == scopeSet.end() ||
+            func.scope->name != name ||
             func.scope->startPC != func.startPC ||
             func.scope->endPC != func.endPC) {
-            return false;
+            return fail("函数与函数作用域不一致: " + name);
         }
     }
 
     if (!globalScope ||
         std::find(scopes.begin(), scopes.end(), globalScope) == scopes.end()) {
-        return false;
+        return fail("缺少全局作用域");
     }
 
     size_t globalScopeCount = 0;
@@ -513,25 +672,67 @@ bool DebugInfo::validate() const
 
     for (const auto& scope : scopes) {
         if (!scope || scope->startPC > scope->endPC) {
-            return false;
+            return fail("作用域范围反向");
+        }
+        if (validateBytecode && scope->type != ScopeType::GLOBAL &&
+            scope->endPC > executableInstructionCount) {
+            return fail("作用域范围超出真实可执行字节码: " + scope->name);
+        }
+
+        for (const auto& var : scope->variables) {
+            if (var.name.empty() || var.type.empty() ||
+                var.scopeName != scope->name || var.declLine == 0) {
+                return fail("变量声明与所属作用域不一致: " + var.name);
+            }
         }
 
         if (scope->type == ScopeType::GLOBAL) {
             ++globalScopeCount;
             if (scope != globalScope || scope->parent) {
-                return false;
+                return fail("全局作用域不唯一或包含父作用域");
             }
             continue;
         }
 
         if (!scope->parent || !containsScope(scope->parent)) {
-            return false;
+            return fail("作用域缺少有效父作用域: " + scope->name);
+        }
+        if (!scope->location.isValid()) {
+            return fail("非全局作用域缺少有效源码位置: " + scope->name);
+        }
+
+        const ScopeType parentType = scope->parent->type;
+        bool validParent = false;
+        switch (scope->type) {
+            case ScopeType::CONTRACT:
+                validParent = parentType == ScopeType::GLOBAL;
+                break;
+            case ScopeType::FUNCTION:
+                validParent = parentType == ScopeType::GLOBAL;
+                break;
+            case ScopeType::BLOCK:
+            case ScopeType::LOOP:
+            case ScopeType::CONDITIONAL:
+                validParent = parentType == ScopeType::FUNCTION ||
+                              parentType == ScopeType::BLOCK ||
+                              parentType == ScopeType::LOOP ||
+                              parentType == ScopeType::CONDITIONAL;
+                break;
+            case ScopeType::GLOBAL:
+                break;
+        }
+        if (!validParent) {
+            return fail("非法的作用域父子类型: " + scope->name);
+        }
+        if (scope->type == ScopeType::FUNCTION &&
+            functions.find(scope->name) == functions.end()) {
+            return fail("函数作用域没有对应函数记录: " + scope->name);
         }
 
         if (scope->parent->type != ScopeType::GLOBAL &&
             (scope->startPC < scope->parent->startPC ||
              scope->endPC > scope->parent->endPC)) {
-            return false;
+            return fail("子作用域范围超出父作用域: " + scope->name);
         }
 
         // parent 链必须最终到达 global，且不能形成环。
@@ -540,17 +741,132 @@ bool DebugInfo::validate() const
         while (current) {
             if (std::find(ancestry.begin(), ancestry.end(), current.get()) !=
                 ancestry.end()) {
-                return false;
+                return fail("作用域父链形成环: " + scope->name);
             }
             ancestry.push_back(current.get());
             current = current->parent;
         }
         if (ancestry.empty() || ancestry.back() != globalScope.get()) {
-            return false;
+            return fail("作用域父链未到达全局作用域: " + scope->name);
         }
     }
 
-    return globalScopeCount == 1;
+    if (globalScopeCount != 1) {
+        return fail("全局作用域数量不是 1");
+    }
+
+    // children 必须与 parent 双向一致，兄弟运行时范围不能部分交叉。
+    for (const auto& parent : scopes) {
+        std::unordered_set<const ScopeDebugInfo*> childSet;
+        for (const auto& child : parent->children) {
+            if (!child || !containsScope(child) || child->parent != parent ||
+                !childSet.insert(child.get()).second) {
+                return fail("作用域 children 与 parent 不一致: " +
+                            parent->name);
+            }
+        }
+        for (const auto& candidate : scopes) {
+            if (candidate->parent == parent &&
+                childSet.find(candidate.get()) == childSet.end()) {
+                return fail("父作用域缺少 child 反向引用: " + parent->name);
+            }
+        }
+
+        for (size_t i = 0; i < parent->children.size(); ++i) {
+            for (size_t j = i + 1; j < parent->children.size(); ++j) {
+                const auto& left = parent->children[i];
+                const auto& right = parent->children[j];
+                if (!rangesOverlap(*left, *right)) {
+                    continue;
+                }
+
+                // 私有函数按运行时内联生成，因此全局函数实例可能完全
+                // 包含于 public 函数范围；部分交叉仍然是损坏的数据。
+                const bool nestedFunctionRanges =
+                    left->type == ScopeType::FUNCTION &&
+                    right->type == ScopeType::FUNCTION &&
+                    (rangeContains(*left, *right) ||
+                     rangeContains(*right, *left));
+                if (!nestedFunctionRanges) {
+                    return fail("兄弟作用域范围交叉: " + left->name +
+                                " / " + right->name);
+                }
+            }
+        }
+    }
+
+    auto scopeContainsVariable = [&](const VariableDebugInfo& variable) {
+        for (const auto& scope : scopes) {
+            if (scope->name != variable.scopeName) {
+                continue;
+            }
+            if (std::any_of(
+                    scope->variables.begin(),
+                    scope->variables.end(),
+                    [&](const VariableDebugInfo& candidate) {
+                        return sameVariable(variable, candidate);
+                    }
+                )) {
+                return true;
+            }
+        }
+        return false;
+    };
+
+    for (const auto& [name, variable] : variables) {
+        if (name != variable.name || !scopeContainsVariable(variable)) {
+            return fail("全局变量索引包含幽灵变量: " + name);
+        }
+    }
+
+    for (const auto& [name, func] : functions) {
+        for (const auto& parameter : func.parameters) {
+            if (!parameter.isParameter ||
+                parameter.scopeName != func.scope->name ||
+                !std::any_of(
+                    func.scope->variables.begin(),
+                    func.scope->variables.end(),
+                    [&](const VariableDebugInfo& candidate) {
+                        return sameVariable(parameter, candidate);
+                    }
+                )) {
+                return fail("函数参数不属于函数作用域: " + name);
+            }
+        }
+        for (const auto& local : func.localVars) {
+            bool foundInFunction = false;
+            for (const auto& scope : scopes) {
+                bool belongsToFunction = false;
+                auto ancestor = scope;
+                while (ancestor) {
+                    if (ancestor == func.scope) {
+                        belongsToFunction = true;
+                        break;
+                    }
+                    ancestor = ancestor->parent;
+                }
+                if (!belongsToFunction || scope->name != local.scopeName) {
+                    continue;
+                }
+                foundInFunction = std::any_of(
+                    scope->variables.begin(),
+                    scope->variables.end(),
+                    [&](const VariableDebugInfo& candidate) {
+                        return sameVariable(local, candidate);
+                    }
+                );
+                if (foundInFunction) {
+                    break;
+                }
+            }
+            if (!foundInFunction) {
+                return fail("函数局部变量缺少所属作用域: " + name +
+                            "/" + local.name);
+            }
+        }
+    }
+
+    return true;
 }
 
 // ===== JSON 序列化 =====
@@ -704,7 +1020,8 @@ std::shared_ptr<DebugInfo> DebugInfo::fromJson(const std::string& jsonStr)
         info->version = j.value("version", "1.0");
         info->sourceFilename = j.value("sourceFile", "");
         info->contractName = j.value("contractName", "");
-        info->scopeNestingValid = j.value("scopeNestingValid", true);
+        // 旧文件若没有显式平衡标记，无法证明 enter/exit 配对，默认拒绝。
+        info->scopeNestingValid = j.value("scopeNestingValid", false);
 
         if (j.contains("pcToSource")) {
             for (auto& [pcStr, locJson] : j["pcToSource"].items()) {

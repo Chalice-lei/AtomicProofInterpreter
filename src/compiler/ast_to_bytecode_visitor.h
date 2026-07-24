@@ -314,7 +314,8 @@ private:
 
     // 不进入新作用域执行语句块.
     void executeStatements(
-        const std::vector<std::unique_ptr<StmtNode>>& statements
+        const std::vector<std::unique_ptr<StmtNode>>& statements,
+        size_t startIndex = 0
     );
 
     void registerWholeArrayElement(
@@ -358,6 +359,15 @@ private:
         size_t combinedStackSize{0};
     };
 
+    // 编译期控制流结果。小写 return 只终止当前内联私有函数，
+    // 大写 Return 则通过 OP_RETURN 终止脚本路径。
+    enum class FlowResult
+    {
+        FallsThrough,
+        InlineReturn,
+        ScriptTerminate
+    };
+
     AltStackSnapshot captureAltStack() const;
     void restoreAltStack(const AltStackSnapshot& snapshot);
 
@@ -374,9 +384,10 @@ private:
     ) const;
     void materializeBranchSymbols(
         const std::vector<std::string>& symbols,
-        const IfNode& node
+        const IfNode& node,
+        const AltStackSnapshot& desiredAltStack
     );
-    bool statementAlwaysReturns(const StmtNode* stmt) const;
+    FlowResult statementFlow(const StmtNode* stmt) const;
     void validateBranchMerge(
         const IfNode& node,
         const tbc::SymbolTable& entryState,
@@ -412,7 +423,13 @@ private:
 
     ReturnNode* m_lastReturnNode = nullptr;
     ReturnNode* m_currentReturnNode = nullptr;
+    const BlockNode* m_publicFunctionBlock = nullptr;
+    const std::vector<std::unique_ptr<StmtNode>>*
+        m_inlineContinuationStatements = nullptr;
+    size_t m_inlineContinuationStart = 0;
+    std::vector<std::vector<std::string>> m_privateFunctionBaseStorageNames;
     std::string m_currentFunctionReturnType;
+    FlowResult m_lastFlowResult = FlowResult::FallsThrough;
 
 
 #ifdef ENABLE_DEBUGGER

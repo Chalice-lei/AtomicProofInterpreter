@@ -797,7 +797,9 @@ private:
             }
 
             try {
-                m_vm->setExecutionRange(m_startPC, m_endPC);
+                m_vm->setExecutionRange(
+                    m_startPC, m_endPC, m_functionName
+                );
             } catch (const std::exception& e) {
                 errorMessage =
                     "failed to set function execution range: " +

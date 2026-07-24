@@ -119,7 +119,7 @@ void showUsage(const char* programName)
     std::cout << "Commands:" << std::endl;
     std::cout << "  compile <file.ct>             Compile a contract" << std::endl;
 #ifdef ENABLE_DEBUGGER
-    std::cout << "  run <file.ct> [function] [args...]"
+    std::cout << "  run <file.ct> [function[,function2...]] [args...]"
               << "  Run compiled bytecode" << std::endl;
 #endif
     std::cout << "  ast <file.ct> [function[,function2...]] [args...]"

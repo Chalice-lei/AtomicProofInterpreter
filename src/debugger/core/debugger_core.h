@@ -40,7 +40,8 @@ public:
 
     static bool validateDebugInfo(
         std::shared_ptr<DebugInfo> debugInfo,
-        const std::string& hexBytecode
+        const std::string& hexBytecode,
+        std::string* errorMessage = nullptr
     );
 };
 
