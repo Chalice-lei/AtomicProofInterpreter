@@ -319,7 +319,7 @@ DebugInfo::findNearestValidLine(size_t line, size_t maxDistance) const
 
     // 在附近查找；上限 10000 行用作粗略保护
     for (size_t dist = 1; dist <= maxDistance; ++dist) {
-        if (line + dist <= 10000) {
+        if (line <= 10000 && dist <= 10000 - line) {
             pcs = getPCsForLine(line + dist);
             if (!pcs.empty()) {
                 return pcs;
@@ -328,6 +328,37 @@ DebugInfo::findNearestValidLine(size_t line, size_t maxDistance) const
 
         if (line > dist) {
             pcs = getPCsForLine(line - dist);
+            if (!pcs.empty()) {
+                return pcs;
+            }
+        }
+    }
+
+    return std::vector<size_t>();
+}
+
+std::vector<size_t> DebugInfo::findNearestValidSourceLine(
+    const std::string& filename,
+    size_t line,
+    size_t maxDistance
+) const
+{
+    auto pcs = getPCsForSourceLine(filename, line);
+    if (!pcs.empty()) {
+        return pcs;
+    }
+
+    // 在同一源文件的附近查找；上限 10000 行用作粗略保护。
+    for (size_t dist = 1; dist <= maxDistance; ++dist) {
+        if (line <= 10000 && dist <= 10000 - line) {
+            pcs = getPCsForSourceLine(filename, line + dist);
+            if (!pcs.empty()) {
+                return pcs;
+            }
+        }
+
+        if (line > dist) {
+            pcs = getPCsForSourceLine(filename, line - dist);
             if (!pcs.empty()) {
                 return pcs;
             }

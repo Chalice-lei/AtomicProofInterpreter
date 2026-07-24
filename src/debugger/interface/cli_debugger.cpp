@@ -301,7 +301,11 @@ void CLIDebugger::cmdBreak(const std::vector<std::string>& args)
             m_bpMgr->addLineBreakpoint(m_debugInfo->sourceFilename, line);
         if (id == 0) {
             auto nearestPCs = m_debugInfo
-                                  ? m_debugInfo->findNearestValidLine(line, 2)
+                                  ? m_debugInfo->findNearestValidSourceLine(
+                                        m_debugInfo->sourceFilename,
+                                        line,
+                                        2
+                                    )
                                   : std::vector<size_t>();
             if (!nearestPCs.empty()) {
                 auto nearestLoc =

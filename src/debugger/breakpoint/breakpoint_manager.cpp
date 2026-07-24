@@ -346,34 +346,17 @@ void BreakpointManager::removePCToBreakpointMapping(size_t id) {
 }
 
 std::vector<size_t> BreakpointManager::findNearestValidLine(
-    const std::string& /* filename */, size_t line, size_t maxDistance) const {
+    const std::string& filename, size_t line, size_t maxDistance) const {
 
     if (!m_debugInfo) {
         return std::vector<size_t>();
     }
 
-    auto pcs = m_debugInfo->getPCsForLine(line);
-    if (!pcs.empty()) {
-        return pcs;
-    }
-
-    for (size_t dist = 1; dist <= maxDistance; ++dist) {
-        if (line + dist <= 10000) {
-            pcs = m_debugInfo->getPCsForLine(line + dist);
-            if (!pcs.empty()) {
-                return pcs;
-            }
-        }
-
-        if (line > dist) {
-            pcs = m_debugInfo->getPCsForLine(line - dist);
-            if (!pcs.empty()) {
-                return pcs;
-            }
-        }
-    }
-
-    return std::vector<size_t>();
+    return m_debugInfo->findNearestValidSourceLine(
+        filename,
+        line,
+        maxDistance
+    );
 }
 
 } // namespace apc_debug

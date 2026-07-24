@@ -168,6 +168,11 @@ public:
     // 用于断点解析
     std::vector<size_t>
     findNearestValidLine(size_t line, size_t maxDistance = 10) const;
+    std::vector<size_t> findNearestValidSourceLine(
+        const std::string& filename,
+        size_t line,
+        size_t maxDistance = 10
+    ) const;
 
     const FunctionDebugInfo* getFunctionAtPC(size_t pc) const;
 

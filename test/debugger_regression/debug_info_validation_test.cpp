@@ -1,5 +1,7 @@
 #include <cstdlib>
+#include <filesystem>
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <string>
 #include <vector>
@@ -146,6 +148,103 @@ int main()
         require(
             roundTrip->validate(kBytecode, &error),
             "valid JSON round trip: " + error
+        );
+    }
+
+    {
+        namespace fs = std::filesystem;
+        const fs::path sourceRoot =
+            fs::current_path() / "debugger_source_mapping_fixture";
+        const fs::path primarySource = sourceRoot / "main.ct";
+        const fs::path importedSource = sourceRoot / "imported.ct";
+
+        DebugInfo info;
+        info.sourceFilename = primarySource.string();
+        info.addSourceMapping(
+            1,
+            SourceLocation(primarySource.string(), 10, 1)
+        );
+        info.addSourceMapping(
+            2,
+            SourceLocation(importedSource.string(), 10, 1)
+        );
+        info.addSourceMapping(
+            3,
+            SourceLocation(importedSource.string(), 11, 1)
+        );
+        info.addSourceMapping(
+            4,
+            SourceLocation(primarySource.string(), 12, 1)
+        );
+        info.addSourceMapping(5, SourceLocation("", 14, 1));
+        info.addSourceMapping(6, SourceLocation("main.ct", 15, 1));
+        info.addSourceMapping(
+            7,
+            SourceLocation(primarySource.string(), 1, 1)
+        );
+
+        require(
+            info.getPCsForLine(10) == std::vector<size_t>({1, 2}),
+            "line-only lookup should include primary and imported sources"
+        );
+        require(
+            info.getPCsForSourceLine(primarySource.string(), 10) ==
+                std::vector<size_t>({1}),
+            "primary source lookup should not include imported source"
+        );
+        require(
+            info.getPCsForSourceLine(importedSource.string(), 10) ==
+                std::vector<size_t>({2}),
+            "imported source lookup should not include primary source"
+        );
+        require(
+            info.getPCsForSourceLine(
+                (sourceRoot / "nested" / ".." / "main.ct").string(),
+                10
+            ) == std::vector<size_t>({1}),
+            "lexically equivalent source path should resolve"
+        );
+        require(
+            info.getPCsForSourceLine(
+                (sourceRoot / "missing.ct").string(),
+                10
+            ).empty(),
+            "wrong source path should not resolve"
+        );
+        require(
+            info.findNearestValidSourceLine(
+                primarySource.string(),
+                11,
+                2
+            ) == std::vector<size_t>({4}),
+            "nearest lookup should stay in requested source"
+        );
+        require(
+            info.getPCsForSourceLine(primarySource.string(), 14) ==
+                std::vector<size_t>({5}),
+            "empty mapping filename should fall back to primary source"
+        );
+        require(
+            info.getPCsForSourceLine(
+                primarySource.filename().string(),
+                15
+            ) == std::vector<size_t>({6}),
+            "relative source path should resolve against primary source"
+        );
+        require(
+            info.findNearestValidSourceLine(
+                primarySource.string(),
+                std::numeric_limits<size_t>::max(),
+                2
+            ).empty(),
+            "nearest source lookup should not wrap an oversized line number"
+        );
+        require(
+            info.findNearestValidLine(
+                std::numeric_limits<size_t>::max(),
+                2
+            ).empty(),
+            "legacy nearest lookup should not wrap an oversized line number"
         );
     }
 
