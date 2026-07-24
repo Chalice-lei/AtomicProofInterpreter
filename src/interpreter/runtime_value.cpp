@@ -13,6 +13,11 @@
 
 namespace apc_interpreter
 {
+bool RuntimeValue::BuiltinObject::operator==(const BuiltinObject& other) const
+{
+    return name == other.name && fields == other.fields;
+}
+
 RuntimeValue::RuntimeValue()
     : m_type(RuntimeType::Void), m_storage(std::monostate{}), m_declaredType("void")
 {}

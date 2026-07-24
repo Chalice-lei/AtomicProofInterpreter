@@ -445,8 +445,6 @@ target_include_directories(apc_core PUBLIC
 target_compile_options(apc_core PRIVATE
     $<$<CXX_COMPILER_ID:MSVC>:/W4>
     $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-Wall -Wextra -Wpedantic>
-    $<$<CONFIG:Debug>:-g>
-    $<$<CONFIG:Release>:-O3 -DNDEBUG>
 )
 
 target_link_libraries(apc_core PUBLIC nlohmann_json::nlohmann_json)
@@ -463,8 +461,6 @@ target_link_libraries(${EXECUTABLE_NAME} PRIVATE apc_core)
 target_compile_options(${EXECUTABLE_NAME} PRIVATE
     $<$<CXX_COMPILER_ID:MSVC>:/W4>
     $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-Wall -Wextra -Wpedantic>
-    $<$<CONFIG:Debug>:-g>
-    $<$<CONFIG:Release>:-O3 -DNDEBUG>
 )
 
 # =============================================================================

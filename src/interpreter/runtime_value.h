@@ -34,7 +34,7 @@ public:
         std::string name;
         Struct fields;
 
-        bool operator==(const BuiltinObject& other) const = default;
+        bool operator==(const BuiltinObject& other) const;
     };
 
     RuntimeValue();
