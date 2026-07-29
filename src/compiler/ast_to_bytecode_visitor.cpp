@@ -2164,6 +2164,16 @@ void ASTToBytecodeVisitor::visit(AssignNode& node)
         auto nameElement = leftHandSideElement.value();
         nameElementStr = nameElement.getName();
 
+        // Struct parameters are bound leaf-by-leaf. Store field assignments
+        // under the caller-visible identity so a later `return param` finds
+        // the updated field in main/fixed storage instead of a stale
+        // `param.field` alias.
+        if (dynamic_cast<FieldAccessNode*>(node.name.get()) != nullptr) {
+            nameElementStr = m_scopePtr->getCurrentSymtab().resolveBindSymbol(
+                nameElementStr
+            );
+        }
+
         if (!CompilerPlaceholder::isPlaceholder(nameElementStr) &&
             !isScript(nameElementStr)) {
             isValidLeftSide = true;
@@ -2230,6 +2240,89 @@ void ASTToBytecodeVisitor::visit(AssignNode& node)
 
     auto valueElement = valueElementOpt.value();
     auto valueElementStr = valueElement.getName();
+
+    // A lowercase struct return leaves every flattened field in place and
+    // supplies a compiler-only root descriptor. It must never fall through to
+    // the scalar assignment paths below: those would create a ghost root slot
+    // while leaving the actual fields under their old identity.
+    const bool isReturnedStructDescriptor =
+        m_structDefinitions.find(valueElement.getType()) !=
+        m_structDefinitions.end();
+    if (isReturnedStructDescriptor) {
+        if (leftVarName.empty()) {
+            SourceLocation loc = getNodeLocation(node);
+            const std::string errorMsg =
+                "a returned struct can only be assigned to a named variable";
+            SEMANTIC_ERROR(
+                errorMsg, loc, "Assign the result to a struct variable"
+            );
+            LOG_ERROR(errorMsg);
+            throw std::runtime_error(errorMsg);
+        }
+
+        const auto symbols =
+            m_scopePtr->getCurrentSymtab().getCurrentScopeSymbols();
+        for (auto it = symbols.rbegin(); it != symbols.rend(); ++it) {
+            if (it->getSymbolName() != leftVarName) {
+                continue;
+            }
+            const std::string targetType = it->m_stackElement.getType();
+            if (!targetType.empty() && targetType != valueElement.getType()) {
+                SourceLocation loc = getNodeLocation(node);
+                std::ostringstream oss;
+                oss << "cannot assign returned struct type '"
+                    << valueElement.getType() << "' to variable '"
+                    << leftVarName << "' of type '" << targetType << "'";
+                SEMANTIC_ERROR(
+                    oss.str(), loc, "Use a variable of the same struct type"
+                );
+                LOG_ERROR(oss.str());
+                throw std::runtime_error(oss.str());
+            }
+            break;
+        }
+
+        if (valueElementStr == leftVarName) {
+            m_scopePtr->markSymbolInitialized(leftVarName);
+            LOG_INFO(
+                "Preserved returned struct \"",
+                leftVarName,
+                "\" without scalar rebinding"
+            );
+            LOG_DEBUG("Visiting assign node end (returned struct identity).");
+            return;
+        }
+
+        if (!isFirstBinding) {
+            SourceLocation loc = getNodeLocation(node);
+            std::ostringstream oss;
+            oss << "cannot overwrite initialized struct '" << leftVarName
+                << "' with returned struct '" << valueElementStr << "'";
+            SEMANTIC_ERROR(
+                oss.str(),
+                loc,
+                "Assign the result to a new or uninitialized struct variable"
+            );
+            LOG_ERROR(oss.str());
+            throw std::runtime_error(oss.str());
+        }
+
+        if (transferCompositeIdentity(valueElementStr, leftVarName)) {
+            LOG_DEBUG("Visiting assign node end (returned struct transfer).");
+            return;
+        }
+
+        SourceLocation loc = getNodeLocation(node);
+        std::ostringstream oss;
+        oss << "failed to transfer returned struct '" << valueElementStr
+            << "' to '" << leftVarName << "'";
+        SEMANTIC_ERROR(
+            oss.str(), loc, "Ensure all returned struct fields are available"
+        );
+        LOG_ERROR(oss.str());
+        throw std::runtime_error(oss.str());
+    }
+
     const auto* rhsCall = dynamic_cast<const CallNode*>(node.value.get());
     const bool isPrivateCallResult =
         rhsCall && m_privateFunctions.find(rhsCall->funcName) !=
@@ -2476,6 +2569,20 @@ void ASTToBytecodeVisitor::visit(ExprStmtNode& node)
     visitExpr(*node.expr);
     const size_t postSize = m_scopePtr->size();
     const bool producedRuntimeValue = m_generator.subStr() != preBytecode;
+    if (isCall && !m_scopePtr->empty() &&
+        m_structDefinitions.find(m_scopePtr->top().getType()) !=
+            m_structDefinitions.end()) {
+        SourceLocation loc = getNodeLocation(node);
+        const std::string errorMsg =
+            "returned struct value is unused in expression statement";
+        SEMANTIC_ERROR(
+            errorMsg,
+            loc,
+            "Assign, return, or pass the returned struct to another function"
+        );
+        LOG_ERROR(errorMsg);
+        throw std::runtime_error(errorMsg);
+    }
     if (!isCall && postSize > preSize) {
         const size_t delta = postSize - preSize;
         for (size_t k = 0; k < delta; ++k) {
@@ -2488,6 +2595,201 @@ void ASTToBytecodeVisitor::visit(ExprStmtNode& node)
         }
     }
     LOG_DEBUG("Visiting exprstmt node end.");
+}
+
+bool ASTToBytecodeVisitor::moveAltElementToMain(const std::string& name)
+{
+    SymbolTable& symbolTable = m_scopePtr->getCurrentSymtab();
+    auto positionOpt = symbolTable.getPos(name, true);
+    if (!positionOpt.has_value()) {
+        return false;
+    }
+
+    const int64_t position = positionOpt.value();
+
+    // Pull the target and everything above it onto the main stack. The target
+    // is now on top. SWAP+TOALTSTACK restores each displaced element while
+    // leaving the target on main:
+    //   alt [..., target, a1, a0] -> main [..., target], alt [..., a1, a0].
+    for (int64_t i = 0; i <= position; ++i) {
+        m_generator.emit(tbc::BytOpcode::OP_FROMALTSTACK);
+    }
+    symbolTable.setMain(static_cast<int32_t>(position + 1));
+
+    for (int64_t i = 0; i < position; ++i) {
+        emitRoll(1);
+        symbolTable.roll(1);
+        m_generator.emit(tbc::BytOpcode::OP_TOALTSTACK);
+        symbolTable.m_altStackPtr->moveTopToStack(
+            *symbolTable.m_stackPtr.get(),
+            true // The altstack is shared by all active scopes.
+        );
+    }
+
+    return true;
+}
+
+void ASTToBytecodeVisitor::preserveStructReturn(
+    const std::string& rootName,
+    const std::string& structType,
+    const ReturnNode& node,
+    bool descriptorAlreadyOnStack
+)
+{
+    SymbolTable& symbolTable = m_scopePtr->getCurrentSymtab();
+    auto symbolicFields = getStructFieldsExpanded(
+        structType, rootName, m_structDefinitions
+    );
+    if (symbolicFields.empty()) {
+        std::ostringstream oss;
+        oss << "cannot return struct '" << structType
+            << "': it has no flattened fields";
+        SourceLocation loc("", node.pos.first, node.pos.second);
+        SEMANTIC_ERROR(oss.str(), loc, "Check the struct definition");
+        LOG_ERROR(oss.str());
+        throw std::runtime_error(oss.str());
+    }
+
+    // Struct parameters are bound leaf-by-leaf. Recover the caller-visible
+    // root from the first resolved leaf, then enumerate the whole returned
+    // value under that root.
+    const std::string& firstSymbolicField = symbolicFields.front().first;
+    const std::string firstResolvedField =
+        symbolTable.resolveBindSymbol(firstSymbolicField);
+    const std::string firstSuffix = firstSymbolicField.substr(rootName.size());
+    std::string resolvedRoot = rootName;
+    if (firstResolvedField.size() >= firstSuffix.size() &&
+        firstResolvedField.compare(
+            firstResolvedField.size() - firstSuffix.size(),
+            firstSuffix.size(),
+            firstSuffix
+        ) == 0) {
+        resolvedRoot = firstResolvedField.substr(
+            0, firstResolvedField.size() - firstSuffix.size()
+        );
+    }
+
+    auto returnedFields = getStructFieldsExpanded(
+        structType, resolvedRoot, m_structDefinitions
+    );
+
+    auto keepOnce = [&](const std::string& valueName) {
+        if (std::find(
+                symbolTable.m_keepSymbol.begin(),
+                symbolTable.m_keepSymbol.end(),
+                valueName
+            ) == symbolTable.m_keepSymbol.end()) {
+            symbolTable.m_keepSymbol.push_back(valueName);
+        }
+    };
+
+    for (const auto& [fieldPath, fieldType] : returnedFields) {
+        const std::string resolvedField =
+            symbolTable.resolveBindSymbol(fieldPath);
+
+        bool materialized = symbolTable.getPos(resolvedField).has_value();
+
+        if (!materialized) {
+            std::string fixedName = resolvedField;
+            if (auto fixed = symbolTable.getFixed(fixedName)) {
+                std::string script = fixed->getData();
+                if (script.empty() || script == resolvedField) {
+                    script = fixed->getName();
+                }
+                if (script.empty() || script == resolvedField) {
+                    std::ostringstream oss;
+                    oss << "incomplete struct return for '" << resolvedRoot
+                        << "': fixed field '" << resolvedField
+                        << "' has no materializable value";
+                    SourceLocation loc("", node.pos.first, node.pos.second);
+                    SEMANTIC_ERROR(
+                        oss.str(),
+                        loc,
+                        "Initialize every returned struct field"
+                    );
+                    LOG_ERROR(oss.str());
+                    throw std::runtime_error(oss.str());
+                }
+
+                m_generator.emit(script);
+                symbolTable.removeFixed(fixedName);
+                symbolTable.push(tbc::StackElement(
+                    resolvedField,
+                    fixed->getType().empty() ? fieldType : fixed->getType(),
+                    fixed->getData()
+                ));
+                materialized = true;
+            }
+        }
+
+        if (!materialized) {
+            materialized = moveAltElementToMain(resolvedField);
+        }
+
+        if (!materialized ||
+            !symbolTable.getPos(resolvedField).has_value()) {
+            std::ostringstream oss;
+            oss << "incomplete struct return for '" << resolvedRoot
+                << "': field '" << resolvedField
+                << "' is no longer available";
+            SourceLocation loc("", node.pos.first, node.pos.second);
+            SEMANTIC_ERROR(
+                oss.str(),
+                loc,
+                "Preserve or Clone every field before returning the struct"
+            );
+            LOG_ERROR(oss.str());
+            throw std::runtime_error(oss.str());
+        }
+
+        if (!m_structReturnFrames.empty()) {
+            m_structReturnFrames.back().returnedFields.insert(resolvedField);
+        }
+        keepOnce(resolvedField);
+    }
+
+    if (descriptorAlreadyOnStack) {
+        // A nested private call publishes its descriptor after its own cleanup.
+        // Consume that compiler-only slot before this function performs any
+        // cleanup, otherwise its non-runtime position would skew ROLL/NIP.
+        if (m_scopePtr->empty() ||
+            m_scopePtr->top().getName() != rootName ||
+            m_scopePtr->top().getType() != structType) {
+            std::ostringstream oss;
+            oss << "invalid returned struct descriptor for '" << rootName
+                << "'";
+            SourceLocation loc("", node.pos.first, node.pos.second);
+            SEMANTIC_ERROR(oss.str(), loc, "Check the nested struct return");
+            LOG_ERROR(oss.str());
+            throw std::runtime_error(oss.str());
+        }
+        m_scopePtr->pop();
+    }
+
+    if (!m_structReturnFrames.empty()) {
+        if (m_structReturnFrames.back().valueReturnCount > 1) {
+            std::ostringstream oss;
+            oss << "a struct-returning function cannot contain additional "
+                   "lowercase return values";
+            SourceLocation loc("", node.pos.first, node.pos.second);
+            SEMANTIC_ERROR(
+                oss.str(), loc, "Return the complete struct as the only value"
+            );
+            LOG_ERROR(oss.str());
+            throw std::runtime_error(oss.str());
+        }
+
+        // Publish this descriptor only after block/local/parameter cleanup in
+        // privateFunctionResolution(). It has no corresponding runtime value.
+        m_structReturnFrames.back().descriptor = tbc::StackElement(
+            resolvedRoot, structType, resolvedRoot
+        );
+    }
+
+    LOG_DEBUG(
+        "Preserving returned struct '" + resolvedRoot + "' with " +
+        std::to_string(returnedFields.size()) + " flattened field(s)"
+    );
 }
 
 void ASTToBytecodeVisitor::visit(ReturnNode& node)
@@ -2621,6 +2923,23 @@ void ASTToBytecodeVisitor::visit(ReturnNode& node)
         LOG_DEBUG(
             "Value-return statement (lowercase return): preserving its value"
         );
+
+        if (!m_structReturnFrames.empty()) {
+            if (m_structReturnFrames.back().descriptor.has_value()) {
+                std::ostringstream oss;
+                oss << "a struct-returning function cannot contain additional "
+                       "lowercase return values";
+                SourceLocation loc("", node.pos.first, node.pos.second);
+                SEMANTIC_ERROR(
+                    oss.str(),
+                    loc,
+                    "Return the complete struct as the only value"
+                );
+                LOG_ERROR(oss.str());
+                throw std::runtime_error(oss.str());
+            }
+            ++m_structReturnFrames.back().valueReturnCount;
+        }
 
         // 小写 return 不生成 OP_RETURN，但表达式结果必须跨过当前作用域
         // 清理。已有变量保留原槽；字面量和计算表达式先物化再 keep。
@@ -2776,6 +3095,51 @@ void ASTToBytecodeVisitor::visit(ReturnNode& node)
 
         auto keepExistingOrMaterialize = [&](ExprNode& expr) {
             if (auto* identifier = dynamic_cast<IdentifierNode*>(&expr)) {
+                const std::string& varName = identifier->name;
+
+                // Struct values are represented by flattened field slots, not
+                // by one runtime root slot. The active function signature is
+                // authoritative for parameters; local structs are recovered
+                // from the current semantic symbol table.
+                std::optional<std::string> structType;
+                if (!m_activePrivateFunctions.empty()) {
+                    const FunctionNode* activeFunction =
+                        m_activePrivateFunctions.back();
+                    for (const auto& parameter : activeFunction->parameters) {
+                        if (parameter.name == varName &&
+                            m_structDefinitions.find(parameter.type) !=
+                                m_structDefinitions.end()) {
+                            structType = parameter.type;
+                            break;
+                        }
+                    }
+                }
+
+                const SymbolTable& currentSymtab =
+                    m_scopePtr->getCurrentSymtab();
+                if (!structType.has_value()) {
+                    const auto symbols = currentSymtab.getCurrentScopeSymbols();
+                    for (auto it = symbols.rbegin(); it != symbols.rend(); ++it) {
+                        if (it->getSymbolName() != varName) {
+                            continue;
+                        }
+                        const std::string& candidateType =
+                            it->m_stackElement.getType();
+                        if (m_structDefinitions.find(candidateType) !=
+                            m_structDefinitions.end()) {
+                            structType = candidateType;
+                            break;
+                        }
+                    }
+                }
+
+                if (structType.has_value()) {
+                    preserveStructReturn(
+                        varName, structType.value(), node, false
+                    );
+                    return;
+                }
+
                 preserveReturnSymbol(identifier->name);
                 return;
             }
@@ -2819,6 +3183,16 @@ void ASTToBytecodeVisitor::visit(ReturnNode& node)
 
             const StackElement& valueElement = m_scopePtr->top();
             const std::string valueName = valueElement.getName();
+            if (m_structDefinitions.find(valueElement.getType()) !=
+                m_structDefinitions.end()) {
+                // A nested private call already left its compiler-only root
+                // descriptor on top. Propagate ownership into this call's
+                // return frame without creating a second descriptor.
+                preserveStructReturn(
+                    valueName, valueElement.getType(), node, true
+                );
+                return;
+            }
             if (valueName.empty()) {
                 reportNoValue();
             }
@@ -2836,7 +3210,7 @@ void ASTToBytecodeVisitor::visit(ReturnNode& node)
                        dynamic_cast<IdentifierNode*>(node.expr.get())) {
             const std::string& varName = identifierNode->name;
             LOG_DEBUG("Marking return value variable as keep: " + varName);
-            preserveReturnSymbol(varName);
+            keepExistingOrMaterialize(*identifierNode);
         }
         // 大括号: 多返回值.
         else if (auto braceExpr = dynamic_cast<BraceExprNode*>(node.expr.get()
@@ -2854,6 +3228,20 @@ void ASTToBytecodeVisitor::visit(ReturnNode& node)
                     reportNoValue();
                 }
                 keepExistingOrMaterialize(*element);
+                if (!m_structReturnFrames.empty() &&
+                    m_structReturnFrames.back().descriptor.has_value()) {
+                    std::ostringstream oss;
+                    oss << "struct values cannot participate in a lowercase "
+                           "multi-value return";
+                    SourceLocation loc("", node.pos.first, node.pos.second);
+                    SEMANTIC_ERROR(
+                        oss.str(),
+                        loc,
+                        "Return the complete struct as the only value"
+                    );
+                    LOG_ERROR(oss.str());
+                    throw std::runtime_error(oss.str());
+                }
             }
         } else {
             keepExistingOrMaterialize(*node.expr);
@@ -3231,6 +3619,61 @@ void ASTToBytecodeVisitor::visit(VarDeclNode& node)
 
         auto valueElement = valueElementOpt.value();
         auto valueElementStr = valueElement.getName();
+
+        if (m_structDefinitions.find(valueElement.getType()) !=
+            m_structDefinitions.end()) {
+            if (node.type != valueElement.getType()) {
+                SourceLocation loc = getNodeLocation(node);
+                std::ostringstream oss;
+                oss << "cannot initialize struct variable '" << node.name
+                    << "' of type '" << node.type
+                    << "' with returned struct type '"
+                    << valueElement.getType() << "'";
+                SEMANTIC_ERROR(
+                    oss.str(), loc, "Use the same struct type on both sides"
+                );
+                LOG_ERROR(oss.str());
+                throw std::runtime_error(oss.str());
+            }
+
+            if (valueElementStr == node.name) {
+                m_scopePtr->markSymbolInitialized(node.name);
+                LOG_DEBUG(
+                    "Struct variable initialization preserved returned "
+                    "struct with the same identity: " +
+                    node.name
+                );
+#ifdef ENABLE_DEBUGGER
+                emitVarDebugInfo(node.name);
+#endif
+                return;
+            }
+
+            if (!transferCompositeIdentity(valueElementStr, node.name)) {
+                SourceLocation loc = getNodeLocation(node);
+                std::ostringstream oss;
+                oss << "failed to initialize struct variable '" << node.name
+                    << "' from returned struct '" << valueElementStr << "'";
+                SEMANTIC_ERROR(
+                    oss.str(),
+                    loc,
+                    "Ensure every returned struct field is available"
+                );
+                LOG_ERROR(oss.str());
+                throw std::runtime_error(oss.str());
+            }
+
+            m_scopePtr->markSymbolInitialized(node.name);
+            LOG_DEBUG(
+                "Struct variable initialization completed from returned "
+                "struct: " +
+                node.name
+            );
+#ifdef ENABLE_DEBUGGER
+            emitVarDebugInfo(node.name);
+#endif
+            return;
+        }
 
         bool isScriptElement = isScript(valueElementStr);
 
@@ -4784,6 +5227,21 @@ void ASTToBytecodeVisitor::visitDestructureAssign(DestructureAssignNode& node)
 
     visitExpr(*node.value);
 
+    if (!m_scopePtr->empty() &&
+        m_structDefinitions.find(m_scopePtr->top().getType()) !=
+            m_structDefinitions.end()) {
+        SourceLocation loc = getNodeLocation(node);
+        const std::string errorMsg =
+            "returned struct cannot be unpacked as scalar values";
+        SEMANTIC_ERROR(
+            errorMsg,
+            loc,
+            "Assign the complete returned struct to one struct variable"
+        );
+        LOG_ERROR(errorMsg);
+        throw std::runtime_error(errorMsg);
+    }
+
     // 假设函数按顺序压入多返回值; 栈顶=最后一个返回值, 栈底=第一个.
     std::vector<tbc::StackElement> values;
 
@@ -4859,6 +5317,95 @@ void ASTToBytecodeVisitor::privateFunctionResolution(
         LOG_ERROR(errorStream.str());
         throw std::runtime_error(errorStream.str());
     }
+
+    // Interpreter control-flow lowering stops visiting statements after the
+    // first lowercase return. Validate the full source shape before inlining
+    // so an unreachable additional return cannot hide an illegal struct plus
+    // scalar multi-return behind an internal assignment error.
+    std::vector<ReturnNode*> inlineReturns;
+    if (node.block) {
+        findAllReturnNodes(node.block.get(), inlineReturns);
+    }
+    size_t lowercaseReturnCount = 0;
+    std::unordered_set<std::string> knownStructValues;
+    for (const auto& parameter : node.parameters) {
+        if (m_structDefinitions.find(parameter.type) !=
+            m_structDefinitions.end()) {
+            knownStructValues.insert(parameter.name);
+        }
+    }
+    std::function<void(const StmtNode*)> collectStructLocals =
+        [&](const StmtNode* stmt) {
+            if (!stmt) {
+                return;
+            }
+            if (auto* declaration =
+                    dynamic_cast<const VarDeclNode*>(stmt)) {
+                if (m_structDefinitions.find(declaration->type) !=
+                    m_structDefinitions.end()) {
+                    knownStructValues.insert(declaration->name);
+                }
+                return;
+            }
+            if (auto* block = dynamic_cast<const BlockNode*>(stmt)) {
+                for (const auto& child : block->statements) {
+                    collectStructLocals(child.get());
+                }
+                return;
+            }
+            if (auto* branch = dynamic_cast<const IfNode*>(stmt)) {
+                collectStructLocals(branch->thenBranch.get());
+                collectStructLocals(branch->elseBranch.get());
+                return;
+            }
+            if (auto* loop = dynamic_cast<const ForNode*>(stmt)) {
+                collectStructLocals(loop->body.get());
+            }
+        };
+    collectStructLocals(node.block.get());
+
+    ReturnNode* knownStructReturn = nullptr;
+    for (ReturnNode* returnNode : inlineReturns) {
+        if (!returnNode || !returnNode->isValueReturn) {
+            continue;
+        }
+        ++lowercaseReturnCount;
+        if (auto* identifier =
+                dynamic_cast<IdentifierNode*>(returnNode->expr.get())) {
+            if (knownStructValues.count(identifier->name) != 0) {
+                knownStructReturn = returnNode;
+            }
+        }
+    }
+    if (knownStructReturn != nullptr && lowercaseReturnCount > 1) {
+        std::ostringstream oss;
+        oss << "a struct-returning function cannot contain additional "
+               "lowercase return values";
+        SourceLocation loc(
+            "", knownStructReturn->pos.first, knownStructReturn->pos.second
+        );
+        SEMANTIC_ERROR(
+            oss.str(), loc, "Return the complete struct as the only value"
+        );
+        LOG_ERROR(oss.str());
+        throw std::runtime_error(oss.str());
+    }
+
+    // Private calls are emitted inline into one shared symbol table. Keep all
+    // call-local metadata scoped explicitly so nested calls cannot leak their
+    // parameter bindings or return/Keep markers into their caller.
+    SymbolTable& callSymtab = m_scopePtr->getCurrentSymtab();
+    const auto savedBindings = callSymtab.m_bindSymbol;
+    const auto savedKeepSymbols = callSymtab.m_keepSymbol;
+    m_activePrivateFunctions.push_back(&node);
+    m_structReturnFrames.emplace_back();
+    DEFER_BLOCK(
+        SymbolTable& currentSymtab = m_scopePtr->getCurrentSymtab();
+        currentSymtab.m_bindSymbol = savedBindings;
+        currentSymtab.m_keepSymbol = savedKeepSymbols;
+        m_structReturnFrames.pop_back();
+        m_activePrivateFunctions.pop_back();
+    );
 
     // 把实参映射到形参名.
     LOG_DEBUG("Binding parameters");
@@ -5008,6 +5555,14 @@ void ASTToBytecodeVisitor::privateFunctionResolution(
 #endif
 
     m_scopePtr->popScopeStack();
+
+    // The root descriptor is compiler-only. Publishing it after all callee
+    // cleanup keeps emitted runtime stack positions exact while still giving
+    // the caller one typed value to consume immediately.
+    if (m_structReturnFrames.back().descriptor.has_value()) {
+        m_scopePtr->push(m_structReturnFrames.back().descriptor.value());
+    }
+
     // 私有函数的 lowercase return 已在内联体内部完成控制流截断；
     // 对调用者而言，函数调用本身仍是一个普通表达式。
     m_lastFlowResult = FlowResult::FallsThrough;
@@ -5051,11 +5606,10 @@ void ASTToBytecodeVisitor::cleanupFunctionParameters(const FunctionNode& node)
         }
     }
 
-    for (const auto& param : node.parameters) {
-        const std::string& paramName = param.name;
-        LOG_DEBUG("Removing parameter binding for: " + paramName);
-        symbolTable.removeBindSymbol(paramName);
-    }
+    // Bindings are restored from the exact pre-call snapshot by
+    // privateFunctionResolution(). Removing only the root parameter name is
+    // insufficient for flattened struct bindings (param.field -> arg.field)
+    // and corrupts nested calls with reused parameter names.
 }
 
 void ASTToBytecodeVisitor::cleanupStructParameter(
@@ -5070,20 +5624,41 @@ void ASTToBytecodeVisitor::cleanupStructParameter(
     std::vector<std::pair<std::string, std::string>> fieldPathsAndTypes =
         getStructFieldsExpanded(paramType, paramName, m_structDefinitions);
 
+    SymbolTable& currentSymtab = m_scopePtr->getCurrentSymtab();
+
+    auto isReturnedField = [&](const std::string& fieldPath) {
+        if (m_structReturnFrames.empty()) {
+            return false;
+        }
+        const std::string resolvedField =
+            currentSymtab.resolveBindSymbol(fieldPath);
+        return m_structReturnFrames.back().returnedFields.count(resolvedField) !=
+               0;
+    };
+
+    auto isKeptScalarField = [&](const std::string& fieldPath) {
+        const std::string resolvedField =
+            currentSymtab.resolveBindSymbol(fieldPath);
+        return std::find(
+                   currentSymtab.m_keepSymbol.begin(),
+                   currentSymtab.m_keepSymbol.end(),
+                   resolvedField
+               ) != currentSymtab.m_keepSymbol.end() ||
+               std::find(
+                   currentSymtab.m_keepSymbol.begin(),
+                   currentSymtab.m_keepSymbol.end(),
+                   fieldPath
+               ) != currentSymtab.m_keepSymbol.end();
+    };
+
     // 逆序清理: 字段按声明顺序入栈, 弹出顺序与之相反.
     for (auto it = fieldPathsAndTypes.rbegin(); it != fieldPathsAndTypes.rend();
          ++it) {
         const std::string& fieldPath = it->first;
         const std::string& fieldType = it->second;
 
-        if (std::find(
-                m_scopePtr->getCurrentSymtab().m_keepSymbol.begin(),
-                m_scopePtr->getCurrentSymtab().m_keepSymbol.end(),
-                fieldPath
-            ) != m_scopePtr->getCurrentSymtab().m_keepSymbol.end()) {
-            LOG_DEBUG(
-                "Skipping stack cleanup for kept return field: " + fieldPath
-            );
+        if (isReturnedField(fieldPath) || isKeptScalarField(fieldPath)) {
+            LOG_DEBUG("Preserving returned struct field: " + fieldPath);
             continue;
         }
 

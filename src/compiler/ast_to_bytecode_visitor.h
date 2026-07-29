@@ -2,6 +2,9 @@
 #define AST_TO_BYTECODE_VISITOR_H
 
 #include <map>
+#include <optional>
+#include <string>
+#include <unordered_set>
 #include <vector>
 
 #include "../ast/ast_visitor.h"
@@ -171,6 +174,20 @@ private:
     );
 
     void cleanupBasicParameter(const std::string& paramName);
+
+    // Preserve a lowercase-returned struct as all of its flattened leaves.
+    // The root descriptor exists only in the compiler model; runtime values
+    // are the individual fields on the main stack.
+    void preserveStructReturn(
+        const std::string& rootName,
+        const std::string& structType,
+        const ReturnNode& node,
+        bool descriptorAlreadyOnStack
+    );
+
+    // Move one exact altstack element to the main stack while restoring all
+    // elements that were above it to their original altstack order.
+    bool moveAltElementToMain(const std::string& name);
 
     // pos==1 -> OP_SWAP, pos==2 -> OP_ROT, 其余 -> N OP_ROLL (省 1 字节).
     void emitRoll(int64_t pos);
@@ -417,6 +434,22 @@ private:
         m_structDefinitions;
 
     std::map<std::string, FunctionNode*> m_privateFunctions;
+
+    // Private functions are emitted inline. Keep the active call chain so a
+    // lowercase return can recover the declared type of a returned parameter.
+    std::vector<const FunctionNode*> m_activePrivateFunctions;
+
+    struct StructReturnFrame
+    {
+        std::unordered_set<std::string> returnedFields;
+        std::optional<tbc::StackElement> descriptor;
+        size_t valueReturnCount = 0;
+    };
+
+    // One frame per active inline private call. Parameter cleanup must only
+    // preserve fields returned by that exact call, never an earlier Keep or
+    // return from a nested/sibling call.
+    std::vector<StructReturnFrame> m_structReturnFrames;
 
     // 整体数组元素: 变量名 -> (arraySize, elementByteSize).
     std::map<std::string, std::pair<size_t, size_t>> m_wholeArrayElements;
