@@ -173,11 +173,7 @@ SymbolTable::getPos(const std::string& name, bool isAltFlag /*= false*/) const
 std::optional<int64_t>
 SymbolTable::getPos(StackElement& element, bool isAltFlag /*= false*/) const
 {
-    for (auto it : m_bindSymbol) {
-        if (it.first == element.getName()) {
-            element.setName(it.second);
-        }
-    }
+    element.setName(resolveBindSymbol(element.getName()));
     auto stackPtr = isAltFlag ? m_altStackPtr : m_stackPtr;
     if (!stackPtr) {
         std::ostringstream oss;
@@ -195,6 +191,29 @@ SymbolTable::getPos(StackElement& element, bool isAltFlag /*= false*/) const
     }
 
     return std::nullopt;
+}
+
+std::string SymbolTable::resolveBindSymbol(const std::string& name) const
+{
+    std::string resolved = name;
+
+    // At most one transition per binding prevents malformed cyclic bindings
+    // from looping forever while still supporting nested private calls.
+    for (size_t depth = 0; depth < m_bindSymbol.size(); ++depth) {
+        auto it = std::find_if(
+            m_bindSymbol.rbegin(),
+            m_bindSymbol.rend(),
+            [&resolved](const std::pair<std::string, std::string>& binding) {
+                return binding.first == resolved;
+            }
+        );
+        if (it == m_bindSymbol.rend() || it->second == resolved) {
+            break;
+        }
+        resolved = it->second;
+    }
+
+    return resolved;
 }
 
 void SymbolTable::removeBindSymbol(const std::string& paramName)
@@ -1172,18 +1191,25 @@ void SymbolTable::renameEntriesByPrefix(
         return;
     }
 
-    // 1) 栈上所有以 oldPrefix 开头的槽位改名
-    if (m_stackPtr) {
-        const size_t n = m_stackPtr->size();
+    // 1) 主栈、副栈和 fixed 区中所有以 oldPrefix 开头的
+    // 槽位改名. 结构体身份转移必须覆盖每一种存储位置.
+    auto renameStackEntries = [&](const std::shared_ptr<tbc::OpStack>& stack) {
+        if (!stack) {
+            return;
+        }
+        const size_t n = stack->size();
         for (size_t i = 0; i < n; ++i) {
-            auto& elem = m_stackPtr->at(i);
+            auto& elem = stack->at(i);
             const std::string& cur = elem.getName();
             if (cur.size() >= oldPrefix.size() &&
                 cur.compare(0, oldPrefix.size(), oldPrefix) == 0) {
                 elem.setName(newPrefix + cur.substr(oldPrefix.size()));
             }
         }
-    }
+    };
+    renameStackEntries(m_stackPtr);
+    renameStackEntries(m_altStackPtr);
+    renameStackEntries(m_fixedStackPtr);
 
     // 2) 作用域条目: 先清除 newPrefix 骨架, 再改键
     eraseScopeEntriesByPrefix(m_currentScope, newPrefix);

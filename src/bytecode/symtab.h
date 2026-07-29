@@ -440,6 +440,11 @@ public:
         m_bindSymbol.push_back(bindPair);
     }
 
+    // Resolve a parameter binding to the caller-visible symbol. Bindings can
+    // be chained by nested private calls (inner.field -> outer.field ->
+    // input.field), so resolution continues until it reaches a stable name.
+    std::string resolveBindSymbol(const std::string& name) const;
+
     // 按参数名移除绑定 (形参 -> 实参)
     void removeBindSymbol(const std::string& paramName);
 
