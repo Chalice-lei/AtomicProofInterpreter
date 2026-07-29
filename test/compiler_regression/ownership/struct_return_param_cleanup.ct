@@ -1,0 +1,9 @@
+Contract StructReturnParamCleanup:
+    Struct Pair:
+        left: number
+        right: number
+    def _select(data: Pair, marker: number):
+        return data
+    def main(value: Pair, marker: number):
+        value = _select(value, marker)
+        Return(value.left - value.right)

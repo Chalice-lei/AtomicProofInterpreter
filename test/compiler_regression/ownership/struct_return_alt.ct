@@ -1,0 +1,18 @@
+Contract StructReturnAlt:
+    Struct Pair:
+        left: number
+        right: number
+    def _roundtrip(value: Pair):
+        return value
+    def main(input: Pair):
+        SetAlt(input.right)
+        marker1 = Push(9)
+        SetAlt(marker1)
+        marker2 = Push(10)
+        SetAlt(marker2)
+        input = _roundtrip(input)
+        SetMain(marker2)
+        Delete(marker2)
+        SetMain(marker1)
+        Delete(marker1)
+        Return(input.left - input.right)

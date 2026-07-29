@@ -1,0 +1,7 @@
+Contract StructReturnFieldUpdateDirect:
+    Struct Pair:
+        left: number
+        right: number
+    def main(value: Pair):
+        value.left = 7
+        Return(value.left - value.right)

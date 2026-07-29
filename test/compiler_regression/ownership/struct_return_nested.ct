@@ -1,0 +1,15 @@
+Contract StructReturnNested:
+    Struct Inner:
+        amount: number
+    Struct Envelope:
+        inner: Inner
+        slots: uint64[2]
+    def _inner(payload: Envelope):
+        return payload
+    def _outer(value: Envelope):
+        return _inner(value)
+    def main(input: Envelope):
+        input = _outer(input)
+        length = Size(input.slots)
+        Delete(length)
+        Return(input.inner.amount)

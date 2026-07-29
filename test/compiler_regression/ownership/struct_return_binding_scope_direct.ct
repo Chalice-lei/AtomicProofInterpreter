@@ -1,0 +1,6 @@
+Contract StructReturnBindingScopeDirect:
+    Struct Pair:
+        left: number
+        right: number
+    def main(first: Pair, data: Pair):
+        Return(data.left - data.right)

@@ -1,0 +1,10 @@
+Contract StructReturnTypedSameName:
+    Struct Pair:
+        left: number
+        right: number
+    def _make():
+        value: Pair = {7, 3}
+        return value
+    def main():
+        value: Pair = _make()
+        Return(value.left - value.right)

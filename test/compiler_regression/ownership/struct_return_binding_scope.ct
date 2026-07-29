@@ -1,0 +1,9 @@
+Contract StructReturnBindingScope:
+    Struct Pair:
+        left: number
+        right: number
+    def _identity(data: Pair):
+        return data
+    def main(first: Pair, data: Pair):
+        first = _identity(first)
+        Return(data.left - data.right)

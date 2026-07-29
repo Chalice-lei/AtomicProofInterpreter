@@ -1,0 +1,11 @@
+Contract IncompleteStructReturn:
+    Struct Pair:
+        left: string
+        right: string
+    def _consume(value: Pair):
+        digest = Sha256(value.left)
+        Delete(digest)
+        return value
+    def main(input: Pair):
+        input = _consume(input)
+        Return(1)

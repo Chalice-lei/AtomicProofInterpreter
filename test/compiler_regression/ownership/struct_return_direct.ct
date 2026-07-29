@@ -1,0 +1,6 @@
+Contract StructReturnDirect:
+    Struct Pair:
+        left: number
+        right: number
+    def main(value: Pair):
+        Return(value.left - value.right)

@@ -1,0 +1,10 @@
+Contract StructReturnFresh:
+    Struct Pair:
+        left: number
+        right: number
+    def _identity(data: Pair):
+        return data
+    def main(source: Pair):
+        target: Pair
+        target = _identity(source)
+        Return(target.left - target.right)

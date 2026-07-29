@@ -1,0 +1,8 @@
+Contract StructReturnLocalCleanupDirect:
+    Struct Pair:
+        left: number
+        right: number
+    def main(value: Pair):
+        marker = Push(9)
+        Delete(marker)
+        Return(value.left - value.right)

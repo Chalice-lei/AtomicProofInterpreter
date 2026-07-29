@@ -1,0 +1,10 @@
+Contract StructReturnLocalCleanup:
+    Struct Pair:
+        left: number
+        right: number
+    def _identity(data: Pair):
+        marker = Push(9)
+        return data
+    def main(value: Pair):
+        value = _identity(value)
+        Return(value.left - value.right)

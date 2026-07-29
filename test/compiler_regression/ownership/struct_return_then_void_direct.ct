@@ -1,0 +1,10 @@
+Contract StructReturnThenVoidDirect:
+    Struct Pair:
+        left: number
+        right: number
+    def _noop(data: Pair):
+        marker = Push(1)
+        Delete(marker)
+    def main(value: Pair):
+        _noop(value)
+        Return(1)

@@ -1,0 +1,9 @@
+Contract StructMultiReturn:
+    Struct Pair:
+        left: number
+        right: number
+    def _values(data: Pair):
+        return {data, 1}
+    def main(value: Pair):
+        {result, marker} = _values(value)
+        Return(marker)

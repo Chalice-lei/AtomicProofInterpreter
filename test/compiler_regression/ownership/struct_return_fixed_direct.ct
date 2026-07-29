@@ -1,0 +1,7 @@
+Contract StructReturnFixedDirect:
+    Struct Pair:
+        left: number
+        right: number
+    def main():
+        result: Pair = {7, 3}
+        Return(result.left - result.right)

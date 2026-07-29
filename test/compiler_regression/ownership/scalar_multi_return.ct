@@ -1,0 +1,6 @@
+Contract ScalarMultiReturn:
+    def _values():
+        return {7, 3}
+    def main():
+        {left, right} = _values()
+        Return(left - right)

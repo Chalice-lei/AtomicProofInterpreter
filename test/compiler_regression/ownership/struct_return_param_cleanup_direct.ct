@@ -1,0 +1,7 @@
+Contract StructReturnParamCleanupDirect:
+    Struct Pair:
+        left: number
+        right: number
+    def main(value: Pair, marker: number):
+        Delete(marker)
+        Return(value.left - value.right)

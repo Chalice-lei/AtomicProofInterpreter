@@ -1,0 +1,8 @@
+Contract StructReturnFreshDirect:
+    Struct Pair:
+        left: number
+        right: number
+    def main(source: Pair):
+        target: Pair
+        target = source
+        Return(target.left - target.right)
