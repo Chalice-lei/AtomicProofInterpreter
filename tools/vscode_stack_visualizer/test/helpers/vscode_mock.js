@@ -71,9 +71,18 @@ function createContext(extensionRoot)
 
 function createVscodeMock(options = {})
 {
-    const workspaceRoot = path.resolve(options.workspaceRoot || process.cwd());
+    const workspaceRoots = (options.workspaceRoots || [
+        options.workspaceRoot || process.cwd()
+    ]).map((root) => path.resolve(root));
+    const workspaceRoot = workspaceRoots[0];
     const commandCallbacks = new Map();
     const configuration = new Map(Object.entries(options.configuration || {}));
+    const configurationsByRoot = new Map(Object.entries(
+        options.configurationByRoot || {}
+    ).map(([root, values]) => [
+        path.resolve(root),
+        new Map(Object.entries(values || {}))
+    ]));
     const saveEmitter = new MockEventEmitter();
     const configEmitter = new MockEventEmitter();
     const debugStartEmitter = new MockEventEmitter();
@@ -100,7 +109,9 @@ function createVscodeMock(options = {})
         warningChoice: [],
         sessionCounter: 0,
         throwDebugStart: null,
-        throwConfigUpdate: null
+        throwDebugStop: null,
+        throwConfigUpdate: null,
+        suppressDebugTermination: Boolean(options.suppressDebugTermination)
     };
 
     const outputChannel = {
@@ -131,7 +142,7 @@ function createVscodeMock(options = {})
         },
         StatusBarAlignment: {Left: 1},
         ViewColumn: {Active: 1, Beside: 2, One: 1},
-        ConfigurationTarget: {Global: 1, Workspace: 2},
+        ConfigurationTarget: {Global: 1, Workspace: 2, WorkspaceFolder: 3},
         ProgressLocation: {Notification: 1, Window: 2},
         window: {
             activeTextEditor: options.activeTextEditor,
@@ -216,12 +227,21 @@ function createVscodeMock(options = {})
         workspace: {
             workspaceFolders: options.noWorkspace
                 ? []
-                : [{uri: MockUri.file(workspaceRoot), name: path.basename(workspaceRoot), index: 0}],
-            getConfiguration()
+                : workspaceRoots.map((root, index) => ({
+                    uri: MockUri.file(root),
+                    name: path.basename(root),
+                    index
+                })),
+            getConfiguration(_section, resource)
             {
+                const folder = resource && vscode.workspace.getWorkspaceFolder(resource);
+                const scoped = folder && configurationsByRoot.get(folder.uri.fsPath);
                 return {
                     get(key, fallback)
                     {
+                        if (scoped?.has(key)) {
+                            return scoped.get(key);
+                        }
                         return configuration.has(key) ? configuration.get(key) : fallback;
                     },
                     async update(key, value)
@@ -229,7 +249,7 @@ function createVscodeMock(options = {})
                         if (state.throwConfigUpdate) {
                             throw state.throwConfigUpdate;
                         }
-                        configuration.set(key, value);
+                        (scoped || configuration).set(key, value);
                         configEmitter.fire({
                             affectsConfiguration: (name) =>
                                 name.includes(key) || name.endsWith("autoRunOnSave")
@@ -239,20 +259,33 @@ function createVscodeMock(options = {})
             },
             onDidSaveTextDocument: saveEmitter.event,
             onDidChangeConfiguration: configEmitter.event,
-            getWorkspaceFolder()
+            getWorkspaceFolder(uri)
             {
-                return vscode.workspace.workspaceFolders[0];
+                if (!uri) {
+                    return vscode.workspace.workspaceFolders[0];
+                }
+                const candidate = path.resolve(uri.fsPath);
+                return vscode.workspace.workspaceFolders
+                    .filter((folder) => {
+                        const relative = path.relative(folder.uri.fsPath, candidate);
+                        return relative === "" || (!relative.startsWith(".." + path.sep) &&
+                            relative !== ".." && !path.isAbsolute(relative));
+                    })
+                    .sort((left, right) =>
+                        right.uri.fsPath.length - left.uri.fsPath.length
+                    )[0];
             },
             asRelativePath(uri)
             {
-                return path.relative(workspaceRoot, uri.fsPath);
+                const folder = vscode.workspace.getWorkspaceFolder(uri);
+                return path.relative(folder?.uri.fsPath || workspaceRoot, uri.fsPath);
             },
             async findFiles(pattern)
             {
                 const basename = String(pattern).replace(/^\*\*\//, "").replace(/\.ct$/, "");
-                const files = fs.readdirSync(workspaceRoot)
-                    .filter((file) => file.endsWith(".ct") && file.startsWith(basename));
-                return files.map((file) => MockUri.file(path.join(workspaceRoot, file)));
+                return workspaceRoots.flatMap((root) => fs.readdirSync(root)
+                    .filter((file) => file.endsWith(".ct") && file.startsWith(basename))
+                    .map((file) => MockUri.file(path.join(root, file))));
             },
             async openTextDocument(uri)
             {
@@ -308,15 +341,17 @@ function createVscodeMock(options = {})
             },
             async stopDebugging(session)
             {
+                if (state.throwDebugStop) {
+                    throw state.throwDebugStop;
+                }
                 const target = session || vscode.debug.activeDebugSession;
                 state.debugStops.push(target);
-                if (target) {
+                if (target && !state.suppressDebugTermination) {
                     debugTerminateEmitter.fire(target);
                 }
                 if (vscode.debug.activeDebugSession === target) {
                     vscode.debug.activeDebugSession = undefined;
                 }
-                return true;
             }
         },
         __state: state

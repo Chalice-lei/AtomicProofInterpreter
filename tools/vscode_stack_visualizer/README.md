@@ -60,8 +60,10 @@ Run `AtomicProof: Toggle Auto Debug On Save` to enable or disable save-driven
 debugging for `.ct` files. The default mode is `trace`: after a short debounce,
 the extension reuses the most recent function name and arguments, regenerates
 the configured `traceOutputPath`, and refreshes the visualizer without taking
-focus from the editor. If no function or argument history exists yet, VS Code
-asks for it once.
+focus from the editor. Function and argument history is isolated per contract,
+and the default output is `<contract>.stack_trace.json` beside that contract so
+parallel saves do not share one output file. If no function or argument history
+exists yet, VS Code asks for it once.
 
 Set `atomicProofStackVisualizer.autoRunOnSave.mode` to `live` to restart the
 matching live VM debug session after saving. The extension records the most
@@ -91,6 +93,8 @@ breakpoints are preserved and re-applied by the debugger.
 
 Path settings support `${workspaceFolder}`, `${file}`, `${fileDirname}`,
 `${fileBasenameNoExtension}`, and `${home}`.
+In a multi-root workspace, settings and `${workspaceFolder}` are resolved from
+the workspace folder that owns the selected contract or trace.
 
 ## Checks And Packaging
 
@@ -151,7 +155,7 @@ npm run test:full
 ```
 
 `test:fast` 覆盖 Schema/数据不变量、8 个公开命令路径和 Trace/Live DAP 协议；
-`test:webview` 使用无头 Chromium 覆盖离线交互、安全、剪贴板、持久化和
+`test:webview` 使用无头 Chromium 覆盖真实 nonce CSP、离线交互、安全、剪贴板、持久化和
 可访问性；`test:extension` 运行真实 VS Code Extension Host；`test:live` 要求
 已经构建 `build/bin/utxo_Interpreter`；`test:package` 检查 VSIX 内容并安装到
 干净 Extension Host。核心套件缺少 Chromium 或解释器时会明确失败。

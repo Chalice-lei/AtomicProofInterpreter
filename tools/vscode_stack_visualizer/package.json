@@ -254,31 +254,37 @@
 			"properties": {
 				"atomicProofStackVisualizer.interpreterPath": {
 					"type": "string",
+					"scope": "resource",
 					"default": "",
 					"description": "Path to utxo_Interpreter. Leave empty to use build/bin/utxo_Interpreter inside the workspace. Supports ${workspaceFolder}, ${file}, ${fileDirname}, ${fileBasenameNoExtension}, and ${home}."
 				},
 				"atomicProofStackVisualizer.traceOutputPath": {
 					"type": "string",
-					"default": "${workspaceFolder}/stack_trace.json",
+					"scope": "resource",
+					"default": "${fileDirname}/${fileBasenameNoExtension}.stack_trace.json",
 					"description": "Default stack trace output path. Supports ${workspaceFolder}, ${file}, ${fileDirname}, ${fileBasenameNoExtension}, and ${home}."
 				},
 				"atomicProofStackVisualizer.defaultFunction": {
 					"type": "string",
+					"scope": "resource",
 					"default": "",
 					"description": "Default contract function name when generating a stack trace."
 				},
 				"atomicProofStackVisualizer.defaultArguments": {
 					"type": "string",
+					"scope": "resource",
 					"default": "",
 					"description": "Default function arguments when generating a stack trace."
 				},
 				"atomicProofStackVisualizer.autoOpenGeneratedTrace": {
 					"type": "boolean",
+					"scope": "resource",
 					"default": true,
 					"description": "Open the visualizer automatically after generating a trace."
 				},
 				"atomicProofStackVisualizer.defaultViewMode": {
 					"type": "string",
+					"scope": "resource",
 					"enum": [
 						"diff",
 						"before",
@@ -289,6 +295,7 @@
 				},
 				"atomicProofStackVisualizer.playbackSpeed": {
 					"type": "number",
+					"scope": "resource",
 					"default": 1,
 					"minimum": 0.25,
 					"maximum": 4,
@@ -296,16 +303,19 @@
 				},
 				"atomicProofStackVisualizer.openBeside": {
 					"type": "boolean",
+					"scope": "resource",
 					"default": true,
 					"description": "Open stack traces beside the active editor."
 				},
 				"atomicProofStackVisualizer.autoRunOnSave.enabled": {
 					"type": "boolean",
+					"scope": "resource",
 					"default": false,
 					"description": "Run AtomicProof trace generation or live VM debug restart automatically after saving a .ct file."
 				},
 				"atomicProofStackVisualizer.autoRunOnSave.mode": {
 					"type": "string",
+					"scope": "resource",
 					"enum": [
 						"trace",
 						"live"
@@ -315,17 +325,20 @@
 				},
 				"atomicProofStackVisualizer.autoRunOnSave.debounceMs": {
 					"type": "number",
+					"scope": "resource",
 					"default": 600,
 					"minimum": 0,
 					"description": "Debounce delay in milliseconds before auto debug on save runs."
 				},
 				"atomicProofStackVisualizer.autoRunOnSave.showStatus": {
 					"type": "boolean",
+					"scope": "resource",
 					"default": true,
 					"description": "Show AtomicProof auto debug on save status in the VS Code status bar."
 				},
 				"atomicProofStackVisualizer.autoRunOnSave.restartLiveDebug": {
 					"type": "boolean",
+					"scope": "resource",
 					"default": true,
 					"description": "Restart the matching live VM debug session after saving when auto debug on save is in live mode."
 				}

@@ -19,12 +19,20 @@ const fakeInterpreter = path.join(
     "fixtures",
     "fake_live_interpreter.js"
 );
+const silentInterpreter = path.join(
+    extensionRoot,
+    "test",
+    "fixtures",
+    "silent_live_interpreter.js"
+);
 
-function createAdapter(workspaceRoot)
+function createAdapter(workspaceRoot, timeouts = {})
 {
     const vscode = createVscodeMock({workspaceRoot});
     const extension = loadExtensionWithMock(extensionPath, vscode);
-    return new extension.__test.AtomicProofLiveDebugAdapter();
+    const adapter = new extension.__test.AtomicProofLiveDebugAdapter();
+    Object.assign(adapter, timeouts);
+    return adapter;
 }
 
 function createContract(t, basename = "live.ct")
@@ -41,6 +49,20 @@ function createContract(t, basename = "live.ct")
     return contract;
 }
 
+function createSilentContract(t)
+{
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "apc-silent-live-dap-"));
+    const contract = path.join(tempDir, "silent.ct");
+    fs.writeFileSync(contract, "Contract Silent:\n    def main():\n        Return(1)\n", "utf8");
+    fs.writeFileSync(
+        path.join(tempDir, "debug-server"),
+        `require(${JSON.stringify(silentInterpreter)});\n`,
+        "utf8"
+    );
+    t.after(() => fs.rmSync(tempDir, {recursive: true, force: true}));
+    return contract;
+}
+
 async function waitFor(predicate, message, timeoutMs = 2000)
 {
     const deadline = Date.now() + timeoutMs;
@@ -51,6 +73,16 @@ async function waitFor(predicate, message, timeoutMs = 2000)
         await new Promise((resolve) => setTimeout(resolve, 20));
     }
     throw new Error(message);
+}
+
+function processIsAlive(pid)
+{
+    try {
+        process.kill(pid, 0);
+        return true;
+    } catch (_error) {
+        return false;
+    }
 }
 
 test("Live DAP 完整覆盖 launch、断点、continue/next/stepIn/stepOut", async (t) => {
@@ -329,4 +361,72 @@ test("Live DAP 参数始终作为 argv 传递，不经过 shell", async (t) => {
     }));
     assert.strictEqual(fs.existsSync(marker), false);
     assertSuccess(assert, await client.request("terminate"));
+});
+
+test("Live DAP 静默 server 的 ready 超时会清理并终止子进程", async (t) => {
+    const contract = createSilentContract(t);
+    const adapter = createAdapter(path.dirname(contract), {
+        readyTimeoutMs: 60,
+        requestTimeoutMs: 60
+    });
+    const client = attach(adapter);
+    t.after(() => client.dispose());
+    const launch = client.request("launch", {
+        contractPath: contract,
+        functionName: "main",
+        interpreterPath: process.execPath
+    }, 1000);
+    await waitFor(() => adapter.child?.pid, "silent child did not start");
+    const childPid = adapter.child.pid;
+    const response = await launch;
+    assert.strictEqual(response.success, false);
+    assert.match(response.message, /ready.*timed out|timed out.*ready/i);
+    assert.strictEqual(adapter.pending.size, 0);
+    assert.strictEqual(adapter.child, null);
+    await waitFor(
+        () => !processIsAlive(childPid),
+        "silent Live server process survived the ready timeout"
+    );
+});
+
+test("Live DAP initialize 协议请求超时会清 pending 并终止子进程", async (t) => {
+    const contract = createContract(t, "request-timeout.ct");
+    const adapter = createAdapter(path.dirname(contract), {
+        readyTimeoutMs: 200,
+        requestTimeoutMs: 60
+    });
+    const client = attach(adapter);
+    t.after(() => client.dispose());
+    const response = await client.request("launch", {
+        contractPath: contract,
+        functionName: "main",
+        interpreterPath: process.execPath
+    }, 1000);
+    assert.strictEqual(response.success, false);
+    assert.match(response.message, /initialize.*timed out|timed out.*initialize/i);
+    assert.strictEqual(adapter.pending.size, 0);
+    assert.strictEqual(adapter.child, null);
+});
+
+test("Live DAP launch 后的任意协议请求也受超时与清理保护", async (t) => {
+    const contract = createContract(t, "later-timeout.ct");
+    const adapter = createAdapter(path.dirname(contract), {
+        readyTimeoutMs: 200,
+        requestTimeoutMs: 60
+    });
+    const client = attach(adapter);
+    t.after(() => client.dispose());
+    assertSuccess(assert, await client.request("launch", {
+        contractPath: contract,
+        functionName: "main",
+        interpreterPath: process.execPath
+    }, 1000));
+    const response = await client.request("setBreakpoints", {
+        source: {path: contract},
+        breakpoints: [{line: 2}]
+    }, 1000);
+    assert.strictEqual(response.success, false);
+    assert.match(response.message, /setBreakpoints.*timed out|timed out.*setBreakpoints/i);
+    assert.strictEqual(adapter.pending.size, 0);
+    assert.strictEqual(adapter.child, null);
 });

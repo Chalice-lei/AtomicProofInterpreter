@@ -14,9 +14,14 @@ const LAST_TRACE_KEY = "lastTracePath";
 const LAST_FUNCTION_KEY = "lastFunctionName";
 const LAST_ARGS_KEY = "lastArguments";
 const AUTO_SAVE_STATUS_DELAY_MS = 2500;
+const DEFAULT_TRACE_OUTPUT_TEMPLATE =
+    "${fileDirname}/${fileBasenameNoExtension}.stack_trace.json";
+const LIVE_READY_TIMEOUT_MS = 5000;
+const LIVE_REQUEST_TIMEOUT_MS = 5000;
 
 const autoRunSaveTimers = new Map();
 const autoRunLocks = new Set();
+const autoRunPending = new Set();
 const tracePanels = new Map();
 const liveSessionsByContract = new Map();
 const liveSessionContracts = new Map();
@@ -24,6 +29,7 @@ const liveDebugConfigsByContract = new Map();
 
 let statusBarItem;
 let statusResetTimer;
+let traceSchema;
 
 function activate(context)
 {
@@ -172,14 +178,17 @@ async function openTrace(context, traceUri, options = {})
                 traceUri.fsPath,
                 templatePath
             );
-            existingPanel.reveal(getOpenColumn(), Boolean(options.preserveFocus));
+            existingPanel.reveal(
+                getOpenColumn(traceUri),
+                Boolean(options.preserveFocus)
+            );
             return;
         }
 
         const panel = vscode.window.createWebviewPanel(
             "atomicProofStackVisualizer",
             `Stack Trace: ${path.basename(traceUri.fsPath)}`,
-            getWebviewShowOptions(options),
+            getWebviewShowOptions(options, traceUri),
             {
                 enableScripts: true,
                 retainContextWhenHidden: true,
@@ -220,11 +229,159 @@ async function openTrace(context, traceUri, options = {})
     }
 }
 
-function validateTrace(trace)
+function validateTrace(trace, options = {})
 {
     if (!isStackTrace(trace)) {
-        throw new Error("selected JSON is not an apc-stack-trace file");
+        const pathText = trace?.format !== "apc-stack-trace" ? "$.format" : "$.steps";
+        throw new Error(
+            `selected JSON is not an apc-stack-trace file: ${pathText} is invalid`
+        );
     }
+    const errors = [];
+    validateSchemaValue(
+        trace,
+        loadTraceSchema(),
+        loadTraceSchema(),
+        "$",
+        errors
+    );
+    if (errors.length) {
+        throw new Error(
+            "Invalid stack trace: " + errors.slice(0, 5).join("; ")
+        );
+    }
+    if (options.requireSteps && trace.steps.length === 0) {
+        throw new Error("Invalid stack trace: $.steps must contain at least one step");
+    }
+}
+
+function loadTraceSchema()
+{
+    if (!traceSchema) {
+        traceSchema = JSON.parse(fs.readFileSync(
+            path.join(__dirname, "schemas", "apc-stack-trace.schema.json"),
+            "utf8"
+        ));
+    }
+    return traceSchema;
+}
+
+function validateSchemaValue(value, schema, rootSchema, instancePath, errors)
+{
+    if (!schema || errors.length >= 20) {
+        return;
+    }
+    if (schema.$ref) {
+        validateSchemaValue(
+            value,
+            resolveLocalSchemaRef(rootSchema, schema.$ref),
+            rootSchema,
+            instancePath,
+            errors
+        );
+        return;
+    }
+    if (schema.const !== undefined && !schemaValuesEqual(value, schema.const)) {
+        errors.push(`${instancePath} must equal ${JSON.stringify(schema.const)}`);
+        return;
+    }
+    if (Array.isArray(schema.enum) &&
+        !schema.enum.some((candidate) => schemaValuesEqual(value, candidate))) {
+        errors.push(`${instancePath} must be one of ${schema.enum.map((item) =>
+            JSON.stringify(item)).join(", ")}`);
+        return;
+    }
+    if (schema.type && !schemaTypeMatches(value, schema.type)) {
+        errors.push(`${instancePath} must be ${schema.type}`);
+        return;
+    }
+    if (schema.type === "object" && value && !Array.isArray(value)) {
+        for (const key of schema.required || []) {
+            if (!Object.prototype.hasOwnProperty.call(value, key)) {
+                errors.push(`${appendSchemaPath(instancePath, key)} is required`);
+            }
+        }
+        const properties = schema.properties || {};
+        for (const [key, item] of Object.entries(value)) {
+            if (Object.prototype.hasOwnProperty.call(properties, key)) {
+                validateSchemaValue(
+                    item,
+                    properties[key],
+                    rootSchema,
+                    appendSchemaPath(instancePath, key),
+                    errors
+                );
+            } else if (schema.additionalProperties === false) {
+                errors.push(`${appendSchemaPath(instancePath, key)} is not allowed`);
+            } else if (schema.additionalProperties &&
+                typeof schema.additionalProperties === "object") {
+                validateSchemaValue(
+                    item,
+                    schema.additionalProperties,
+                    rootSchema,
+                    appendSchemaPath(instancePath, key),
+                    errors
+                );
+            }
+        }
+    }
+    if (schema.type === "array" && Array.isArray(value)) {
+        if (Number.isInteger(schema.minItems) && value.length < schema.minItems) {
+            errors.push(`${instancePath} must contain at least ${schema.minItems} item(s)`);
+        }
+        if (schema.items) {
+            value.forEach((item, index) => validateSchemaValue(
+                item,
+                schema.items,
+                rootSchema,
+                `${instancePath}[${index}]`,
+                errors
+            ));
+        }
+    }
+}
+
+function resolveLocalSchemaRef(rootSchema, reference)
+{
+    if (!reference.startsWith("#/")) {
+        throw new Error(`Unsupported trace schema reference: ${reference}`);
+    }
+    return reference.slice(2).split("/").reduce((current, segment) =>
+        current?.[segment.replace(/~1/g, "/").replace(/~0/g, "~")], rootSchema);
+}
+
+function schemaTypeMatches(value, type)
+{
+    switch (type) {
+    case "object":
+        return Boolean(value && typeof value === "object" && !Array.isArray(value));
+    case "array":
+        return Array.isArray(value);
+    case "integer":
+        return Number.isInteger(value);
+    case "number":
+        return typeof value === "number" && Number.isFinite(value);
+    case "string":
+        return typeof value === "string";
+    case "boolean":
+        return typeof value === "boolean";
+    case "null":
+        return value === null;
+    default:
+        return true;
+    }
+}
+
+function schemaValuesEqual(left, right)
+{
+    return JSON.stringify(left) === JSON.stringify(right);
+}
+
+function appendSchemaPath(base, key)
+{
+    return /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(key)
+        ? `${base}.${key}`
+        : `${base}[${JSON.stringify(key)}]`;
 }
 
 function isStackTrace(value)
@@ -247,6 +404,79 @@ function parseJson(text, filePath)
         return JSON.parse(text);
     } catch (error) {
         throw new Error(`${path.basename(filePath)} is not valid JSON: ${error.message}`);
+    }
+}
+
+async function readAndValidateTraceFile(filePath, options = {})
+{
+    let text;
+    try {
+        text = await fs.promises.readFile(filePath, "utf8");
+    } catch (error) {
+        if (error.code === "ENOENT") {
+            throw new Error(
+                `Interpreter did not produce a valid stack trace at ${filePath}.`
+            );
+        }
+        throw error;
+    }
+    const trace = parseJson(text, filePath);
+    validateTrace(trace, options);
+    return trace;
+}
+
+function createStagingTracePath(targetPath)
+{
+    const basename = path.basename(targetPath, path.extname(targetPath));
+    return path.join(
+        path.dirname(targetPath),
+        `.${basename}.${process.pid}.${Date.now()}.${getNonce()}.trace.json`
+    );
+}
+
+async function publishGeneratedTrace(stagingPath, targetPath)
+{
+    try {
+        await fs.promises.rename(stagingPath, targetPath);
+        return;
+    } catch (error) {
+        if (!fs.existsSync(targetPath) ||
+            !["EEXIST", "EPERM", "EACCES"].includes(error.code)) {
+            throw error;
+        }
+    }
+
+    const backupPath = createStagingTracePath(targetPath) + ".backup";
+    await fs.promises.rename(targetPath, backupPath);
+    try {
+        await fs.promises.rename(stagingPath, targetPath);
+        await fs.promises.unlink(backupPath).catch(() => {});
+    } catch (error) {
+        await fs.promises.rename(backupPath, targetPath).catch(() => {});
+        throw error;
+    }
+}
+
+function recentContractKey(baseKey, contractPath)
+{
+    return `${baseKey}:${normalizeFsPath(canonicalPath(contractPath))}`;
+}
+
+function getRecentContractValue(context, baseKey, contractPath)
+{
+    if (!contractPath) {
+        return undefined;
+    }
+    return context.workspaceState.get(recentContractKey(baseKey, contractPath));
+}
+
+async function setRecentContractValue(context, baseKey, contractPath, value)
+{
+    if (contractPath) {
+        await context.workspaceState.update(
+            recentContractKey(baseKey, contractPath),
+            value
+        );
     }
 }
 
@@ -337,7 +567,7 @@ function getArtifactSourceReferences(artifactUri, artifact)
 
 function getArtifactContractCandidates(artifactPath, references)
 {
-    const workspaceRoot = getWorkspaceRoot();
+    const workspaceRoot = getWorkspaceRoot(artifactPath);
     const candidates = [];
     const seen = new Set();
     const push = (candidate) => {
@@ -438,7 +668,7 @@ async function buildWebviewHtml(context, webview, trace, tracePath, templatePath
         .replace(/</g, "\\u003c")
         .replace(/\u2028/g, "\\u2028")
         .replace(/\u2029/g, "\\u2029");
-    const startupOptions = JSON.stringify(getWebviewStartupOptions())
+    const startupOptions = JSON.stringify(getWebviewStartupOptions(tracePath))
         .replace(/</g, "\\u003c")
         .replace(/\u2028/g, "\\u2028")
         .replace(/\u2029/g, "\\u2029");
@@ -447,7 +677,7 @@ async function buildWebviewHtml(context, webview, trace, tracePath, templatePath
         "<head>",
         `<head>\n  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${webview.cspSource} data:; style-src ${webview.cspSource} 'nonce-${nonce}'; script-src 'nonce-${nonce}'; font-src ${webview.cspSource};">`
     );
-    html = html.replace(/<style>/g, `<style nonce="${nonce}">`);
+    html = html.replace(/<style(?=[\s>])/g, `<style nonce="${nonce}"`);
     html = html.replace(/<script>/g, `<script nonce="${nonce}">`);
 
     html = html.replace(
@@ -507,27 +737,29 @@ async function openLastTrace(context)
 
 async function generateTrace(context, uri)
 {
-    const workspaceRoot = getWorkspaceRoot();
-    if (!workspaceRoot) {
+    const target = isContractUri(uri)
+        ? uri
+        : vscode.window.activeTextEditor?.document.uri;
+    const initialWorkspaceRoot = getWorkspaceRoot(target);
+    if (!initialWorkspaceRoot) {
         vscode.window.showWarningMessage(
             "Open the AtomicProofInterpreter folder before generating a trace."
         );
         return;
     }
 
-    const contractUri = await chooseContractUri(workspaceRoot, uri);
+    const contractUri = await chooseContractUri(initialWorkspaceRoot, uri);
     if (!contractUri) {
         return;
     }
-
     return generateTraceForContract(context, contractUri, {
-        openAfterGenerate: getConfig().get("autoOpenGeneratedTrace") !== false
+        openAfterGenerate: getConfig(contractUri).get("autoOpenGeneratedTrace") !== false
     });
 }
 
 async function generateTraceForContract(context, contractUri, options = {})
 {
-    const workspaceRoot = getWorkspaceRoot();
+    const workspaceRoot = getWorkspaceRoot(contractUri);
     if (!workspaceRoot) {
         const error = new Error(
             "Open the AtomicProofInterpreter folder before generating a trace."
@@ -547,13 +779,26 @@ async function generateTraceForContract(context, contractUri, options = {})
     if (!functionName) {
         return undefined;
     }
-    await context.workspaceState.update(LAST_FUNCTION_KEY, functionName);
+    await setRecentContractValue(
+        context,
+        LAST_FUNCTION_KEY,
+        contractUri.fsPath,
+        functionName
+    );
 
-    const argsText = await resolveTraceArgumentsText(context, options);
+    const argsText = await resolveTraceArgumentsText(context, {
+        ...options,
+        contractPath: contractUri.fsPath
+    });
     if (argsText === undefined) {
         return undefined;
     }
-    await context.workspaceState.update(LAST_ARGS_KEY, argsText);
+    await setRecentContractValue(
+        context,
+        LAST_ARGS_KEY,
+        contractUri.fsPath,
+        argsText
+    );
 
     const selectedTrace = await resolveTraceOutputUri(
         workspaceRoot,
@@ -565,7 +810,11 @@ async function generateTraceForContract(context, contractUri, options = {})
         return undefined;
     }
 
-    const executable = getInterpreterPath(workspaceRoot, contractUri.fsPath);
+    const executable = getInterpreterPath(
+        workspaceRoot,
+        contractUri.fsPath,
+        contractUri
+    );
 
     if (!fs.existsSync(executable)) {
         const error = new Error(
@@ -595,9 +844,10 @@ async function generateTraceForContract(context, contractUri, options = {})
         path.relative(workspaceRoot, contractUri.fsPath),
         functionName,
         ...splitArgs(argsText || ""),
-        "--stack-trace-output",
-        selectedTrace.fsPath
+        "--stack-trace-output"
     ];
+    const stagingTracePath = createStagingTracePath(selectedTrace.fsPath);
+    args.push(stagingTracePath);
 
     if (options.clearOutput !== false) {
         output.clear();
@@ -621,6 +871,11 @@ async function generateTraceForContract(context, contractUri, options = {})
             },
             (_progress, token) => execFile(executable, args, workspaceRoot, token)
         );
+        await readAndValidateTraceFile(
+            stagingTracePath,
+            {requireSteps: true}
+        );
+        await publishGeneratedTrace(stagingTracePath, selectedTrace.fsPath);
         output.appendLine("Stack trace generated.");
         await context.workspaceState.update(LAST_TRACE_KEY, selectedTrace.fsPath);
         vscode.window.setStatusBarMessage(
@@ -634,6 +889,7 @@ async function generateTraceForContract(context, contractUri, options = {})
         }
         return selectedTrace;
     } catch (error) {
+        await fs.promises.unlink(stagingTracePath).catch(() => {});
         output.appendLine(error.stack || error.message);
         if (options.throwOnError) {
             throw error;
@@ -660,9 +916,11 @@ async function resolveTraceFunctionName(context, contractPath, options)
 
     if (options.useRecentInputs) {
         const lastFunction = String(
-            context.workspaceState.get(LAST_FUNCTION_KEY) || ""
+            getRecentContractValue(context, LAST_FUNCTION_KEY, contractPath) || ""
         ).trim();
-        const configured = String(getConfig().get("defaultFunction") || "").trim();
+        const configured = String(
+            getConfig(contractPath).get("defaultFunction") || ""
+        ).trim();
         if (lastFunction || configured) {
             return lastFunction || configured;
         }
@@ -678,11 +936,17 @@ async function resolveTraceArgumentsText(context, options)
     }
 
     if (options.useRecentInputs) {
-        const lastArgs = context.workspaceState.get(LAST_ARGS_KEY);
+        const lastArgs = getRecentContractValue(
+            context,
+            LAST_ARGS_KEY,
+            options.contractPath
+        );
         if (typeof lastArgs === "string") {
             return lastArgs;
         }
-        const configured = String(getConfig().get("defaultArguments") || "");
+        const configured = String(
+            getConfig(options.contractPath).get("defaultArguments") || ""
+        );
         if (configured) {
             return configured;
         }
@@ -690,7 +954,7 @@ async function resolveTraceArgumentsText(context, options)
 
     return vscode.window.showInputBox({
         prompt: "Function arguments, separated by spaces",
-        value: getDefaultArguments(context),
+        value: getDefaultArguments(context, options.contractPath),
         placeHolder: placeholderArguments(options.params)
     });
 }
@@ -703,8 +967,15 @@ async function resolveTraceOutputUri(workspaceRoot, contractPath, options)
             : vscode.Uri.file(String(options.traceUri));
     }
 
+    let outputTemplate = getConfig(contractPath).get("traceOutputPath") ||
+        DEFAULT_TRACE_OUTPUT_TEMPLATE;
+    if (options.autoSave &&
+        String(outputTemplate).replace(/\\/g, "/") ===
+            "${workspaceFolder}/stack_trace.json") {
+        outputTemplate = DEFAULT_TRACE_OUTPUT_TEMPLATE;
+    }
     const tracePath = resolveConfiguredPath(
-        getConfig().get("traceOutputPath") || "${workspaceFolder}/stack_trace.json",
+        outputTemplate,
         workspaceRoot,
         contractPath
     );
@@ -723,12 +994,71 @@ async function resolveTraceOutputUri(workspaceRoot, contractPath, options)
 
 function splitArgs(text)
 {
-    const re = /"([^"]*)"|'([^']*)'|(\S+)/g;
     const args = [];
-    let match;
-    while ((match = re.exec(text)) !== null) {
-        args.push(match[1] ?? match[2] ?? match[3]);
+    let current = "";
+    let quote = "";
+    let escaping = false;
+    let tokenStarted = false;
+    const input = String(text || "");
+    const finishToken = () => {
+        if (tokenStarted) {
+            args.push(current);
+            current = "";
+            tokenStarted = false;
+        }
+    };
+
+    for (let index = 0; index < input.length; index++) {
+        const character = input[index];
+        if (escaping) {
+            current += character;
+            tokenStarted = true;
+            escaping = false;
+            continue;
+        }
+        if (character === "\\") {
+            const next = input[index + 1];
+            const escapable = next !== undefined && (quote
+                ? next === quote || next === "\\"
+                : /\s|["'\\]/.test(next));
+            if (escapable) {
+                escaping = true;
+                tokenStarted = true;
+            } else {
+                current += character;
+                tokenStarted = true;
+            }
+            continue;
+        }
+        if (quote) {
+            if (character === quote) {
+                quote = "";
+            } else {
+                current += character;
+            }
+            tokenStarted = true;
+            continue;
+        }
+        if (character === '"' || character === "'") {
+            quote = character;
+            tokenStarted = true;
+            continue;
+        }
+        if (/\s/.test(character)) {
+            finishToken();
+            continue;
+        }
+        current += character;
+        tokenStarted = true;
     }
+
+    if (escaping) {
+        throw new Error("Invalid arguments: trailing escape character.");
+    }
+    if (quote) {
+        throw new Error(`Invalid arguments: unterminated ${quote} quote.`);
+    }
+    finishToken();
     return args;
 }
 
@@ -772,7 +1102,7 @@ function registerAutoRunOnSave(context)
     context.subscriptions.push(
         vscode.workspace.onDidSaveTextDocument((document) => {
             if (!isContractUri(document.uri) ||
-                getConfig().get("autoRunOnSave.enabled") !== true) {
+                getConfig(document.uri).get("autoRunOnSave.enabled") !== true) {
                 return;
             }
 
@@ -785,9 +1115,9 @@ function registerAutoRunOnSave(context)
             const timer = setTimeout(() => {
                 autoRunSaveTimers.delete(key);
                 handleAutoRunOnSave(context, document.uri).catch((error) =>
-                    showAutoRunError(error, getAutoRunMode())
+                    showAutoRunError(error, getAutoRunMode(document.uri), document.uri)
                 );
-            }, getAutoRunDebounceMs());
+            }, getAutoRunDebounceMs(document.uri));
             autoRunSaveTimers.set(key, timer);
         })
     );
@@ -798,6 +1128,7 @@ function registerAutoRunOnSave(context)
                 clearTimeout(timer);
             }
             autoRunSaveTimers.clear();
+            autoRunPending.clear();
         }
     });
 }
@@ -805,21 +1136,22 @@ function registerAutoRunOnSave(context)
 async function handleAutoRunOnSave(context, contractUri)
 {
     if (!isContractUri(contractUri) ||
-        getConfig().get("autoRunOnSave.enabled") !== true) {
+        getConfig(contractUri).get("autoRunOnSave.enabled") !== true) {
         return;
     }
 
-    const mode = getAutoRunMode();
+    const mode = getAutoRunMode(contractUri);
     const key = `${mode}:${normalizeFsPath(contractUri.fsPath)}`;
     if (autoRunLocks.has(key)) {
         output.appendLine(
-            `[Auto ${mode}] Skipped ${contractUri.fsPath}; previous run is still active.`
+            `[Auto ${mode}] Queued ${contractUri.fsPath}; previous run is still active.`
         );
+        autoRunPending.add(key);
         return;
     }
 
     autoRunLocks.add(key);
-    showTransientStatus("$(sync~spin) AtomicProof: refreshing...");
+    showTransientStatus("$(sync~spin) AtomicProof: refreshing...", undefined, contractUri);
     try {
         let didRun;
         if (mode === "live") {
@@ -828,14 +1160,22 @@ async function handleAutoRunOnSave(context, contractUri)
             didRun = await runAutoTraceOnSave(context, contractUri);
         }
         if (didRun) {
-            showTransientStatus("$(check) AtomicProof: refreshed", AUTO_SAVE_STATUS_DELAY_MS);
+            showTransientStatus(
+                "$(check) AtomicProof: refreshed",
+                AUTO_SAVE_STATUS_DELAY_MS,
+                contractUri
+            );
         } else {
             updateStatusBarItem();
         }
     } catch (error) {
-        showAutoRunError(error, mode);
+        showAutoRunError(error, mode, contractUri);
     } finally {
         autoRunLocks.delete(key);
+    }
+    if (autoRunPending.delete(key)) {
+        output.appendLine(`[Auto ${mode}] Replaying queued save for ${contractUri.fsPath}.`);
+        await handleAutoRunOnSave(context, contractUri);
     }
 }
 
@@ -844,6 +1184,7 @@ async function runAutoTraceOnSave(context, contractUri)
     output.appendLine(`[Auto Trace] Saved ${contractUri.fsPath}`);
     const traceUri = await generateTraceForContract(context, contractUri, {
         useRecentInputs: true,
+        autoSave: true,
         promptForTracePath: false,
         openAfterGenerate: true,
         preserveFocus: true,
@@ -863,7 +1204,7 @@ async function runAutoTraceOnSave(context, contractUri)
 
 async function runAutoLiveOnSave(context, contractUri)
 {
-    if (getConfig().get("autoRunOnSave.restartLiveDebug") === false) {
+    if (getConfig(contractUri).get("autoRunOnSave.restartLiveDebug") === false) {
         output.appendLine("[Auto Live] Skipped because restartLiveDebug is disabled.");
         return false;
     }
@@ -882,24 +1223,27 @@ async function runAutoLiveOnSave(context, contractUri)
     return true;
 }
 
-function getAutoRunMode()
+function getAutoRunMode(resource)
 {
-    return getConfig().get("autoRunOnSave.mode") === "live" ? "live" : "trace";
+    return getConfig(resource).get("autoRunOnSave.mode") === "live" ? "live" : "trace";
 }
 
-function getAutoRunDebounceMs()
+function getAutoRunDebounceMs(resource)
 {
-    const value = Number(getConfig().get("autoRunOnSave.debounceMs"));
+    const value = Number(getConfig(resource).get("autoRunOnSave.debounceMs"));
     return Number.isFinite(value) ? Math.max(0, value) : 600;
 }
 
 async function toggleAutoDebugOnSave()
 {
-    const enabled = getConfig().get("autoRunOnSave.enabled") === true;
-    const target = vscode.workspace.workspaceFolders?.length
-        ? vscode.ConfigurationTarget.Workspace
-        : vscode.ConfigurationTarget.Global;
-    await getConfig().update("autoRunOnSave.enabled", !enabled, target);
+    const resource = vscode.window.activeTextEditor?.document.uri;
+    const enabled = getConfig(resource).get("autoRunOnSave.enabled") === true;
+    const target = getWorkspaceFolder(resource)
+        ? vscode.ConfigurationTarget.WorkspaceFolder
+        : vscode.workspace.workspaceFolders?.length
+            ? vscode.ConfigurationTarget.Workspace
+            : vscode.ConfigurationTarget.Global;
+    await getConfig(resource).update("autoRunOnSave.enabled", !enabled, target);
     updateStatusBarItem();
     vscode.window.setStatusBarMessage(
         `AtomicProof auto debug on save ${enabled ? "disabled" : "enabled"}.`,
@@ -907,11 +1251,15 @@ async function toggleAutoDebugOnSave()
     );
 }
 
-function showAutoRunError(error, mode)
+function showAutoRunError(error, mode, resource)
 {
     const message = error?.message || String(error);
     output.appendLine(`[Auto ${mode}] Failed: ${error?.stack || message}`);
-    showTransientStatus("$(error) AtomicProof: error", AUTO_SAVE_STATUS_DELAY_MS);
+    showTransientStatus(
+        "$(error) AtomicProof: error",
+        AUTO_SAVE_STATUS_DELAY_MS,
+        resource
+    );
     vscode.window.showErrorMessage(
         `AtomicProof auto ${mode} failed: ${message}`,
         "Show Output"
@@ -922,13 +1270,13 @@ function showAutoRunError(error, mode)
     });
 }
 
-function showTransientStatus(text, delayMs)
+function showTransientStatus(text, delayMs, resource)
 {
     if (statusResetTimer) {
         clearTimeout(statusResetTimer);
         statusResetTimer = undefined;
     }
-    if (getConfig().get("autoRunOnSave.showStatus") !== false && statusBarItem) {
+    if (getConfig(resource).get("autoRunOnSave.showStatus") !== false && statusBarItem) {
         statusBarItem.text = text;
         statusBarItem.tooltip = "AtomicProof auto debug on save";
         statusBarItem.command = "atomicProofStackVisualizer.toggleAutoDebugOnSave";
@@ -992,12 +1340,16 @@ function rememberLiveDebugConfig(_context, folder, config)
 
 function createLiveDebugRecord(folder, config = {})
 {
-    const contractPath = resolveLiveContractPath(String(config.contractPath || ""));
+    const folderRoot = folder?.uri.fsPath || "";
+    const contractPath = resolveLiveContractPath(
+        String(config.contractPath || ""),
+        folderRoot
+    );
     if (!contractPath) {
         return undefined;
     }
 
-    const workspaceRoot = folder?.uri.fsPath || getWorkspaceRoot() ||
+    const workspaceRoot = getWorkspaceRoot(contractPath) || folderRoot ||
         path.dirname(contractPath);
     const interpreterPath = resolveLiveInterpreterPath(
         config.interpreterPath,
@@ -1095,10 +1447,8 @@ async function restartLiveDebugForContract(_context, contractPath, options = {})
             try {
                 await vscode.debug.stopDebugging(running);
             } catch (error) {
-                output.appendLine(
-                    `[Live Debug] Stop request failed before restart: ${error.message}`
-                );
-                liveSessionsByContract.delete(key);
+                terminated.cancel();
+                throw error;
             }
             await terminated;
         }
@@ -1125,21 +1475,27 @@ async function startLiveDebugRecord(record)
     if (record.txFile) {
         config.txFile = record.txFile;
     }
-    await vscode.debug.startDebugging(folder, config);
+    const started = await vscode.debug.startDebugging(folder, config);
+    if (!started) {
+        throw new Error(`VS Code rejected live debug restart for ${record.contractPath}.`);
+    }
 }
 
-function waitForDebugSessionTermination(session)
+function waitForDebugSessionTermination(session, timeoutMs = 3000)
 {
-    return new Promise((resolve) => {
+    let cancel = () => {};
+    const promise = new Promise((resolve, reject) => {
         let settled = false;
-        const timeout = setTimeout(done, 3000);
+        const timeout = setTimeout(() => done(new Error(
+            `Timed out waiting for live debug session ${session.id} to terminate; restart aborted.`
+        )), timeoutMs);
         const subscription = vscode.debug.onDidTerminateDebugSession((ended) => {
             if (ended.id === session.id) {
                 done();
             }
         });
 
-        function done()
+        function done(error)
         {
             if (settled) {
                 return;
@@ -1147,19 +1503,58 @@ function waitForDebugSessionTermination(session)
             settled = true;
             clearTimeout(timeout);
             subscription.dispose();
-            resolve();
+            if (error) {
+                reject(error);
+            } else {
+                resolve();
+            }
         }
+        cancel = () => done();
     });
+    promise.cancel = cancel;
+    return promise;
 }
 
-function getWorkspaceRoot()
+function resourceUri(resource)
 {
+    if (!resource) {
+        return undefined;
+    }
+    if (resource.fsPath) {
+        return resource;
+    }
+    const text = String(resource);
+    if (!text || text.includes("${")) {
+        return undefined;
+    }
+    return vscode.Uri.file(path.resolve(text));
+}
+
+function getWorkspaceFolder(resource)
+{
+    const uri = resourceUri(resource);
+    return uri ? vscode.workspace.getWorkspaceFolder(uri) : undefined;
+}
+
+function getWorkspaceRoot(resource)
+{
+    const folder = getWorkspaceFolder(resource);
+    if (folder) {
+        return folder.uri.fsPath;
+    }
+    if (!resource) {
+        const active = vscode.window.activeTextEditor?.document.uri;
+        const activeFolder = getWorkspaceFolder(active);
+        if (activeFolder) {
+            return activeFolder.uri.fsPath;
+        }
+    }
     return vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
 }
 
-function getRepositoryRoot(context)
+function getRepositoryRoot(context, resource)
 {
-    const workspaceRoot = getWorkspaceRoot();
+    const workspaceRoot = getWorkspaceRoot(resource);
     if (workspaceRoot) {
         return workspaceRoot;
     }
@@ -1231,37 +1626,55 @@ async function startTraceDebug(traceUri)
 
 async function debugLiveContract(context, uri)
 {
-    const workspaceRoot = getWorkspaceRoot();
-    if (!workspaceRoot) {
+    const target = isContractUri(uri)
+        ? uri
+        : vscode.window.activeTextEditor?.document.uri;
+    const initialWorkspaceRoot = getWorkspaceRoot(target);
+    if (!initialWorkspaceRoot) {
         vscode.window.showWarningMessage(
             "Open the AtomicProofInterpreter folder before starting live VM debugging."
         );
         return;
     }
 
-    const contractUri = await chooseContractUri(workspaceRoot, uri);
+    const contractUri = await chooseContractUri(initialWorkspaceRoot, uri);
     if (!contractUri) {
         return;
     }
+    const workspaceRoot = getWorkspaceRoot(contractUri) || initialWorkspaceRoot;
 
     const functionName = await chooseFunctionName(context, contractUri.fsPath);
     if (!functionName) {
         return;
     }
-    await context.workspaceState.update(LAST_FUNCTION_KEY, functionName);
+    await setRecentContractValue(
+        context,
+        LAST_FUNCTION_KEY,
+        contractUri.fsPath,
+        functionName
+    );
 
     const argsText = await vscode.window.showInputBox({
         prompt: "Function arguments, separated by spaces",
-        value: getDefaultArguments(context),
+        value: getDefaultArguments(context, contractUri.fsPath),
         placeHolder: "5"
     });
     if (argsText === undefined) {
         return;
     }
-    await context.workspaceState.update(LAST_ARGS_KEY, argsText);
+    await setRecentContractValue(
+        context,
+        LAST_ARGS_KEY,
+        contractUri.fsPath,
+        argsText
+    );
 
     const folder = vscode.workspace.getWorkspaceFolder(contractUri);
-    const interpreterPath = getInterpreterPath(workspaceRoot, contractUri.fsPath);
+    const interpreterPath = getInterpreterPath(
+        workspaceRoot,
+        contractUri.fsPath,
+        contractUri
+    );
     const config = {
         type: LIVE_DEBUG_TYPE,
         request: "launch",
@@ -1277,8 +1690,9 @@ async function debugLiveContract(context, uri)
 
 class AtomicProofTraceDebugConfigurationProvider
 {
-    resolveDebugConfiguration(_folder, config)
+    resolveDebugConfiguration(folder, config)
     {
+        const active = vscode.window.activeTextEditor?.document.uri;
         if (!config.type) {
             config.type = TRACE_DEBUG_TYPE;
         }
@@ -1289,15 +1703,21 @@ class AtomicProofTraceDebugConfigurationProvider
             config.name = "Debug AtomicProof Stack Trace";
         }
         if (!config.tracePath) {
-            const active = vscode.window.activeTextEditor?.document.uri;
             if (active?.scheme === "file") {
                 config.tracePath = active.fsPath;
             }
         } else if (config.tracePath === "${file}") {
-            const active = vscode.window.activeTextEditor?.document.uri;
             if (active?.scheme === "file") {
                 config.tracePath = active.fsPath;
             }
+        }
+        if (config.tracePath && config.tracePath !== "${file}") {
+            const root = folder?.uri.fsPath || getWorkspaceRoot(config.tracePath) || "";
+            config.tracePath = resolveConfiguredPath(
+                String(config.tracePath),
+                root || path.dirname(String(config.tracePath)),
+                active?.scheme === "file" ? active.fsPath : ""
+            );
         }
         return config;
     }
@@ -1305,10 +1725,10 @@ class AtomicProofTraceDebugConfigurationProvider
 
 class AtomicProofTraceDebugAdapterFactory
 {
-    createDebugAdapterDescriptor()
+    createDebugAdapterDescriptor(session)
     {
         return new vscode.DebugAdapterInlineImplementation(
-            new AtomicProofTraceDebugAdapter()
+            new AtomicProofTraceDebugAdapter(session?.workspaceFolder)
         );
     }
 }
@@ -1334,12 +1754,20 @@ class AtomicProofLiveDebugConfigurationProvider
             }
         }
 
-        const workspaceRoot = folder?.uri.fsPath || getWorkspaceRoot() ||
+        const initialRoot = folder?.uri.fsPath || getWorkspaceRoot(active) || "";
+        if (config.contractPath && config.contractPath !== "${file}") {
+            config.contractPath = resolveLiveContractPath(
+                String(config.contractPath),
+                initialRoot
+            );
+        }
+        const workspaceRoot = getWorkspaceRoot(config.contractPath) || initialRoot ||
             (config.contractPath ? path.dirname(config.contractPath) : "");
         if (!config.interpreterPath && workspaceRoot) {
             config.interpreterPath = getInterpreterPath(
                 workspaceRoot,
-                config.contractPath || ""
+                config.contractPath || "",
+                config.contractPath || active
             );
         }
 
@@ -1351,7 +1779,10 @@ class AtomicProofLiveDebugConfigurationProvider
         }
         if (!config.functionName) {
             config.functionName =
-                String(getConfig().get("defaultFunction") || "").trim();
+                String(
+                    getConfig(config.contractPath || active)
+                        .get("defaultFunction") || ""
+                ).trim();
         }
         return config;
     }
@@ -1359,10 +1790,10 @@ class AtomicProofLiveDebugConfigurationProvider
 
 class AtomicProofLiveDebugAdapterFactory
 {
-    createDebugAdapterDescriptor()
+    createDebugAdapterDescriptor(session)
     {
         return new vscode.DebugAdapterInlineImplementation(
-            new AtomicProofLiveDebugAdapter()
+            new AtomicProofLiveDebugAdapter(session?.workspaceFolder)
         );
     }
 }
@@ -1437,9 +1868,10 @@ class AtomicProofDebugAdapterBase
 
 class AtomicProofLiveDebugAdapter extends AtomicProofDebugAdapterBase
 {
-    constructor()
+    constructor(workspaceFolder)
     {
         super();
+        this.launchWorkspaceRoot = workspaceFolder?.uri.fsPath || "";
         this.protocolSeq = 1;
         this.pending = new Map();
         this.stdoutBuffer = "";
@@ -1450,6 +1882,9 @@ class AtomicProofLiveDebugAdapter extends AtomicProofDebugAdapterBase
         this.readyPromise = null;
         this.resolveReady = null;
         this.rejectReady = null;
+        this.readyTimer = null;
+        this.readyTimeoutMs = LIVE_READY_TIMEOUT_MS;
+        this.requestTimeoutMs = LIVE_REQUEST_TIMEOUT_MS;
         this.terminated = false;
         this.liveFrames = new Map();
         this.currentFrameId = 0;
@@ -1464,7 +1899,7 @@ class AtomicProofLiveDebugAdapter extends AtomicProofDebugAdapterBase
     dispose()
     {
         this.shutdownRequested = true;
-        this.stopChild();
+        this.stopChild(new Error("Live VM debug adapter disposed."));
         super.dispose();
     }
 
@@ -1560,13 +1995,18 @@ class AtomicProofLiveDebugAdapter extends AtomicProofDebugAdapterBase
         if (this.child) {
             throw new Error("A Live VM debug server is already running.");
         }
-        const contractPath = resolveLiveContractPath(String(args.contractPath || ""));
+        const initialWorkspaceRoot = this.launchWorkspaceRoot || getWorkspaceRoot();
+        const contractPath = resolveLiveContractPath(
+            String(args.contractPath || ""),
+            initialWorkspaceRoot
+        );
         if (!contractPath) {
             throw new Error("launch configuration is missing contractPath");
         }
 
         this.contractPath = contractPath;
-        this.workspaceRoot = getWorkspaceRoot() || path.dirname(contractPath);
+        this.workspaceRoot = getWorkspaceRoot(contractPath) ||
+            initialWorkspaceRoot || path.dirname(contractPath);
         this.executionState = "starting";
         this.terminated = false;
         this.entryStoppedSent = false;
@@ -1611,8 +2051,13 @@ class AtomicProofLiveDebugAdapter extends AtomicProofDebugAdapterBase
         }
 
         this.startChild(interpreterPath, protocolArgs);
-        await this.waitForReady();
-        await this.sendProtocolRequest("initialize");
+        try {
+            await this.waitForReady();
+            await this.sendProtocolRequest("initialize");
+        } catch (error) {
+            this.stopChild(error);
+            throw error;
+        }
         this.executionState = "paused";
         this.sendResponse(message);
         this.sendEvent("initialized");
@@ -1875,15 +2320,17 @@ class AtomicProofLiveDebugAdapter extends AtomicProofDebugAdapterBase
     {
         this.shutdownRequested = true;
         this.beginProtocolEventDeferral();
-        if (this.child) {
-            try {
+        try {
+            if (this.child) {
                 await this.sendProtocolRequest("disconnect");
-            } catch (_error) {
-                this.stopChild();
             }
+            this.sendResponse(message);
+        } catch (error) {
+            this.stopChild(error);
+            throw error;
+        } finally {
+            this.endProtocolEventDeferral();
         }
-        this.sendResponse(message);
-        this.endProtocolEventDeferral();
     }
 
     async handleTerminate(message)
@@ -1891,18 +2338,20 @@ class AtomicProofLiveDebugAdapter extends AtomicProofDebugAdapterBase
         this.shutdownRequested = true;
         this.beginProtocolEventDeferral();
         const child = this.child;
-        if (this.child) {
-            try {
+        try {
+            if (this.child) {
                 await this.sendProtocolRequest("terminate");
-            } catch (_error) {
-                this.stopChild();
             }
+            if (child && this.child === child) {
+                await this.waitForChildExit(child);
+            }
+            this.sendResponse(message);
+        } catch (error) {
+            this.stopChild(error);
+            throw error;
+        } finally {
+            this.endProtocolEventDeferral();
         }
-        if (child && this.child === child) {
-            await this.waitForChildExit(child);
-        }
-        this.sendResponse(message);
-        this.endProtocolEventDeferral();
         if (!this.terminated) {
             this.terminated = true;
             this.executionState = "terminated";
@@ -1918,11 +2367,19 @@ class AtomicProofLiveDebugAdapter extends AtomicProofDebugAdapterBase
             this.resolveReady = resolve;
             this.rejectReady = reject;
         });
-        this.child = cp.spawn(interpreterPath, args, {
+        this.readyTimer = setTimeout(() => {
+            const error = new Error(
+                `Live VM ready timed out after ${this.readyTimeoutMs}ms.`
+            );
+            this.settleReady(error);
+            this.stopChild(error);
+        }, this.readyTimeoutMs);
+        const child = cp.spawn(interpreterPath, args, {
             cwd: this.workspaceRoot || path.dirname(this.contractPath)
         });
-        this.child.stdout.on("data", (chunk) => this.handleStdout(chunk));
-        this.child.stderr.on("data", (chunk) => {
+        this.child = child;
+        child.stdout.on("data", (chunk) => this.handleStdout(chunk));
+        child.stderr.on("data", (chunk) => {
             const text = chunk.toString();
             output.append(text);
             this.sendEvent("output", {
@@ -1930,23 +2387,25 @@ class AtomicProofLiveDebugAdapter extends AtomicProofDebugAdapterBase
                 output: text
             });
         });
-        this.child.on("error", (error) => {
+        child.on("error", (error) => {
             this.rejectPending(error);
-            this.rejectReady?.(error);
+            this.settleReady(error);
             this.sendEvent("output", {
                 category: "stderr",
                 output: error.message + "\n"
             });
         });
-        this.child.on("close", (code, signal) => {
-            this.child = null;
-            const exitError = new Error("Live VM debug server exited.");
+        child.on("close", (code, signal) => {
+            if (this.child === child) {
+                this.child = null;
+            }
+            const detail = signal ? `signal ${signal}` : `code ${code}`;
+            const exitError = new Error(
+                `Live VM debug server exited with ${detail}.`
+            );
             this.rejectPending(exitError);
-            this.rejectReady?.(exitError);
+            this.settleReady(exitError);
             if (!this.terminated) {
-                const detail = signal
-                    ? `signal ${signal}`
-                    : `code ${code}`;
                 if (!this.shutdownRequested) {
                     this.sendEvent("output", {
                         category: "console",
@@ -1995,6 +2454,7 @@ class AtomicProofLiveDebugAdapter extends AtomicProofDebugAdapterBase
             const pending = this.pending.get(Number(message.request_seq));
             if (pending) {
                 this.pending.delete(Number(message.request_seq));
+                clearTimeout(pending.timer);
                 if (message.success) {
                     if (message.body?.snapshot) {
                         this.currentSnapshot = message.body.snapshot;
@@ -2027,9 +2487,7 @@ class AtomicProofLiveDebugAdapter extends AtomicProofDebugAdapterBase
             this.currentSnapshot = body.snapshot;
         }
         if (message.event === "ready") {
-            this.resolveReady?.();
-            this.resolveReady = null;
-            this.rejectReady = null;
+            this.settleReady();
             return;
         }
         if (message.event === "stopped") {
@@ -2078,7 +2536,7 @@ class AtomicProofLiveDebugAdapter extends AtomicProofDebugAdapterBase
                 body.message || "Live VM debug server error"
             ));
             this.lastException = error.message;
-            this.rejectReady?.(error);
+            this.settleReady(error);
             this.sendEvent("output", {
                 category: "stderr",
                 output: error.message + "\n"
@@ -2115,6 +2573,23 @@ class AtomicProofLiveDebugAdapter extends AtomicProofDebugAdapterBase
         return this.readyPromise || Promise.resolve();
     }
 
+    settleReady(error)
+    {
+        if (this.readyTimer) {
+            clearTimeout(this.readyTimer);
+            this.readyTimer = null;
+        }
+        const resolve = this.resolveReady;
+        const reject = this.rejectReady;
+        this.resolveReady = null;
+        this.rejectReady = null;
+        if (error) {
+            reject?.(error);
+        } else {
+            resolve?.();
+        }
+    }
+
     waitForChildExit(child, timeoutMs = 1000)
     {
         if (!child || child.exitCode !== null || child.signalCode !== null) {
@@ -2146,11 +2621,30 @@ class AtomicProofLiveDebugAdapter extends AtomicProofDebugAdapterBase
         const seq = this.protocolSeq++;
         const payload = Object.assign({seq, command}, args);
         return new Promise((resolve, reject) => {
-            this.pending.set(seq, {resolve, reject});
+            const timer = setTimeout(() => {
+                const pending = this.pending.get(seq);
+                if (!pending) {
+                    return;
+                }
+                this.pending.delete(seq);
+                const error = new Error(
+                    `Live VM protocol request "${command}" timed out after ` +
+                    `${this.requestTimeoutMs}ms.`
+                );
+                pending.reject(error);
+                this.stopChild(error);
+            }, this.requestTimeoutMs);
+            this.pending.set(seq, {resolve, reject, timer, command});
             this.child.stdin.write(JSON.stringify(payload) + "\n", (error) => {
                 if (error) {
+                    const pending = this.pending.get(seq);
+                    if (!pending) {
+                        return;
+                    }
                     this.pending.delete(seq);
+                    clearTimeout(pending.timer);
                     reject(error);
+                    this.stopChild(error);
                 }
             });
         });
@@ -2159,16 +2653,26 @@ class AtomicProofLiveDebugAdapter extends AtomicProofDebugAdapterBase
     rejectPending(error)
     {
         for (const pending of this.pending.values()) {
+            clearTimeout(pending.timer);
             pending.reject(error);
         }
         this.pending.clear();
     }
 
-    stopChild()
+    stopChild(error = new Error("Live VM debug server stopped."))
     {
-        if (this.child) {
-            this.child.kill();
+        this.settleReady(error);
+        this.rejectPending(error);
+        const child = this.child;
+        if (child) {
             this.child = null;
+            child.kill("SIGTERM");
+            const hardKill = setTimeout(() => {
+                if (child.exitCode === null && child.signalCode === null) {
+                    child.kill("SIGKILL");
+                }
+            }, 1000);
+            hardKill.unref?.();
         }
     }
 
@@ -2176,13 +2680,15 @@ class AtomicProofLiveDebugAdapter extends AtomicProofDebugAdapterBase
 
 class AtomicProofTraceDebugAdapter extends AtomicProofDebugAdapterBase
 {
-    constructor()
+    constructor(workspaceFolder)
     {
         super();
+        this.workspaceRoot = workspaceFolder?.uri.fsPath || "";
         this.trace = null;
         this.tracePath = "";
         this.current = 0;
-        this.breakpoints = [];
+        this.breakpointsBySource = new Map();
+        this.nextBreakpointId = 1;
     }
 
     handleMessage(message)
@@ -2272,15 +2778,20 @@ class AtomicProofTraceDebugAdapter extends AtomicProofDebugAdapterBase
 
     handleLaunch(message)
     {
-        const tracePath = resolveDebugTracePath(String(message.arguments?.tracePath || ""));
+        const tracePath = resolveDebugTracePath(
+            String(message.arguments?.tracePath || ""),
+            this.workspaceRoot
+        );
         if (!tracePath) {
             throw new Error("launch configuration is missing tracePath");
         }
-        const trace = JSON.parse(fs.readFileSync(tracePath, "utf8"));
+        const trace = parseJson(fs.readFileSync(tracePath, "utf8"), tracePath);
         validateTrace(trace);
         this.trace = trace;
         this.tracePath = tracePath;
         this.current = 0;
+        this.breakpointsBySource.clear();
+        this.nextBreakpointId = 1;
         this.sendResponse(message);
         this.sendEvent("initialized");
     }
@@ -2317,8 +2828,8 @@ class AtomicProofTraceDebugAdapter extends AtomicProofDebugAdapterBase
             )) === normalizedSourcePath
         );
         const requested = message.arguments?.breakpoints || [];
-        this.breakpoints = requested.map((bp, index) => ({
-            id: index + 1,
+        const sourceBreakpoints = requested.map((bp) => ({
+            id: this.nextBreakpointId++,
             path: sourcePath,
             normalizedPath: normalizedSourcePath,
             line: Number(bp.line || 0),
@@ -2327,8 +2838,9 @@ class AtomicProofTraceDebugAdapter extends AtomicProofDebugAdapterBase
             logMessage: String(bp.logMessage || "").trim(),
             hitCount: 0
         }));
+        this.breakpointsBySource.set(normalizedSourcePath, sourceBreakpoints);
         this.sendResponse(message, {
-            breakpoints: this.breakpoints.map((bp) => ({
+            breakpoints: sourceBreakpoints.map((bp) => ({
                 id: bp.id,
                 verified: hasMappedStep(bp.line),
                 line: bp.line,
@@ -2342,14 +2854,19 @@ class AtomicProofTraceDebugAdapter extends AtomicProofDebugAdapterBase
     handleStackTrace(message)
     {
         const step = this.currentStep();
+        if (!step) {
+            this.sendResponse(message, {
+                stackFrames: [],
+                totalFrames: 0
+            });
+            return;
+        }
         const sourceFile = sourceFileForTraceStep(this.trace, step, this.tracePath);
         const sourcePath = resolveDebugSourcePath(this.tracePath, sourceFile);
         this.sendResponse(message, {
             stackFrames: [{
                 id: this.current + 1,
-                name: step
-                    ? (step.opcode || step.instruction || "instruction")
-                    : "No trace loaded",
+                name: step.opcode || step.instruction || "instruction",
                 source: sourcePath ? {
                     name: path.basename(sourcePath),
                     path: sourcePath
@@ -2357,7 +2874,7 @@ class AtomicProofTraceDebugAdapter extends AtomicProofDebugAdapterBase
                 line: Math.max(1, sourceLineForTraceStep(step) || 1),
                 column: Math.max(1, sourceColumnForTraceStep(step) || 1)
             }],
-            totalFrames: step ? 1 : 0
+            totalFrames: 1
         });
     }
 
@@ -2465,17 +2982,41 @@ class AtomicProofTraceDebugAdapter extends AtomicProofDebugAdapterBase
     handleSource(message)
     {
         const sourcePath = message.arguments?.source?.path || "";
-        const embedded = this.trace?.source?.lines;
-        if (Array.isArray(embedded)) {
+        if (sourcePath && fs.existsSync(sourcePath)) {
             this.sendResponse(message, {
-                content: embedded.join("\n"),
+                content: fs.readFileSync(sourcePath, "utf8"),
                 mimeType: "text/plain"
             });
             return;
         }
-        if (sourcePath && fs.existsSync(sourcePath)) {
+        const embedded = this.trace?.source?.lines;
+        const topSourceFile = this.trace?.source?.file || "";
+        const resolvedTopSource = normalizeDebugSourcePath(resolveDebugSourcePath(
+            this.tracePath,
+            topSourceFile
+        ));
+        const resolvedRequested = normalizeDebugSourcePath(resolveDebugSourcePath(
+            this.tracePath,
+            sourcePath
+        ));
+        const requestedBasename = path.basename(sourcePath);
+        const matchingSources = new Set(this.steps()
+            .map((step) => sourceFileForTraceStep(this.trace, step, this.tracePath))
+            .filter((file) => path.basename(file) === requestedBasename)
+            .map((file) => normalizeDebugSourcePath(resolveDebugSourcePath(
+                this.tracePath,
+                file
+            ))));
+        const unambiguousTopBasename = Boolean(topSourceFile && sourcePath) &&
+            requestedBasename === path.basename(topSourceFile) &&
+            matchingSources.size === 1 &&
+            matchingSources.has(resolvedTopSource);
+        const embeddedMatchesRequest = !sourcePath ||
+            resolvedRequested === resolvedTopSource ||
+            unambiguousTopBasename;
+        if (Array.isArray(embedded) && embeddedMatchesRequest) {
             this.sendResponse(message, {
-                content: fs.readFileSync(sourcePath, "utf8"),
+                content: embedded.join("\n"),
                 mimeType: "text/plain"
             });
             return;
@@ -2493,7 +3034,8 @@ class AtomicProofTraceDebugAdapter extends AtomicProofDebugAdapterBase
             this.tracePath,
             sourceFileForTraceStep(this.trace, step, this.tracePath)
         ));
-        for (const breakpoint of this.breakpoints) {
+        const breakpoints = this.breakpointsBySource.get(currentPath) || [];
+        for (const breakpoint of breakpoints) {
             if (breakpoint.line !== line ||
                 breakpoint.normalizedPath !== currentPath) {
                 continue;
@@ -2840,7 +3382,7 @@ function resolveDebugSourcePath(tracePath, sourceFile)
     return candidates.find((candidate) => fs.existsSync(candidate)) || candidates[0] || sourceFile;
 }
 
-function resolveDebugTracePath(tracePath)
+function resolveDebugTracePath(tracePath, workspaceRoot)
 {
     if (!tracePath || tracePath === "${file}") {
         const active = vscode.window.activeTextEditor?.document.uri;
@@ -2849,21 +3391,21 @@ function resolveDebugTracePath(tracePath)
     if (path.isAbsolute(tracePath)) {
         return tracePath;
     }
-    const workspaceRoot = getWorkspaceRoot();
-    return workspaceRoot ? path.join(workspaceRoot, tracePath) : tracePath;
+    const root = workspaceRoot || getWorkspaceRoot();
+    return root ? resolveConfiguredPath(tracePath, root, "") : tracePath;
 }
 
-function resolveLiveContractPath(contractPath)
+function resolveLiveContractPath(contractPath, workspaceRoot)
 {
     if (!contractPath || contractPath === "${file}") {
         const active = vscode.window.activeTextEditor?.document.uri;
         return isContractUri(active) ? active.fsPath : "";
     }
     if (path.isAbsolute(contractPath)) {
-        return contractPath;
+        return path.normalize(contractPath);
     }
-    const workspaceRoot = getWorkspaceRoot();
-    return workspaceRoot ? path.join(workspaceRoot, contractPath) : contractPath;
+    const root = workspaceRoot || getWorkspaceRoot();
+    return root ? resolveConfiguredPath(contractPath, root, "") : contractPath;
 }
 
 function resolveLiveInterpreterPath(interpreterPath, workspaceRoot, contractPath)
@@ -2873,7 +3415,7 @@ function resolveLiveInterpreterPath(interpreterPath, workspaceRoot, contractPath
     if (configured) {
         return resolveConfiguredPath(configured, root, contractPath);
     }
-    return getInterpreterPath(root, contractPath);
+    return getInterpreterPath(root, contractPath, contractPath);
 }
 
 function normalizeDebugArguments(value)
@@ -3065,7 +3607,9 @@ module.exports = {
     deactivate,
     __test: {
         AtomicProofLiveDebugAdapter,
+        AtomicProofLiveDebugConfigurationProvider,
         AtomicProofTraceDebugAdapter,
+        AtomicProofTraceDebugConfigurationProvider,
         buildWebviewHtml,
         evaluateLiveExpression,
         evaluateTraceExpression,
@@ -3092,13 +3636,14 @@ function updateStatusBarItem()
     if (!statusBarItem) {
         return;
     }
-    if (getConfig().get("autoRunOnSave.showStatus") === false) {
+    const resource = vscode.window.activeTextEditor?.document.uri;
+    if (getConfig(resource).get("autoRunOnSave.showStatus") === false) {
         statusBarItem.hide();
         return;
     }
 
-    if (getConfig().get("autoRunOnSave.enabled") === true) {
-        const mode = getAutoRunMode() === "live" ? "Live" : "Trace";
+    if (getConfig(resource).get("autoRunOnSave.enabled") === true) {
+        const mode = getAutoRunMode(resource) === "live" ? "Live" : "Trace";
         statusBarItem.text = `$(sync) AtomicProof: Auto ${mode}`;
         statusBarItem.tooltip = "Toggle AtomicProof auto debug on save";
         statusBarItem.command = "atomicProofStackVisualizer.toggleAutoDebugOnSave";
@@ -3112,37 +3657,39 @@ function updateStatusBarItem()
     statusBarItem.show();
 }
 
-function getConfig()
+function getConfig(resource)
 {
-    return vscode.workspace.getConfiguration(CONFIG_SECTION);
+    return vscode.workspace.getConfiguration(CONFIG_SECTION, resourceUri(resource));
 }
 
-function getOpenColumn()
+function getOpenColumn(resource)
 {
-    return getConfig().get("openBeside") === false
+    return getConfig(resource).get("openBeside") === false
         ? vscode.ViewColumn.Active
         : vscode.ViewColumn.Beside;
 }
 
-function getWebviewShowOptions(options = {})
+function getWebviewShowOptions(options = {}, resource)
 {
-    const viewColumn = getOpenColumn();
+    const viewColumn = getOpenColumn(resource);
     return options.preserveFocus
         ? {viewColumn, preserveFocus: true}
         : viewColumn;
 }
 
-function getWebviewStartupOptions()
+function getWebviewStartupOptions(resource)
 {
     return {
-        viewMode: getConfig().get("defaultViewMode") || "diff",
-        speed: Number(getConfig().get("playbackSpeed") || 1)
+        viewMode: getConfig(resource).get("defaultViewMode") || "diff",
+        speed: Number(getConfig(resource).get("playbackSpeed") || 1)
     };
 }
 
-function getInterpreterPath(workspaceRoot, contractPath)
+function getInterpreterPath(workspaceRoot, contractPath, resource = contractPath)
 {
-    const configured = String(getConfig().get("interpreterPath") || "").trim();
+    const configured = String(
+        getConfig(resource).get("interpreterPath") || ""
+    ).trim();
     if (configured) {
         return resolveConfiguredPath(configured, workspaceRoot, contractPath);
     }
@@ -3154,13 +3701,15 @@ function getInterpreterPath(workspaceRoot, contractPath)
     );
 }
 
-function getDefaultArguments(context)
+function getDefaultArguments(context, contractPath)
 {
-    const configured = String(getConfig().get("defaultArguments") || "");
+    const configured = String(
+        getConfig(contractPath).get("defaultArguments") || ""
+    );
     if (configured) {
         return configured;
     }
-    return context.workspaceState.get(LAST_ARGS_KEY) || "";
+    return getRecentContractValue(context, LAST_ARGS_KEY, contractPath) || "";
 }
 
 async function chooseContractUri(workspaceRoot, uri)
@@ -3203,8 +3752,14 @@ function normalizeFsPath(filePath)
 async function chooseFunctionName(context, contractPath, preferredFunction = "")
 {
     const preferred = String(preferredFunction || "").trim();
-    const configured = String(getConfig().get("defaultFunction") || "").trim();
-    const lastFunction = context.workspaceState.get(LAST_FUNCTION_KEY) || "";
+    const configured = String(
+        getConfig(contractPath).get("defaultFunction") || ""
+    ).trim();
+    const lastFunction = getRecentContractValue(
+        context,
+        LAST_FUNCTION_KEY,
+        contractPath
+    ) || "";
     const discovered = await discoverContractFunctions(contractPath);
     const initial = preferred || configured || lastFunction || discovered[0] || "";
 
@@ -3358,7 +3913,7 @@ function resolveSourcePath(context, tracePath, sourceFile)
     const candidates = sourcePathCandidates(
         tracePath,
         sourceFile,
-        [getRepositoryRoot(context)]
+        [getRepositoryRoot(context, tracePath)]
     );
 
     return candidates.find((candidate) => fs.existsSync(candidate)) || candidates[0];
@@ -3369,7 +3924,7 @@ function isTrustedSourcePath(context, tracePath, sourcePath)
     const roots = [
         ...(vscode.workspace.workspaceFolders || []).map((folder) => folder.uri.fsPath),
         tracePath && path.dirname(tracePath),
-        getRepositoryRoot(context)
+        getRepositoryRoot(context, tracePath)
     ].filter(Boolean);
     const candidate = canonicalPath(sourcePath);
     return roots.some((root) => isPathWithin(canonicalPath(root), candidate));
@@ -3403,7 +3958,8 @@ function sourcePathCandidates(tracePath, sourceFile, extraRoots = [])
         candidates.push(candidate);
     };
 
-    pushCandidate(getWorkspaceRoot() && path.join(getWorkspaceRoot(), sourceFile));
+    const workspaceRoot = getWorkspaceRoot(tracePath);
+    pushCandidate(workspaceRoot && path.join(workspaceRoot, sourceFile));
     for (const root of extraRoots) {
         pushCandidate(root && path.join(root, sourceFile));
     }

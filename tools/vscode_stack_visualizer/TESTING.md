@@ -5,7 +5,7 @@
 | 命令 | 主要覆盖 | 必需环境 |
 | --- | --- | --- |
 | `npm run test:fast` | Schema、5 个现有 Trace、elementId、8 个命令、Trace DAP、伪 Live DAP、auto save、安全 | Node.js |
-| `npm run test:webview` | 离线 Webview、导航/播放、书签、生命周期、复制、诊断、XSS、视觉、axe | Chromium |
+| `npm run test:webview` | 真实 buildWebviewHtml nonce CSP、离线 Webview、导航/播放、书签、生命周期、复制、诊断、XSS、视觉、axe | Chromium |
 | `npm run test:live` | 真实 JSONL debug-server、完整调用栈/帧变量、异步暂停、运行时异常、真实 Live Adapter 与进程退出 | `build/bin/utxo_Interpreter` |
 | `npm run test:extension` | 真实 Extension Host、公开命令、Trace DAP、trace/live 保存重启 | VS Code Electron；Linux CI 使用 Xvfb |
 | `npm run test:package` | VSIX 内容白名单、manifest、CLI 安装、干净 Extension Host 激活 | VS Code Electron；Linux CI 使用 Xvfb |

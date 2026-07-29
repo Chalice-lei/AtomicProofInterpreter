@@ -1019,9 +1019,14 @@
     }
 
     .stack-spacer {
-      height: var(--stack-spacer-height, 0px);
+      height: 0;
       min-height: 0;
       pointer-events: none;
+    }
+
+    .clipboard-fallback {
+      position: fixed;
+      left: -9999px;
     }
 
     .stack-empty {
@@ -1288,6 +1293,9 @@
       }
     }
   </style>
+  <style id="stackMainRuntimeStyles"></style>
+  <style id="stackAltRuntimeStyles"></style>
+  <style id="eventRailRuntimeStyles"></style>
 </head>
 <body>
   <main class="app">
@@ -1542,11 +1550,20 @@
       diagnostics: [],
       presentationMode: false,
       activeDetailTab: "explain",
+      eventRailTrace: null,
+      eventRailBookmarksKey: "",
+      eventRailCurrent: -1,
       stackScrollRaf: {
         main: 0,
         alt: 0
       }
     };
+    const dynamicStyleRules = new Map();
+    const dynamicStyleTargets = new Map([
+      ["stack-main", "stackMainRuntimeStyles"],
+      ["stack-alt", "stackAltRuntimeStyles"],
+      ["event-rail", "eventRailRuntimeStyles"]
+    ]);
 
     const BOOKMARK_STORAGE_PREFIX = "apc.stackVisualizer.bookmarks:";
     const STACK_VIRTUAL_THRESHOLD = 140;
@@ -1616,6 +1633,22 @@
       mainStackList: document.getElementById("mainStackList"),
       altStackList: document.getElementById("altStackList")
     };
+
+    function setDynamicStyleRule(key, rule) {
+      const normalizedRule = rule || "";
+      if ((dynamicStyleRules.get(key) || "") === normalizedRule) {
+        return;
+      }
+      if (rule) {
+        dynamicStyleRules.set(key, rule);
+      } else {
+        dynamicStyleRules.delete(key);
+      }
+      const runtimeStyles = document.getElementById(dynamicStyleTargets.get(key));
+      if (runtimeStyles) {
+        runtimeStyles.textContent = normalizedRule;
+      }
+    }
 
     function persistThemeMode(mode) {
       try {
@@ -1910,8 +1943,8 @@
 
     function sourceFileForStep(step) {
       const source = (state.trace && state.trace.source) || {};
-      return source.file ||
-        (step && (step.sourceFile || (step.source && step.source.file))) ||
+      return (step && (step.sourceFile || (step.source && step.source.file))) ||
+        source.file ||
         "Source";
     }
 
@@ -2313,7 +2346,9 @@
     }
 
     function renderStack(container, stackName, step) {
+      const dynamicRuleKey = "stack-" + stackName;
       if (!step) {
+        setDynamicStyleRule(dynamicRuleKey, "");
         container.innerHTML = '<div class="stack-window"><div class="stack-empty">No trace loaded</div></div>';
         return;
       }
@@ -2321,11 +2356,13 @@
       const scrollTop = container.scrollTop || 0;
       const rows = stackRowsFor(step, stackName);
       if (!rows.length) {
+        setDynamicStyleRule(dynamicRuleKey, "");
         container.innerHTML = '<div class="stack-window"><div class="stack-empty">No values at this step</div></div>';
         return;
       }
 
       if (rows.length <= STACK_VIRTUAL_THRESHOLD) {
+        setDynamicStyleRule(dynamicRuleKey, "");
         container.innerHTML =
           '<div class="stack-window">' + rows.map(stackRowHtml).join("") + "</div>";
         container.scrollTop = Math.min(scrollTop, container.scrollHeight);
@@ -2346,13 +2383,20 @@
       const summary =
         "Virtualized: showing rows " + (start + 1) + "-" + end +
         " of " + rows.length + ". Scroll to inspect deeper stack values.";
+      const containerSelector = stackName === "main"
+        ? "#mainStackList"
+        : "#altStackList";
+      setDynamicStyleRule(dynamicRuleKey, [
+        containerSelector + " .stack-spacer.before { height: " + beforeHeight + "px; }",
+        containerSelector + " .stack-spacer.after { height: " + afterHeight + "px; }"
+      ].join("\n"));
 
       container.innerHTML = [
         '<div class="stack-window">',
         stackNoteHtml(summary),
-        '<div class="stack-spacer" style="--stack-spacer-height:' + beforeHeight + 'px"></div>',
+        '<div class="stack-spacer before"></div>',
         rows.slice(start, end).map(stackRowHtml).join(""),
-        '<div class="stack-spacer" style="--stack-spacer-height:' + afterHeight + 'px"></div>',
+        '<div class="stack-spacer after"></div>',
         "</div>"
       ].join("");
       container.scrollTop = Math.min(scrollTop, container.scrollHeight);
@@ -2839,7 +2883,6 @@
       const topOpcodes = Array.from(opcodeCounts.entries())
         .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
         .slice(0, 15);
-      const source = state.trace.source || {};
       const lifecycleCount = state.trace.lifecycle && Array.isArray(state.trace.lifecycle.elements)
         ? state.trace.lifecycle.elements.length
         : 0;
@@ -2852,7 +2895,7 @@
         "- Bookmarks: `" + bookmarks.length + "`",
         "- Functions: `" + functions.length + "`",
         "- Lifecycle values: `" + lifecycleCount + "`",
-        "- Source: `" + htmlEscapeForMarkdown(source.file || sourceFileForStep(allSteps[0]) || "-") + "`",
+        "- Source: `" + htmlEscapeForMarkdown(sourceFileForStep(allSteps[0]) || "-") + "`",
         "- Current step: `" + (state.current + 1) + "`",
         "",
         "## Diagnostics",
@@ -3158,11 +3201,33 @@
     function renderEventRail() {
       const total = steps().length;
       if (!total) {
+        setDynamicStyleRule("event-rail", "");
         el.eventRail.innerHTML = "";
+        state.eventRailTrace = null;
+        state.eventRailBookmarksKey = "";
+        state.eventRailCurrent = -1;
         return;
       }
 
-      const markSet = new Set(normalizeBookmarks());
+      const bookmarks = normalizeBookmarks();
+      const bookmarksKey = bookmarks.join(",");
+      if (
+        state.eventRailTrace === state.trace &&
+        state.eventRailBookmarksKey === bookmarksKey
+      ) {
+        if (state.eventRailCurrent !== state.current) {
+          el.eventRail.querySelector(
+            '.event-dot[data-step="' + state.eventRailCurrent + '"]'
+          )?.classList.remove("current");
+          el.eventRail.querySelector(
+            '.event-dot[data-step="' + state.current + '"]'
+          )?.classList.add("current");
+          state.eventRailCurrent = state.current;
+        }
+        return;
+      }
+
+      const markSet = new Set(bookmarks);
       const events = steps()
         .map((step, index) => ({
           step,
@@ -3171,9 +3236,13 @@
           bookmarked: markSet.has(index)
         }))
         .filter((entry) => entry.stackEvent || entry.bookmarked);
+      setDynamicStyleRule("event-rail", events.map(({index}) => {
+        const left = total <= 1 ? 0 : (index / (total - 1)) * 100;
+        return '#eventRail .event-dot[data-step="' + index + '"] { left: ' +
+          left.toFixed(2) + "%; }";
+      }).join("\n"));
       el.eventRail.innerHTML = events
         .map(({ step, index, stackEvent, bookmarked }) => {
-          const left = total <= 1 ? 0 : (index / (total - 1)) * 100;
           const classes = [
             "event-dot",
             stackEvent ? eventKind(step) : "bookmark",
@@ -3184,11 +3253,13 @@
           return [
             '<button class="' + htmlEscape(classes) + '"',
             ' data-step="' + index + '"',
-            ' style="left:' + left.toFixed(2) + '%"',
             ' title="' + htmlEscape(title) + '"></button>'
           ].join("");
         })
         .join("");
+      state.eventRailTrace = state.trace;
+      state.eventRailBookmarksKey = bookmarksKey;
+      state.eventRailCurrent = state.current;
     }
 
     function renderSearchState() {
@@ -3304,8 +3375,7 @@
       const textarea = document.createElement("textarea");
       textarea.value = text;
       textarea.setAttribute("readonly", "");
-      textarea.style.position = "fixed";
-      textarea.style.left = "-9999px";
+      textarea.className = "clipboard-fallback";
       document.body.appendChild(textarea);
       textarea.select();
       let copied = false;

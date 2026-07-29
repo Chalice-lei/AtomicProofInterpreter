@@ -189,3 +189,85 @@ test("Trace DAP 对缺路径、非法 JSON、错误 format 和 disconnect 明确
     assertSuccess(assert, await client.request("disconnect"));
     assert.strictEqual(client.events("terminated").length, 1);
 });
+
+test("Trace DAP 按源码保留断点且 imported source 不返回主文件嵌入内容", async (t) => {
+    const tempDir = fs.mkdtempSync(path.join(require("os").tmpdir(), "apc-trace-sources-"));
+    t.after(() => fs.rmSync(tempDir, {recursive: true, force: true}));
+    const mainSource = path.join(tempDir, "main.ct");
+    const importedSource = path.join(tempDir, "imported.ct");
+    const missingSameBasename = path.join(tempDir, "missing", "main.ct");
+    fs.writeFileSync(mainSource, "MAIN FILE\nmain breakpoint\n", "utf8");
+    fs.writeFileSync(importedSource, "IMPORTED FILE\nimport breakpoint\n", "utf8");
+    const tracePath = path.join(tempDir, "multi-source.json");
+    fs.writeFileSync(tracePath, JSON.stringify({
+        format: "apc-stack-trace",
+        source: {file: mainSource, lines: ["MAIN EMBEDDED", "main breakpoint"]},
+        steps: [
+            {step: 0, pc: 0, opcode: "OP_0", sourceFile: mainSource, sourceLine: 1},
+            {step: 1, pc: 1, opcode: "OP_1", sourceFile: mainSource, sourceLine: 2},
+            {step: 2, pc: 2, opcode: "OP_2", source: {file: importedSource, line: 2}},
+            {step: 3, pc: 3, opcode: "OP_3", sourceFile: missingSameBasename, sourceLine: 1}
+        ]
+    }), "utf8");
+    const client = attach(createAdapter());
+    t.after(() => client.dispose());
+    assertSuccess(assert, await client.request("launch", {tracePath}));
+
+    assertSuccess(assert, await client.request("setBreakpoints", {
+        source: {path: mainSource},
+        breakpoints: [{line: 2}]
+    }));
+    assertSuccess(assert, await client.request("setBreakpoints", {
+        source: {path: importedSource},
+        breakpoints: [{line: 2}]
+    }));
+    assertSuccess(assert, await client.request("continue"));
+    assert.strictEqual(
+        assertSuccess(assert, await client.request("evaluate", {expression: "pc"})).result,
+        "1"
+    );
+    assertSuccess(assert, await client.request("continue"));
+    assert.strictEqual(
+        assertSuccess(assert, await client.request("evaluate", {expression: "pc"})).result,
+        "2"
+    );
+
+    const imported = assertSuccess(assert, await client.request("source", {
+        source: {path: importedSource}
+    }));
+    assert.strictEqual(imported.content, "IMPORTED FILE\nimport breakpoint\n");
+    assert(!imported.content.includes("MAIN EMBEDDED"));
+    const missingImport = assertSuccess(assert, await client.request("source", {
+        source: {path: missingSameBasename}
+    }));
+    assert.strictEqual(missingImport.content, "");
+});
+
+test("Trace DAP launch 严格校验字段路径且空 Trace 不制造栈帧", async (t) => {
+    const tempDir = fs.mkdtempSync(path.join(require("os").tmpdir(), "apc-trace-schema-"));
+    t.after(() => fs.rmSync(tempDir, {recursive: true, force: true}));
+    const invalidPath = path.join(tempDir, "invalid.json");
+    fs.writeFileSync(invalidPath, JSON.stringify({
+        format: "apc-stack-trace",
+        steps: [{step: 0, pc: "bad"}]
+    }), "utf8");
+    const invalidClient = attach(createAdapter());
+    t.after(() => invalidClient.dispose());
+    const invalid = await invalidClient.request("launch", {tracePath: invalidPath});
+    assert.strictEqual(invalid.success, false);
+    assert.match(invalid.message, /\$\.steps\[0\]\.pc|\/steps\/0\/pc/);
+    assert.match(invalid.message, /integer/);
+    assert.strictEqual(invalidClient.events("initialized").length, 0);
+
+    const emptyPath = path.join(tempDir, "empty.json");
+    fs.writeFileSync(emptyPath, JSON.stringify({
+        format: "apc-stack-trace",
+        steps: []
+    }), "utf8");
+    const emptyClient = attach(createAdapter());
+    t.after(() => emptyClient.dispose());
+    assertSuccess(assert, await emptyClient.request("launch", {tracePath: emptyPath}));
+    const stack = assertSuccess(assert, await emptyClient.request("stackTrace"));
+    assert.deepStrictEqual(stack.stackFrames, []);
+    assert.strictEqual(stack.totalFrames, 0);
+});

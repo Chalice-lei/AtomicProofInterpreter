@@ -5,7 +5,11 @@ const fs = require("fs");
 const path = require("path");
 const {after, before, test} = require("node:test");
 const {closeServer, launchChromium, startServer} = require("../helpers/browser");
-const {edgeCaseTrace} = require("../helpers/trace_fixtures");
+const {edgeCaseTrace, largeTrace} = require("../helpers/trace_fixtures");
+const {
+    createVscodeMock,
+    loadExtensionWithMock
+} = require("../helpers/vscode_mock");
 
 const extensionRoot = path.resolve(__dirname, "..", "..");
 const repoRoot = path.resolve(extensionRoot, "..", "..");
@@ -51,6 +55,25 @@ async function openExample(name)
 async function stepPosition(page)
 {
     return page.locator("#stepCount").textContent();
+}
+
+async function buildRealWebviewHtml(trace)
+{
+    const vscode = createVscodeMock({workspaceRoot: repoRoot});
+    const extension = loadExtensionWithMock(
+        path.join(extensionRoot, "extension.js"),
+        vscode
+    );
+    return extension.__test.buildWebviewHtml(
+        {extensionPath: extensionRoot},
+        {
+            cspSource: "vscode-webview:",
+            asWebviewUri: (uri) => String(uri.fsPath)
+        },
+        trace,
+        path.join(repoRoot, "generated-stack-trace.json"),
+        path.join(extensionRoot, "stack_visualizer", "index.html")
+    );
 }
 
 test("离线 Webview 可加载全部 5 个现有 Trace", async () => {
@@ -288,5 +311,99 @@ test("亮色、暗色和窄屏布局生成非空视觉证据", async () => {
     for (const file of [light, dark, narrow]) {
         assert(fs.statSync(file).size > 10000, `${path.basename(file)} is unexpectedly blank`);
     }
+    await page.close();
+});
+
+test("真实 buildWebviewHtml nonce CSP 下虚拟 spacer 和事件轨仍有布局", async () => {
+    const trace = largeTrace(5, 1000);
+    trace.steps[4].error = "synthetic event";
+    const html = await buildRealWebviewHtml(trace);
+    assert.match(html, /Content-Security-Policy/);
+    assert(!/style-src[^>]*unsafe-inline/.test(html));
+    assert(!/script-src[^>]*unsafe-inline/.test(html));
+
+    const page = await context.newPage();
+    const consoleErrors = [];
+    const pageErrors = [];
+    page.on("console", (message) => {
+        if (message.type() === "error") consoleErrors.push(message.text());
+    });
+    page.on("pageerror", (error) => pageErrors.push(error.message));
+    await page.setContent(html, {waitUntil: "load"});
+    await page.locator("#mainStackList .stack-spacer").first().waitFor({state: "attached"});
+    assert.strictEqual(await page.locator("[style]").count(), 0);
+    const styleNonces = await page.locator("style").evaluateAll((elements) =>
+        elements.map((element) => element.nonce)
+    );
+    assert(styleNonces.length >= 4);
+    assert.strictEqual(new Set(styleNonces).size, 1);
+    assert(styleNonces[0]);
+
+    const spacerHeights = await page.locator("#mainStackList .stack-spacer")
+        .evaluateAll((elements) => elements.map((element) =>
+            Number.parseFloat(getComputedStyle(element).height)
+        ));
+    assert(spacerHeights.some((height) => height > 1000), String(spacerHeights));
+    const eventPositions = await page.locator("#eventRail .event-dot")
+        .evaluateAll((elements) => elements.map((element) =>
+            element.getBoundingClientRect().left
+        ));
+    assert(eventPositions.length >= 2);
+    assert(new Set(eventPositions.map((value) => Math.round(value))).size >= 2);
+    await page.locator("#mainStackList").evaluate((element) => {
+        element.scrollTop = element.scrollHeight;
+        element.dispatchEvent(new Event("scroll"));
+    });
+    await page.waitForFunction(() =>
+        document.querySelector("#mainStackList").textContent.includes("large-0")
+    );
+    assert.deepStrictEqual(pageErrors, []);
+    assert.deepStrictEqual(
+        consoleErrors.filter((message) => /content security policy|inline style/i.test(message)),
+        []
+    );
+    await page.close();
+});
+
+test("Webview 源文件优先 step.sourceFile、再 step.source.file、最后顶层 fallback", async () => {
+    const {page} = await openExample("alt_roundtrip.json");
+    await page.evaluate(() => {
+        window.__apcMessages.length = 0;
+        loadTraceJson({
+            format: "apc-stack-trace",
+            source: {file: "main.ct", lines: ["one", "two", "three"]},
+            steps: [
+                {
+                    step: 0,
+                    pc: 0,
+                    opcode: "OP_0",
+                    sourceFile: "imported.ct",
+                    source: {file: "nested-ignored.ct", line: 1}
+                },
+                {
+                    step: 1,
+                    pc: 1,
+                    opcode: "OP_1",
+                    source: {file: "nested.ct", line: 2}
+                },
+                {step: 2, pc: 2, opcode: "OP_2", sourceLine: 3}
+            ]
+        });
+    });
+    for (const [index, expected] of [
+        [0, "imported.ct"],
+        [1, "nested.ct"],
+        [2, "main.ct"]
+    ]) {
+        await page.locator("#timeline").evaluate((element, value) => {
+            element.value = String(value);
+            element.dispatchEvent(new Event("input", {bubbles: true}));
+        }, index);
+        assert.strictEqual(await page.locator("#sourceTitle").textContent(), expected);
+        assert((await page.locator("#metricSource").textContent()).includes(expected));
+        await page.locator("#openSourceBtn").click();
+    }
+    const files = await page.evaluate(() => window.__apcMessages.map((item) => item.file));
+    assert.deepStrictEqual(files, ["imported.ct", "nested.ct", "main.ct"]);
     await page.close();
 });

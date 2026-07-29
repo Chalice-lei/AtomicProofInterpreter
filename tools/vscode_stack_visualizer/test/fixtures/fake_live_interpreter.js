@@ -7,6 +7,8 @@ const readline = require("readline");
 const contractPath = process.argv[3] || "fixture.ct";
 const crashAfterInitialize = path.basename(contractPath) === "crash.ct";
 const pauseAfterContinue = path.basename(contractPath) === "pause.ct";
+const ignoreInitialize = path.basename(contractPath) === "request-timeout.ct";
+const ignoreBreakpointRequest = path.basename(contractPath) === "later-timeout.ct";
 let pc = 0;
 
 function value(number, id)
@@ -62,6 +64,9 @@ const reader = readline.createInterface({input: process.stdin});
 reader.on("line", (line) => {
     const request = JSON.parse(line);
     if (request.command === "initialize") {
+        if (ignoreInitialize) {
+            return;
+        }
         response(request, {snapshot: snapshot()});
         if (crashAfterInitialize) {
             setTimeout(() => process.exit(17), 20);
@@ -69,6 +74,9 @@ reader.on("line", (line) => {
         return;
     }
     if (request.command === "setBreakpoints") {
+        if (ignoreBreakpointRequest) {
+            return;
+        }
         response(request, {
             breakpoints: (request.breakpoints || []).map((item, index) => ({
                 id: index + 1,

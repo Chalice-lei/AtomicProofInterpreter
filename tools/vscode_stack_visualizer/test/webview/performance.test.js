@@ -69,6 +69,27 @@ test("10,000 step 与 1,000 元素栈保持虚拟化和可交互性能", {timeou
     assert(memory < 128 * 1024 * 1024, `heap grew by ${(memory / 1024 / 1024).toFixed(1)} MiB`);
 });
 
+test("10,000 个事件点连续跳转不重复重建无关动态样式", {timeout: 30000}, async () => {
+    const trace = largeTrace(10000, 0);
+    for (const traceStep of trace.steps) {
+        traceStep.error = "dense synthetic event";
+    }
+    await page.evaluate((value) => loadTraceJson(value), trace);
+    assert.strictEqual(await page.locator("#eventRail .event-dot").count(), 10000);
+
+    const navigationMs = await page.evaluate(() => {
+        const start = performance.now();
+        for (let index = 0; index < 10; index++) {
+            setStep((index * 997) % steps().length);
+        }
+        return performance.now() - start;
+    });
+    assert(
+        navigationMs < 5000,
+        `10 dense-event renders took ${navigationMs.toFixed(1)}ms`
+    );
+});
+
 test("连续播放能自动抵达末尾并清理 timer", {timeout: 10000}, async () => {
     await page.evaluate((value) => loadTraceJson(value), largeTrace(12, 0));
     await page.locator("#speed").evaluate((element) => {
