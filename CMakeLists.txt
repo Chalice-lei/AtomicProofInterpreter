@@ -12,6 +12,7 @@
 #   -DJSON_LOCAL_PATH=/path/to/json         指定本地 nlohmann/json 库路径
 #   -DCMAKE_BUILD_TYPE=Debug                设置构建类型为 Debug
 #   -DCMAKE_BUILD_TYPE=Release              设置构建类型为 Release
+#   -DBUILD_TESTING=ON                       构建并注册测试（默认关闭）
 #   -DCROSS_COMPILE_WINDOWS=ON              交叉编译Windows目标
 #   -DCROSS_COMPILE_TARGET=<target>         指定交叉编译目标
 #
@@ -345,6 +346,7 @@ endif()
 # 调试器支持配置
 # =============================================================================
 option(BUILD_DEBUGGER "Build debugger support" ON)
+option(BUILD_TESTING "Build test executables and register tests" OFF)
 
 if(BUILD_DEBUGGER)
     message(STATUS "🐛 启用调试器支持")
@@ -476,75 +478,78 @@ install(DIRECTORY ${CMAKE_SOURCE_DIR}/stdlib/
 target_compile_definitions(apc_core PUBLIC
     APC_DEFAULT_STDLIB_PATH="${CMAKE_INSTALL_PREFIX}/${APC_STDLIB_INSTALL_DIR}")
 
-enable_testing()
-add_executable(
-    symbol_table_state_test
-    test/compiler_regression/symbol_table_state_test.cpp
-)
-target_link_libraries(symbol_table_state_test PRIVATE apc_core)
-add_test(
-    NAME symbol-table-state
-    COMMAND $<TARGET_FILE:symbol_table_state_test>
-)
-if(BUILD_DEBUGGER)
+if(BUILD_TESTING)
+    enable_testing()
     add_executable(
-        debug_info_validation_test
-        test/debugger_regression/debug_info_validation_test.cpp
+        symbol_table_state_test
+        test/compiler_regression/symbol_table_state_test.cpp
     )
-    target_link_libraries(debug_info_validation_test PRIVATE apc_core)
+    target_link_libraries(symbol_table_state_test PRIVATE apc_core)
     add_test(
-        NAME debug-info-validation
-        COMMAND $<TARGET_FILE:debug_info_validation_test>
+        NAME symbol-table-state
+        COMMAND $<TARGET_FILE:symbol_table_state_test>
+    )
+
+    if(BUILD_DEBUGGER)
+        add_executable(
+            debug_info_validation_test
+            test/debugger_regression/debug_info_validation_test.cpp
+        )
+        target_link_libraries(debug_info_validation_test PRIVATE apc_core)
+        add_test(
+            NAME debug-info-validation
+            COMMAND $<TARGET_FILE:debug_info_validation_test>
+        )
+        add_test(
+            NAME debugger-regression
+            COMMAND ${CMAKE_COMMAND} -E env
+                APC_COMPILER=$<TARGET_FILE:${EXECUTABLE_NAME}>
+                bash ${CMAKE_SOURCE_DIR}/test/debugger_regression/run_debugger_regression.sh
+        )
+    endif()
+    add_test(
+        NAME ast-self-test
+        COMMAND $<TARGET_FILE:${EXECUTABLE_NAME}> test ast
     )
     add_test(
-        NAME debugger-regression
+        NAME repl-smoke
+        COMMAND bash ${CMAKE_SOURCE_DIR}/test/repl/run_repl_smoke.sh $<TARGET_FILE:${EXECUTABLE_NAME}>
+    )
+    add_test(
+        NAME ast-regression
+        COMMAND bash ${CMAKE_SOURCE_DIR}/test/interpreter/run_ast_regression.sh
+    )
+    add_test(
+        NAME compiler-regression
         COMMAND ${CMAKE_COMMAND} -E env
             APC_COMPILER=$<TARGET_FILE:${EXECUTABLE_NAME}>
-            bash ${CMAKE_SOURCE_DIR}/test/debugger_regression/run_debugger_regression.sh
+            bash ${CMAKE_SOURCE_DIR}/test/compiler_regression/run_compiler_regression.sh
+    )
+    add_test(
+        NAME ownership-regression
+        COMMAND ${CMAKE_COMMAND} -E env
+            APC_COMPILER=$<TARGET_FILE:${EXECUTABLE_NAME}>
+            bash ${CMAKE_SOURCE_DIR}/test/compiler_regression/run_ownership_regression.sh
+    )
+    add_test(
+        NAME for-scope-regression
+        COMMAND ${CMAKE_COMMAND} -E env
+            APC_COMPILER=$<TARGET_FILE:${EXECUTABLE_NAME}>
+            bash ${CMAKE_SOURCE_DIR}/test/compiler_regression/run_for_scope_regression.sh
+    )
+    add_test(
+        NAME stack-safety-regression
+        COMMAND ${CMAKE_COMMAND} -E env
+            APC_COMPILER=$<TARGET_FILE:${EXECUTABLE_NAME}>
+            bash ${CMAKE_SOURCE_DIR}/test/compiler_regression/run_stack_safety_regression.sh
+    )
+    add_test(
+        NAME ast-bytecode-differential
+        COMMAND ${CMAKE_COMMAND} -E env
+            APC_COMPILER=$<TARGET_FILE:${EXECUTABLE_NAME}>
+            python3 ${CMAKE_SOURCE_DIR}/test/differential/run_ast_bytecode_differential.py
     )
 endif()
-add_test(
-    NAME ast-self-test
-    COMMAND $<TARGET_FILE:${EXECUTABLE_NAME}> test ast
-)
-add_test(
-    NAME repl-smoke
-    COMMAND bash ${CMAKE_SOURCE_DIR}/test/repl/run_repl_smoke.sh $<TARGET_FILE:${EXECUTABLE_NAME}>
-)
-add_test(
-    NAME ast-regression
-    COMMAND bash ${CMAKE_SOURCE_DIR}/test/interpreter/run_ast_regression.sh
-)
-add_test(
-    NAME compiler-regression
-    COMMAND ${CMAKE_COMMAND} -E env
-        APC_COMPILER=$<TARGET_FILE:${EXECUTABLE_NAME}>
-        bash ${CMAKE_SOURCE_DIR}/test/compiler_regression/run_compiler_regression.sh
-)
-add_test(
-    NAME ownership-regression
-    COMMAND ${CMAKE_COMMAND} -E env
-        APC_COMPILER=$<TARGET_FILE:${EXECUTABLE_NAME}>
-        bash ${CMAKE_SOURCE_DIR}/test/compiler_regression/run_ownership_regression.sh
-)
-add_test(
-    NAME for-scope-regression
-    COMMAND ${CMAKE_COMMAND} -E env
-        APC_COMPILER=$<TARGET_FILE:${EXECUTABLE_NAME}>
-        bash ${CMAKE_SOURCE_DIR}/test/compiler_regression/run_for_scope_regression.sh
-)
-add_test(
-    NAME stack-safety-regression
-    COMMAND ${CMAKE_COMMAND} -E env
-        APC_COMPILER=$<TARGET_FILE:${EXECUTABLE_NAME}>
-        bash ${CMAKE_SOURCE_DIR}/test/compiler_regression/run_stack_safety_regression.sh
-)
-add_test(
-    NAME ast-bytecode-differential
-    COMMAND ${CMAKE_COMMAND} -E env
-        APC_COMPILER=$<TARGET_FILE:${EXECUTABLE_NAME}>
-        python3 ${CMAKE_SOURCE_DIR}/test/differential/run_ast_bytecode_differential.py
-)
 
 # =============================================================================
 # 调试器功能已集成到主程序（通过 debug 子命令）
