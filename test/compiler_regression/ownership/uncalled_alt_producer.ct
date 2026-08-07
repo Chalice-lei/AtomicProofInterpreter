@@ -1,0 +1,7 @@
+Contract UncalledAltProducer:
+    def _stash():
+        controller = Push(7)
+        SetAlt(controller)
+    def main():
+        SetMain(controller)
+        Return(controller)

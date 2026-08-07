@@ -319,6 +319,27 @@ write_case suffix_after_return.ct \
     "        Return(1)" \
     "        Push(7)"
 
+write_case private_param_destructure_direct.ct \
+    "Contract PrivateParamDestructureDirect:" \
+    "    def main(input: hex):" \
+    "        { prefix, input } = Split(input, 3)" \
+    "        { payload, suffix } = Split(input, 2)" \
+    "        Delete(prefix)" \
+    "        Delete(suffix)" \
+    "        Return payload"
+
+write_case private_param_destructure_rebind.ct \
+    "Contract PrivateParamDestructureRebind:" \
+    "    def _strip(data: hex):" \
+    "        { prefix, data } = Split(data, 3)" \
+    "        { payload, suffix } = Split(data, 2)" \
+    "        Delete(prefix)" \
+    "        Delete(suffix)" \
+    "        return payload" \
+    "    def main(input: hex):" \
+    "        result = _strip(input)" \
+    "        Return result"
+
 expect_failure bang.ct "unexpected character '!'"
 expect_success notequal.ct
 expect_failure two_contracts.ct "unexpected token after contract definition"
@@ -348,6 +369,8 @@ expect_success private_early_return.ct
 expect_success private_conditional_return.ct
 expect_success private_one_sided_return.ct
 expect_success suffix_after_return.ct
+expect_success private_param_destructure_direct.ct
+expect_success private_param_destructure_rebind.ct
 
 python3 - "$TMP_DIR/branch_fixed_return.json" <<'PY'
 import json
@@ -412,6 +435,21 @@ with open(sys.argv[1], "r", encoding="utf-8") as f:
 return_pos = tokens.index("OP_RETURN")
 padding_pos = tokens.index("OP_INVALIDOPCODE", return_pos + 1)
 assert "OP_7" in tokens[padding_pos + 1:], tokens[-10:]
+PY
+
+python3 - "$TMP_DIR/private_param_destructure_direct.json" \
+    "$TMP_DIR/private_param_destructure_rebind.json" <<'PY'
+import json
+import sys
+
+def lock(path):
+    with open(path, "r", encoding="utf-8") as f:
+        return json.load(f)["lock"]
+
+direct = lock(sys.argv[1])
+private = lock(sys.argv[2])
+assert private["asm"] == direct["asm"], (direct["asm"], private["asm"])
+assert private["hex"] == direct["hex"], (direct["hex"], private["hex"])
 PY
 
 for flag in 1 -1; do

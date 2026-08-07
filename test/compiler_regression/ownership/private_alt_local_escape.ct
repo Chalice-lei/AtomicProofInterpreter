@@ -1,0 +1,12 @@
+Contract PrivateAltLocalEscape:
+    def _stash():
+        controller = Push(7)
+        SetAlt(controller)
+    def _noop():
+        marker = Push(1)
+        Delete(marker)
+    def main():
+        _stash()
+        _noop()
+        SetMain(controller)
+        Return(controller)

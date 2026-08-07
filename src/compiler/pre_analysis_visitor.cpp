@@ -56,6 +56,7 @@ void PreAnalysisVisitor::visit(FunctionNode& node)
     bool previousInPrivateFunction = m_inPrivateFunction;
     bool previousInLibraryFunction = m_inLibraryFunction;
     auto previousDeferredParams = m_deferredOwnershipParams;
+    auto previousVariables = m_variables;
 
     m_currentFunctionName = node.name;
     m_inPrivateFunction = isPrivateFunction(node.name);
@@ -79,8 +80,10 @@ void PreAnalysisVisitor::visit(FunctionNode& node)
         }
     }
 
-    // 私有函数清空所有变量; 公有函数保留副栈中的变量.
-    if (m_inPrivateFunction) {
+    // 私有 / 库函数的定义只做隔离分析，真实栈副作用在字节码内联到
+    // 调用点时才发生。定义本身不能污染后续 public 函数的状态；
+    // public 函数之间仍允许通过共享副栈传递值。
+    if (m_inPrivateFunction || m_inLibraryFunction) {
         m_variables.clear();
     } else {
         std::map<std::string, VariableInfo> altStackVariables;
@@ -123,6 +126,10 @@ void PreAnalysisVisitor::visit(FunctionNode& node)
     // Analyze function body
     if (node.block) {
         node.block->accept(*this);
+    }
+
+    if (m_inPrivateFunction || m_inLibraryFunction) {
+        m_variables = previousVariables;
     }
 
     m_currentFunctionName = previousFunctionName;
@@ -673,18 +680,31 @@ void PreAnalysisVisitor::visit(CallNode& node)
         if (!varName.empty()) {
             VariableInfo* var = findVariable(varName);
             if (!var) {
-                reportError(
-                    "Undeclared variable: '" + varName + "'",
-                    getNodeLocation(*node.args[0])
+                // 私有函数会在调用点内联，并可能把其局部值或调用者实参
+                // 留在共享副栈。PreAnalysis 不重放调用体，因此先登记一个
+                // 延迟绑定，最终由 bytecode 后端的真实副栈符号表验证。
+                declareVariable(
+                    varName,
+                    "auto",
+                    getNodeLocation(*node.args[0]),
+                    nullptr,
+                    StorageResidency::ALT_STACK
                 );
+                var = findVariable(varName);
+                if (var) {
+                    var->markInAltStack();
+                }
+            }
+            if (!var) {
                 return;
             }
             if (!var->isInAltStack()) {
-                reportError(
-                    "Variable '" + varName + "' is not in altstack",
-                    getNodeLocation(*node.args[0])
+                // 该值也可能由前一个内联 private 调用从主栈移入副栈。
+                // 存储位置检查延迟到后端；后端找不到目标时仍会报错。
+                LOG_DEBUG(
+                    "Deferring altstack residency check for SetMain('" +
+                    varName + "') to bytecode generation"
                 );
-                return;
             }
             // SetMain 把变量搬回主栈, 视为重新绑定, 状态重置为 DECLARED 让后续
             // 消费可走一次完整 move 路径 (原 USED 升级在新规则下会阻断首次消费).

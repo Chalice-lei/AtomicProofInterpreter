@@ -1,0 +1,9 @@
+Contract PublicAltAcrossPrivateDefinition:
+    def stage():
+        controller = Push(7)
+        SetAlt(controller)
+    def _noop(value: number):
+        return value
+    def main():
+        SetMain(controller)
+        Return(controller)

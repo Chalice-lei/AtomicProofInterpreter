@@ -1,0 +1,8 @@
+Contract MisspelledAltBinding:
+    def _stash():
+        controller = Push(7)
+        SetAlt(controller)
+    def main():
+        _stash()
+        SetMain(controler)
+        Return(controler)

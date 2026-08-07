@@ -1,0 +1,7 @@
+Contract PrivateAltCallerBinding:
+    def _stash(value: number):
+        SetAlt(value)
+    def main(value: number):
+        _stash(value)
+        SetMain(value)
+        Return(value)

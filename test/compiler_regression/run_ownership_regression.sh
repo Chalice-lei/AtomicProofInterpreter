@@ -25,9 +25,10 @@ cp "$CASE_DIR"/*.ct "$TMP_DIR/"
 
 run_compile() {
     local file=$1
+    shift
     (
         cd "$TMP_DIR"
-        "$COMPILER" compile "$file" >"$file.out" 2>"$file.err"
+        "$COMPILER" "$@" compile "$file" >"$file.out" 2>"$file.err"
     )
 }
 
@@ -58,9 +59,15 @@ expect_failure() {
     local file=$1
     shift
     local stem=${file%.ct}
+    local -a compiler_args=()
+
+    if [[ ${1:-} == "--asa" ]]; then
+        compiler_args+=("$1")
+        shift
+    fi
 
     set +e
-    run_compile "$file"
+    run_compile "$file" "${compiler_args[@]}"
     local rc=$?
     set -e
 
@@ -161,6 +168,28 @@ expect_success struct_return_field_update_direct.ct
 expect_success struct_return_field_update.ct
 expect_success struct_return_binding_scope_direct.ct
 expect_success struct_return_binding_scope.ct
+for file in private_alt_local_escape.ct private_alt_caller_binding.ct; do
+    if ! run_compile "$file" --asa; then
+        echo "Expected success for $file with --asa" >&2
+        print_diagnostics "$file"
+        exit 1
+    fi
+done
+python3 - "$TMP_DIR/private_alt_local_escape.json" \
+    "$TMP_DIR/private_alt_caller_binding.json" <<'PY'
+import json
+import sys
+
+for path in sys.argv[1:]:
+    with open(path, "r", encoding="utf-8") as f:
+        tokens = json.load(f)["lock"]["asm"].split()
+    assert tokens.count("OP_TOALTSTACK") == 1, (path, tokens)
+    assert tokens.count("OP_FROMALTSTACK") == 1, (path, tokens)
+PY
+expect_failure missing_alt_binding.ct "alternate stack|altstack"
+expect_failure uncalled_alt_producer.ct --asa "alternate stack|altstack"
+expect_failure misspelled_alt_binding.ct --asa "alternate stack|altstack"
+expect_success public_alt_across_private_definition.ct
 expect_failure unused_struct_return.ct "returned struct value is unused"
 expect_failure struct_multi_return.ct \
     "struct values cannot participate" "multi-value return"

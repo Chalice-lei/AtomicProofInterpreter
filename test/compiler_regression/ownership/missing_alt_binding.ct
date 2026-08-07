@@ -1,0 +1,4 @@
+Contract MissingAltBinding:
+    def main(value: number):
+        SetMain(value)
+        Return(value)

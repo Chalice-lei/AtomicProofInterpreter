@@ -368,8 +368,8 @@ void ASTToBytecodeVisitor::visit(BlockNode& node)
 
     m_scopePtr->enterScope();
 
-    const bool preservesPublicFunctionAltOutputs =
-        m_publicFunctionBlock == &node;
+    const bool preservesAltOutputs =
+        m_publicFunctionBlock == &node || !m_activePrivateFunctions.empty();
 
     executeStatements(node.statements);
 
@@ -444,11 +444,11 @@ void ASTToBytecodeVisitor::visit(BlockNode& node)
                 COMPILER_WARNING(warningMsg, loc);
                 LOG_WARNING(warningMsg);
             } else {
-                if (preservesPublicFunctionAltOutputs) {
+                if (preservesAltOutputs) {
                     LOG_DEBUG(
                         it,
-                        " remains on alt stack as a public-function handoff "
-                        "value"
+                        " remains on alt stack as a public/private-function "
+                        "handoff value"
                     );
                     continue;
                 }
@@ -5265,6 +5265,13 @@ void ASTToBytecodeVisitor::visitDestructureAssign(DestructureAssignNode& node)
         const std::string& targetName = node.targets[i];
         const tbc::StackElement& value = values[i];
 
+        // private 标量形参是调用者栈槽的逻辑别名。解构赋值写入同名
+        // 新值后，旧别名已经失效，后续读取必须解析到新压入的目标。
+        SymbolTable& symtab = m_scopePtr->getCurrentSymtab();
+        if (symtab.resolveBindSymbol(targetName) != targetName) {
+            symtab.removeBindSymbol(targetName);
+        }
+
         // 隐式声明: 左值不在符号表则按右值类型自动声明.
         std::string lookupName = targetName;
         if (!targetName.empty() && !m_scopePtr->symbolExists(lookupName)) {
@@ -5687,22 +5694,9 @@ void ASTToBytecodeVisitor::cleanupStructParameter(
             auto altFieldPosOpt = m_scopePtr->getPos(fieldPath, true);
             if (altFieldPosOpt.has_value()) {
                 LOG_DEBUG(
-                    "Moving field from alt stack and dropping: " + fieldPath
+                    "Preserving struct parameter field on altstack: " +
+                    fieldPath
                 );
-                // 副栈 -> 主栈 -> drop.
-                auto moveCount = m_scopePtr->setMain(const_cast<std::string&>(
-                    const_cast<std::string&>(fieldPath)
-                ));
-                for (int j = 0; j < moveCount; j++) {
-                    m_generator.emit(tbc::BytOpcode::OP_FROMALTSTACK);
-                }
-                m_generator.emit(tbc::BytOpcode::OP_DROP);
-                m_scopePtr->pop();
-
-                // 其他元素回副栈.
-                for (int j = 0; j < moveCount - 1; j++) {
-                    m_generator.emit(tbc::BytOpcode::OP_TOALTSTACK);
-                }
             } else {
                 // 字段已被消耗或优化, 不在栈中.
                 LOG_DEBUG(
@@ -5720,6 +5714,18 @@ void ASTToBytecodeVisitor::cleanupStructParameter(
 void ASTToBytecodeVisitor::cleanupBasicParameter(const std::string& paramName)
 {
     LOG_DEBUG("Cleaning up basic parameter: " + paramName);
+
+    SymbolTable& currentSymtab = m_scopePtr->getCurrentSymtab();
+    const std::string resolvedParam =
+        currentSymtab.resolveBindSymbol(paramName);
+    if (std::find(
+            currentSymtab.m_keepSymbol.begin(),
+            currentSymtab.m_keepSymbol.end(),
+            resolvedParam
+        ) != currentSymtab.m_keepSymbol.end()) {
+        LOG_DEBUG("Preserving returned basic parameter: " + resolvedParam);
+        return;
+    }
 
     auto paramPosOpt = m_scopePtr->getPos(paramName);
     if (paramPosOpt.has_value()) {
@@ -5742,22 +5748,8 @@ void ASTToBytecodeVisitor::cleanupBasicParameter(const std::string& paramName)
         auto altParamPosOpt = m_scopePtr->getPos(paramName, true);
         if (altParamPosOpt.has_value()) {
             LOG_DEBUG(
-                "Moving parameter from alt stack and dropping: " + paramName
+                "Preserving basic parameter on altstack: " + paramName
             );
-            // 副栈 -> 主栈 -> drop.
-            auto moveCount = m_scopePtr->setMain(
-                const_cast<std::string&>(const_cast<std::string&>(paramName))
-            );
-            for (int i = 0; i < moveCount; i++) {
-                m_generator.emit(tbc::BytOpcode::OP_FROMALTSTACK);
-            }
-            m_generator.emit(tbc::BytOpcode::OP_DROP);
-            m_scopePtr->pop();
-
-            // 其他元素回副栈.
-            for (int i = 0; i < moveCount - 1; i++) {
-                m_generator.emit(tbc::BytOpcode::OP_TOALTSTACK);
-            }
         } else {
             // 参数已被消耗或优化, 不在栈中.
             LOG_DEBUG(
