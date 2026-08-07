@@ -1,0 +1,15 @@
+Contract PrivateAltStructArrayRepeatedEscape:
+    Struct Pair:
+        left: number
+        right: number
+    def _stash(values: Pair[1]):
+        SetAlt(values[0])
+    def _restore():
+        SetMain(values[0])
+        return values[0].left - values[0].right
+    def main(first: Pair[1], second: Pair[1]):
+        _stash(first)
+        _stash(second)
+        secondResult = _restore()
+        firstResult = _restore()
+        Return(secondResult - firstResult)

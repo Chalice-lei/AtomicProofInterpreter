@@ -154,6 +154,7 @@ expect_success struct_return_fresh.ct
 expect_success struct_return_typed_init.ct
 expect_success struct_return_nested_direct.ct
 expect_success struct_return_nested.ct
+expect_success struct_return_nested_shadow.ct
 expect_success struct_return_fixed.ct
 expect_success struct_return_fixed_direct.ct
 expect_success struct_return_typed_same_name.ct
@@ -168,7 +169,13 @@ expect_success struct_return_field_update_direct.ct
 expect_success struct_return_field_update.ct
 expect_success struct_return_binding_scope_direct.ct
 expect_success struct_return_binding_scope.ct
-for file in private_alt_local_escape.ct private_alt_caller_binding.ct; do
+expect_success private_struct_array_argument.ct
+for file in private_alt_local_escape.ct private_alt_caller_binding.ct \
+    private_alt_struct_array_whole_escape.ct \
+    private_alt_struct_array_flat_escape.ct \
+    private_alt_struct_array_repeated_escape.ct \
+    private_alt_struct_array_repeated_same_consumer.ct \
+    private_alt_struct_array_physical_name_collision.ct; do
     if ! run_compile "$file" --asa; then
         echo "Expected success for $file with --asa" >&2
         print_diagnostics "$file"
@@ -176,19 +183,39 @@ for file in private_alt_local_escape.ct private_alt_caller_binding.ct; do
     fi
 done
 python3 - "$TMP_DIR/private_alt_local_escape.json" \
-    "$TMP_DIR/private_alt_caller_binding.json" <<'PY'
+    "$TMP_DIR/private_alt_caller_binding.json" \
+    "$TMP_DIR/private_alt_struct_array_whole_escape.json" \
+    "$TMP_DIR/private_alt_struct_array_flat_escape.json" <<'PY'
 import json
 import sys
 
-for path in sys.argv[1:]:
+for path in sys.argv[1:3]:
     with open(path, "r", encoding="utf-8") as f:
         tokens = json.load(f)["lock"]["asm"].split()
     assert tokens.count("OP_TOALTSTACK") == 1, (path, tokens)
     assert tokens.count("OP_FROMALTSTACK") == 1, (path, tokens)
+
+with open(sys.argv[3], "r", encoding="utf-8") as f:
+    whole_tokens = json.load(f)["lock"]["asm"].split()
+assert whole_tokens.count("OP_TOALTSTACK") == 1, whole_tokens
+assert whole_tokens.count("OP_FROMALTSTACK") == 1, whole_tokens
+
+with open(sys.argv[4], "r", encoding="utf-8") as f:
+    flat_tokens = json.load(f)["lock"]["asm"].split()
+assert flat_tokens.count("OP_TOALTSTACK") >= 3, flat_tokens
+assert flat_tokens.count("OP_FROMALTSTACK") >= 3, flat_tokens
 PY
 expect_failure missing_alt_binding.ct "alternate stack|altstack"
 expect_failure uncalled_alt_producer.ct --asa "alternate stack|altstack"
 expect_failure misspelled_alt_binding.ct --asa "alternate stack|altstack"
+expect_failure private_alt_struct_array_uncalled.ct --asa \
+    "alternate.stack|altstack|non-array"
+expect_failure private_alt_struct_array_double_restore.ct --asa \
+    "restore|alternate.stack|residency"
+expect_failure private_alt_struct_array_dynamic_index.ct --asa \
+    "compile-time index|multi-slot"
+expect_failure private_alt_struct_array_partial_latest.ct --asa \
+    "partially live|complete struct-array element"
 expect_success public_alt_across_private_definition.ct
 expect_failure unused_struct_return.ct "returned struct value is unused"
 expect_failure struct_multi_return.ct \

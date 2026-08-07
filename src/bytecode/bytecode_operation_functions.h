@@ -76,11 +76,22 @@ public:
     }
 };
 
-// 注意: OP_*VERIFY 系列 (CHECKSIGVERIFY/CHECKMULTISIGVERIFY/EQUALVERIFY/
-// NUMEQUALVERIFY) 不向栈返回值
+// 注意: OP_*VERIFY 系列 (VERIFY/CHECKSIGVERIFY/CHECKMULTISIGVERIFY/
+// EQUALVERIFY/NUMEQUALVERIFY) 不向栈返回值
 static const std::unordered_map<std::string,
                                 std::shared_ptr<OpFunction> (*)(size_t)>
     opCreators = {
+        // 控制流验证: BOOLEAN -> 无返回值
+        {"Verify",
+         [](size_t size) -> std::shared_ptr<OpFunction> {
+             if (1 != size) {
+                 return nullptr;
+             }
+             return std::make_shared<
+                 OpFunctionTemplate<tbc::BytOpcode::OP_VERIFY, 1, false, 0>>(
+                 std::vector<tbc::OpType>{},
+                 std::vector<tbc::OpType>{tbc::OpType::BOOLEAN});
+         }},
         // 加密哈希: BYTES -> BYTES
         {"Rmd160",
          [](size_t size) -> std::shared_ptr<OpFunction> {

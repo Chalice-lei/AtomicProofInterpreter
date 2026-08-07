@@ -37,10 +37,16 @@ public:
 
     void visit(ContractNode& node) override
     {
+        applyAll(node.globalConstants);
         for (auto& library : node.libraries) {
             apply(library.get());
         }
         applyAll(node.members);
+    }
+
+    void visit(GlobalConstNode& node) override
+    {
+        apply(node.initializer.get());
     }
 
     void visit(LibraryNode& node) override

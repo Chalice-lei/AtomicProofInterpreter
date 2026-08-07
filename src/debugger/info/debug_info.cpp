@@ -4,9 +4,12 @@
 #include <cctype>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <limits>
 #include <nlohmann/json.hpp>
+#include <set>
 #include <sstream>
+#include <stdexcept>
 #include <unordered_set>
 
 using json = nlohmann::json;
@@ -65,15 +68,114 @@ std::string normalizeSourceFilename(
     return value;
 }
 
+bool sameLocation(const SourceLocation& lhs, const SourceLocation& rhs)
+{
+    return lhs.filename == rhs.filename && lhs.line == rhs.line &&
+           lhs.column == rhs.column && lhs.endLine == rhs.endLine &&
+           lhs.endColumn == rhs.endColumn;
+}
+
+bool sameSourceLocation(
+    const SourceLocation& lhs,
+    const SourceLocation& rhs
+)
+{
+    return sameLocation(lhs, rhs);
+}
+
+bool sameOrigin(const SourceOrigin& lhs, const SourceOrigin& rhs)
+{
+    return sameLocation(lhs.location, rhs.location) &&
+           lhs.scopeId == rhs.scopeId &&
+           lhs.functionName == rhs.functionName &&
+           lhs.originalPC == rhs.originalPC && lhs.path == rhs.path &&
+           lhs.affectedVars == rhs.affectedVars;
+}
+
+void appendUniqueOrigin(
+    std::vector<SourceOrigin>& origins,
+    const SourceOrigin& origin
+)
+{
+    if (std::none_of(origins.begin(), origins.end(), [&](const auto& item) {
+            return sameOrigin(item, origin);
+        })) {
+        origins.push_back(origin);
+    }
+}
+
+std::vector<PCRange> normalizeRanges(std::vector<PCRange> ranges)
+{
+    ranges.erase(
+        std::remove_if(ranges.begin(), ranges.end(), [](const PCRange& range) {
+            return !range.isValid();
+        }),
+        ranges.end()
+    );
+    std::sort(ranges.begin(), ranges.end(), [](const auto& lhs, const auto& rhs) {
+        if (lhs.beginPC != rhs.beginPC) {
+            return lhs.beginPC < rhs.beginPC;
+        }
+        return lhs.endPC < rhs.endPC;
+    });
+
+    std::vector<PCRange> result;
+    for (const auto& range : ranges) {
+        if (result.empty() || range.beginPC > result.back().endPC) {
+            result.push_back(range);
+            continue;
+        }
+        result.back().endPC = std::max(result.back().endPC, range.endPC);
+    }
+    return result;
+}
+
+std::vector<PCRange> effectiveRanges(const ScopeDebugInfo& scope)
+{
+    if (!scope.ranges.empty()) {
+        return normalizeRanges(scope.ranges);
+    }
+    if (scope.startPC < scope.endPC) {
+        return {PCRange(scope.startPC, scope.endPC)};
+    }
+    return {};
+}
+
+size_t scopeDepth(const std::shared_ptr<ScopeDebugInfo>& scope)
+{
+    size_t depth = 0;
+    auto current = scope;
+    std::unordered_set<const ScopeDebugInfo*> visited;
+    while (current && visited.insert(current.get()).second) {
+        ++depth;
+        current = current->parent.lock();
+    }
+    return depth;
+}
+
+std::string branchArmToString(BranchArm arm)
+{
+    return arm == BranchArm::Then ? "then" : "else";
+}
+
+BranchArm branchArmFromString(const std::string& value)
+{
+    if (value == "then") {
+        return BranchArm::Then;
+    }
+    if (value == "else") {
+        return BranchArm::Else;
+    }
+    throw std::invalid_argument("unknown debug branch arm: " + value);
+}
+
 json sourceLocationToJson(const SourceLocation& loc)
 {
-    json locJson;
-    locJson["file"] = loc.filename;
-    locJson["line"] = loc.line;
-    locJson["column"] = loc.column;
-    locJson["endLine"] = loc.endLine;
-    locJson["endColumn"] = loc.endColumn;
-    return locJson;
+    return json{{"file", loc.filename},
+                {"line", loc.line},
+                {"column", loc.column},
+                {"endLine", loc.endLine},
+                {"endColumn", loc.endColumn}};
 }
 
 SourceLocation sourceLocationFromJson(const json& locJson)
@@ -87,18 +189,91 @@ SourceLocation sourceLocationFromJson(const json& locJson)
     return loc;
 }
 
+json branchPathToJson(const std::vector<BranchPredicate>& path)
+{
+    json result = json::array();
+    for (const auto& predicate : path) {
+        result.push_back(
+            {{"region", predicate.region},
+             {"arm", branchArmToString(predicate.arm)}}
+        );
+    }
+    return result;
+}
+
+std::vector<BranchPredicate> branchPathFromJson(const json& pathJson)
+{
+    std::vector<BranchPredicate> result;
+    if (!pathJson.is_array()) {
+        throw std::invalid_argument("debug branch path must be an array");
+    }
+    for (const auto& item : pathJson) {
+        if (!item.is_object() || !item.contains("region") ||
+            !item.contains("arm") || !item["arm"].is_string()) {
+            throw std::invalid_argument("invalid debug branch predicate");
+        }
+        BranchPredicate predicate;
+        predicate.region = item.at("region").get<ControlRegionId>();
+        predicate.arm =
+            branchArmFromString(item.at("arm").get<std::string>());
+        result.push_back(predicate);
+    }
+    return result;
+}
+
+json sourceOriginToJson(const SourceOrigin& origin)
+{
+    json result{{"location", sourceLocationToJson(origin.location)},
+                {"scopeId", origin.scopeId},
+                {"functionName", origin.functionName},
+                {"path", branchPathToJson(origin.path)},
+                {"affectedVars", origin.affectedVars}};
+    if (origin.originalPC != UNKNOWN_ORIGINAL_PC) {
+        result["originalPC"] = origin.originalPC;
+    }
+    return result;
+}
+
+SourceOrigin sourceOriginFromJson(const json& originJson)
+{
+    SourceOrigin result;
+    if (originJson.contains("location")) {
+        result.location = sourceLocationFromJson(originJson["location"]);
+    }
+    result.scopeId = originJson.value("scopeId", INVALID_SCOPE_ID);
+    result.functionName = originJson.value("functionName", "");
+    result.originalPC =
+        originJson.value("originalPC", UNKNOWN_ORIGINAL_PC);
+    if (originJson.contains("path")) {
+        result.path = branchPathFromJson(originJson["path"]);
+    }
+    if (originJson.contains("affectedVars")) {
+        result.affectedVars =
+            originJson["affectedVars"].get<std::vector<std::string>>();
+    }
+    return result;
+}
+
 json variableToJson(const VariableDebugInfo& var)
 {
-    json varJson;
-    varJson["name"] = var.name;
-    varJson["type"] = var.type;
-    varJson["scopeName"] = var.scopeName;
-    varJson["declLine"] = var.declLine;
-    varJson["declColumn"] = var.declColumn;
-    varJson["isStackVar"] = var.isStackVar;
-    varJson["stackOffset"] = var.stackOffset;
-    varJson["isParameter"] = var.isParameter;
-    return varJson;
+    json result{{"name", var.name},
+                {"type", var.type},
+                {"scopeName", var.scopeName},
+                {"scopeId", var.scopeId},
+                {"declLine", var.declLine},
+                {"declColumn", var.declColumn},
+                {"isStackVar", var.isStackVar},
+                {"stackOffset", var.stackOffset},
+                {"isParameter", var.isParameter}};
+    if (var.hasExplicitAvailability) {
+        result["availabilityRanges"] = json::array();
+        for (const auto& range : var.availabilityRanges) {
+            result["availabilityRanges"].push_back(
+                {{"beginPC", range.beginPC}, {"endPC", range.endPC}}
+            );
+        }
+    }
+    return result;
 }
 
 VariableDebugInfo variableFromJson(const json& varJson)
@@ -107,12 +282,120 @@ VariableDebugInfo variableFromJson(const json& varJson)
     var.name = varJson.value("name", "");
     var.type = varJson.value("type", "");
     var.scopeName = varJson.value("scopeName", "");
+    var.scopeId = varJson.value("scopeId", INVALID_SCOPE_ID);
     var.declLine = varJson.value("declLine", 0);
     var.declColumn = varJson.value("declColumn", 0);
     var.isStackVar = varJson.value("isStackVar", true);
     var.stackOffset = varJson.value("stackOffset", -1);
     var.isParameter = varJson.value("isParameter", false);
+    const char* rangeKey = nullptr;
+    if (varJson.contains("availabilityRanges")) {
+        rangeKey = "availabilityRanges";
+    } else if (varJson.contains("liveRanges")) {
+        // Accept the early V2 spelling while emitting one canonical key.
+        rangeKey = "liveRanges";
+    }
+    if (rangeKey != nullptr) {
+        const auto& rangesJson = varJson.at(rangeKey);
+        if (!rangesJson.is_array()) {
+            throw std::invalid_argument(
+                "variable availability ranges must be an array"
+            );
+        }
+        var.hasExplicitAvailability = true;
+        for (const auto& rangeJson : rangesJson) {
+            if (!rangeJson.is_object() ||
+                !rangeJson.contains("beginPC") ||
+                !rangeJson.contains("endPC")) {
+                throw std::invalid_argument(
+                    "invalid variable availability range"
+                );
+            }
+            var.availabilityRanges.emplace_back(
+                rangeJson.at("beginPC").get<size_t>(),
+                rangeJson.at("endPC").get<size_t>()
+            );
+        }
+    }
     return var;
+}
+
+void mergePath(
+    std::vector<BranchPredicate>& destination,
+    const std::vector<BranchPredicate>& additional
+)
+{
+    for (const auto& predicate : additional) {
+        auto existing = std::find_if(
+            destination.begin(),
+            destination.end(),
+            [&](const BranchPredicate& item) {
+                return item.region == predicate.region;
+            }
+        );
+        if (existing == destination.end()) {
+            destination.push_back(predicate);
+        } else {
+            existing->arm = predicate.arm;
+        }
+    }
+}
+
+bool hasDuplicatePathRegion(const std::vector<BranchPredicate>& path)
+{
+    std::set<ControlRegionId> regions;
+    for (const auto& predicate : path) {
+        if (!regions.insert(predicate.region).second) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool isStructuredIfOpcode(const std::string& opcode)
+{
+    std::string normalized;
+    normalized.reserve(opcode.size());
+    for (unsigned char ch : opcode) {
+        if (!std::isspace(ch)) {
+            normalized.push_back(static_cast<char>(std::tolower(ch)));
+        }
+    }
+    return normalized == "63" || normalized == "64" ||
+           normalized == "op_if" || normalized == "op_notif";
+}
+
+bool isPathCompatible(
+    const SourceOrigin& origin,
+    const BranchTrace& branchTrace
+)
+{
+    return std::all_of(
+        origin.path.begin(),
+        origin.path.end(),
+        [&](const BranchPredicate& predicate) {
+            const auto selected = branchTrace.find(predicate.region);
+            return selected != branchTrace.end() &&
+                   selected->second == predicate.arm;
+        }
+    );
+}
+
+bool validVariableRanges(const VariableDebugInfo& variable)
+{
+    if (!variable.hasExplicitAvailability) {
+        return variable.availabilityRanges.empty();
+    }
+    size_t previousEnd = 0;
+    bool first = true;
+    for (const auto& range : variable.availabilityRanges) {
+        if (!range.isValid() || (!first && range.beginPC < previousEnd)) {
+            return false;
+        }
+        first = false;
+        previousEnd = range.endPC;
+    }
+    return true;
 }
 
 bool sameVariable(
@@ -129,19 +412,12 @@ bool sameVariable(
            left.isParameter == right.isParameter;
 }
 
-bool sameSourceLocation(const SourceLocation& left, const SourceLocation& right)
-{
-    return left.filename == right.filename && left.line == right.line &&
-           left.column == right.column && left.endLine == right.endLine &&
-           left.endColumn == right.endColumn;
-}
-
 bool rangesOverlap(
     const ScopeDebugInfo& left,
     const ScopeDebugInfo& right
 )
 {
-    // 空作用域只保留源码结构锚点，不覆盖任何运行时 PC。
+    // Empty scopes are source anchors and cover no runtime PC.
     if (left.startPC == left.endPC || right.startPC == right.endPC) {
         return false;
     }
@@ -168,25 +444,114 @@ std::string SourceLocation::toString() const
     return oss.str();
 }
 
-void ScopeDebugInfo::addVariable(const VariableDebugInfo& var)
+bool VariableDebugInfo::isAvailableAtPC(size_t pc) const
 {
-    variables.push_back(var);
+    if (!hasExplicitAvailability) {
+        return true;
+    }
+    return std::any_of(
+        availabilityRanges.begin(),
+        availabilityRanges.end(),
+        [&](const PCRange& range) { return range.contains(pc); }
+    );
 }
 
-const VariableDebugInfo* ScopeDebugInfo::findVariable(const std::string& name
+void VariableDebugInfo::setAvailabilityRange(size_t begin, size_t end)
+{
+    hasExplicitAvailability = true;
+    availabilityRanges.clear();
+    if (begin < end) {
+        availabilityRanges.emplace_back(begin, end);
+    }
+}
+
+void ScopeDebugInfo::addVariable(const VariableDebugInfo& var)
+{
+    VariableDebugInfo copy = var;
+    if (copy.scopeId == INVALID_SCOPE_ID) {
+        copy.scopeId = scopeId;
+    }
+    if (copy.scopeName.empty()) {
+        copy.scopeName = name;
+    }
+    variables.push_back(std::move(copy));
+}
+
+void ScopeDebugInfo::setRange(size_t begin, size_t end)
+{
+    ranges.clear();
+    startPC = begin;
+    endPC = end;
+    if (begin < end) {
+        ranges.emplace_back(begin, end);
+    }
+}
+
+void ScopeDebugInfo::addRange(size_t begin, size_t end)
+{
+    if (begin >= end) {
+        return;
+    }
+    ranges.emplace_back(begin, end);
+    ranges = normalizeRanges(std::move(ranges));
+    startPC = ranges.front().beginPC;
+    endPC = ranges.back().endPC;
+}
+
+bool ScopeDebugInfo::containsPC(size_t pc) const
+{
+    const auto intervals = effectiveRanges(*this);
+    return std::any_of(intervals.begin(), intervals.end(), [&](const auto& range) {
+        return range.contains(pc);
+    });
+}
+
+size_t ScopeDebugInfo::coveredInstructionCount() const
+{
+    size_t total = 0;
+    for (const auto& range : effectiveRanges(*this)) {
+        total += range.endPC - range.beginPC;
+    }
+    return total;
+}
+
+const VariableDebugInfo* ScopeDebugInfo::findVariable(const std::string& value
 ) const
 {
-    for (const auto& var : variables) {
-        if (var.name == name) {
-            return &var;
+    const ScopeDebugInfo* current = this;
+    std::shared_ptr<ScopeDebugInfo> parentOwner;
+    std::unordered_set<const ScopeDebugInfo*> visited;
+    while (current && visited.insert(current).second) {
+        for (const auto& variable : current->variables) {
+            if (variable.name == value) {
+                return &variable;
+            }
         }
+        parentOwner = current->parent.lock();
+        current = parentOwner.get();
     }
+    return nullptr;
+}
 
-    // 父作用域递归查找
-    if (parent) {
-        return parent->findVariable(name);
+const VariableDebugInfo* ScopeDebugInfo::findVariable(
+    const std::string& value,
+    size_t pc
+) const
+{
+    const ScopeDebugInfo* current = this;
+    std::shared_ptr<ScopeDebugInfo> parentOwner;
+    std::unordered_set<const ScopeDebugInfo*> visited;
+    while (current && visited.insert(current).second) {
+        for (const auto& variable : current->variables) {
+            if (variable.name == value) {
+                // An unavailable inner binding still shadows a parent
+                // binding for the remainder of its lexical scope.
+                return variable.isAvailableAtPC(pc) ? &variable : nullptr;
+            }
+        }
+        parentOwner = current->parent.lock();
+        current = parentOwner.get();
     }
-
     return nullptr;
 }
 
@@ -195,34 +560,45 @@ void DebugInfo::addSourceMapping(size_t pc, const SourceLocation& loc)
     if (!loc.isValid()) {
         return;
     }
+    pcToSource[pc] = loc;
+    auto instruction = instructions.find(pc);
+    if (instruction != instructions.end()) {
+        instruction->second.location = loc;
+        if (instruction->second.origins.empty()) {
+            SourceOrigin origin(loc);
+            origin.originalPC = pc;
+            origin.affectedVars = instruction->second.affectedVars;
+            instruction->second.origins.push_back(std::move(origin));
+        } else {
+            instruction->second.origins.front().location = loc;
+        }
+    }
+    buildLineToPC();
+}
 
-    auto existing = pcToSource.find(pc);
-    if (existing != pcToSource.end() && existing->second.line != loc.line) {
-        auto lineIt = lineToPCs.find(existing->second.line);
-        if (lineIt != lineToPCs.end()) {
-            auto& oldPcs = lineIt->second;
-            oldPcs.erase(std::remove(oldPcs.begin(), oldPcs.end(), pc), oldPcs.end());
-            if (oldPcs.empty()) {
-                lineToPCs.erase(lineIt);
-            }
+void DebugInfo::addInstruction(const InstructionDebugInfo& value)
+{
+    InstructionDebugInfo info = value;
+    if (info.origins.empty() && info.location.isValid()) {
+        SourceOrigin origin(info.location);
+        origin.originalPC = info.pc;
+        origin.affectedVars = info.affectedVars;
+        info.origins.push_back(std::move(origin));
+    }
+    if (!info.origins.empty()) {
+        info.location = info.origins.front().location;
+        if (info.affectedVars.empty()) {
+            info.affectedVars = info.origins.front().affectedVars;
         }
     }
 
-    pcToSource[pc] = loc;
-    auto& pcs = lineToPCs[loc.line];
-    if (std::find(pcs.begin(), pcs.end(), pc) == pcs.end()) {
-        pcs.push_back(pc);
-        std::sort(pcs.begin(), pcs.end());
-    }
-}
-
-void DebugInfo::addInstruction(const InstructionDebugInfo& info)
-{
     instructions[info.pc] = info;
-
     if (info.location.isValid()) {
-        addSourceMapping(info.pc, info.location);
+        pcToSource[info.pc] = info.location;
+    } else {
+        pcToSource.erase(info.pc);
     }
+    buildLineToPC();
 }
 
 void DebugInfo::addInstruction(
@@ -232,13 +608,58 @@ void DebugInfo::addInstruction(
     const SourceLocation& loc
 )
 {
-    InstructionDebugInfo info;
-    info.pc = pc;
+    InstructionDebugInfo info(pc, loc);
     info.opcode = opcode;
     info.operand = operand;
-    info.location = loc;
-
     addInstruction(info);
+}
+
+void DebugInfo::addInstructionOrigin(size_t pc, const SourceOrigin& value)
+{
+    auto [it, inserted] = instructions.emplace(pc, InstructionDebugInfo());
+    auto& instruction = it->second;
+    if (inserted) {
+        instruction.pc = pc;
+    }
+    appendUniqueOrigin(instruction.origins, value);
+    if (!instruction.origins.empty()) {
+        instruction.location = instruction.origins.front().location;
+        instruction.affectedVars = instruction.origins.front().affectedVars;
+        if (instruction.location.isValid()) {
+            pcToSource[pc] = instruction.location;
+        }
+    }
+    buildLineToPC();
+}
+
+void DebugInfo::setInstructionOrigins(
+    size_t pc,
+    const std::vector<SourceOrigin>& values
+)
+{
+    auto [it, inserted] = instructions.emplace(pc, InstructionDebugInfo());
+    auto& instruction = it->second;
+    if (inserted) {
+        instruction.pc = pc;
+    }
+    instruction.origins.clear();
+    for (const auto& origin : values) {
+        appendUniqueOrigin(instruction.origins, origin);
+    }
+    if (instruction.origins.empty()) {
+        instruction.location = SourceLocation();
+        instruction.affectedVars.clear();
+        pcToSource.erase(pc);
+    } else {
+        instruction.location = instruction.origins.front().location;
+        instruction.affectedVars = instruction.origins.front().affectedVars;
+        if (instruction.location.isValid()) {
+            pcToSource[pc] = instruction.location;
+        } else {
+            pcToSource.erase(pc);
+        }
+    }
+    buildLineToPC();
 }
 
 void DebugInfo::addFunction(const FunctionDebugInfo& info)
@@ -248,35 +669,168 @@ void DebugInfo::addFunction(const FunctionDebugInfo& info)
 
 void DebugInfo::addVariable(const VariableDebugInfo& info)
 {
+    // Kept for V1 callers. Scope-aware queries use ScopeDebugInfo::variables,
+    // while this map remains the legacy name-only fallback.
     variables[info.name] = info;
 }
 
 void DebugInfo::addScope(std::shared_ptr<ScopeDebugInfo> scope)
 {
+    if (!scope) {
+        return;
+    }
+    if (scope->scopeId == INVALID_SCOPE_ID) {
+        ScopeId nextId = 1;
+        for (const auto& existing : scopes) {
+            if (existing) {
+                nextId = std::max(nextId, existing->scopeId + 1);
+            }
+        }
+        scope->scopeId = nextId;
+    }
+    for (auto& var : scope->variables) {
+        if (var.scopeId == INVALID_SCOPE_ID) {
+            var.scopeId = scope->scopeId;
+        }
+        if (var.scopeName.empty()) {
+            var.scopeName = scope->name;
+        }
+    }
     scopes.push_back(scope);
-
     if (scope->type == ScopeType::GLOBAL) {
         globalScope = scope;
     }
 }
 
-SourceLocation DebugInfo::getSourceLocation(size_t pc) const
+std::vector<SourceOrigin> DebugInfo::getOriginsForPC(size_t pc) const
 {
-    auto it = pcToSource.find(pc);
-    if (it != pcToSource.end()) {
-        return it->second;
+    auto instruction = instructions.find(pc);
+    if (instruction != instructions.end()) {
+        if (!instruction->second.origins.empty()) {
+            return instruction->second.origins;
+        }
+        if (instruction->second.location.isValid()) {
+            SourceOrigin origin(instruction->second.location);
+            origin.originalPC = pc;
+            origin.affectedVars = instruction->second.affectedVars;
+            return {origin};
+        }
     }
 
-    return SourceLocation();
+    auto source = pcToSource.find(pc);
+    if (source != pcToSource.end()) {
+        SourceOrigin origin(source->second);
+        origin.originalPC = pc;
+        return {origin};
+    }
+    return {};
+}
+
+const SourceOrigin* DebugInfo::resolveOrigin(
+    size_t pc,
+    const BranchTrace& branchTrace
+) const
+{
+    auto instruction = instructions.find(pc);
+    if (instruction == instructions.end() ||
+        instruction->second.origins.empty()) {
+        return nullptr;
+    }
+    const auto& origins = instruction->second.origins;
+    if (branchTrace.empty()) {
+        return &origins.front();
+    }
+
+    const SourceOrigin* best = nullptr;
+    size_t bestMatches = 0;
+    size_t bestSpecificity = 0;
+    for (const auto& origin : origins) {
+        bool conflicts = false;
+        size_t matches = 0;
+        for (const auto& predicate : origin.path) {
+            auto actual = branchTrace.find(predicate.region);
+            if (actual == branchTrace.end()) {
+                conflicts = true;
+                break;
+            }
+            if (actual->second != predicate.arm) {
+                conflicts = true;
+                break;
+            }
+            ++matches;
+        }
+        if (conflicts) {
+            continue;
+        }
+        if (!best || matches > bestMatches ||
+            (matches == bestMatches && origin.path.size() > bestSpecificity)) {
+            best = &origin;
+            bestMatches = matches;
+            bestSpecificity = origin.path.size();
+        }
+    }
+    return best;
+}
+
+SourceLocation DebugInfo::getSourceLocation(size_t pc) const
+{
+    return getSourceLocation(pc, BranchTrace());
+}
+
+SourceLocation DebugInfo::getSourceLocation(
+    size_t pc,
+    const BranchTrace& branchTrace
+) const
+{
+    if (const auto* origin = resolveOrigin(pc, branchTrace)) {
+        return origin->location;
+    }
+    // A non-empty trace with path-qualified origins must not silently select
+    // an origin from a branch that did not execute.
+    auto instruction = instructions.find(pc);
+    if (!branchTrace.empty() && instruction != instructions.end() &&
+        !instruction->second.origins.empty()) {
+        return SourceLocation();
+    }
+    auto it = pcToSource.find(pc);
+    return it != pcToSource.end() ? it->second : SourceLocation();
+}
+
+bool DebugInfo::hasActiveSourceOrigin(
+    size_t pc,
+    const std::string& filename,
+    size_t line,
+    const BranchTrace& branchTrace
+) const
+{
+    const std::string requested =
+        normalizeSourceFilename(filename, sourceFilename);
+    if (requested.empty()) {
+        return false;
+    }
+    const auto origins = getOriginsForPC(pc);
+    return std::any_of(
+        origins.begin(),
+        origins.end(),
+        [&](const SourceOrigin& origin) {
+            if (!origin.location.isValid() ||
+                origin.location.line != line ||
+                !isPathCompatible(origin, branchTrace)) {
+                return false;
+            }
+            const std::string& mapped = origin.location.filename.empty()
+                                            ? sourceFilename
+                                            : origin.location.filename;
+            return normalizeSourceFilename(mapped, sourceFilename) ==
+                   requested;
+        }
+    );
 }
 
 std::vector<size_t> DebugInfo::getPCsForLine(size_t line) const
 {
     auto it = lineToPCs.find(line);
-    if (it != lineToPCs.end()) {
-        return it->second;
-    }
-    return std::vector<size_t>();
+    return it != lineToPCs.end() ? it->second : std::vector<size_t>();
 }
 
 std::vector<size_t> DebugInfo::getPCsForSourceLine(
@@ -284,25 +838,30 @@ std::vector<size_t> DebugInfo::getPCsForSourceLine(
     size_t line
 ) const
 {
-    const std::string requested = normalizeSourceFilename(
-        filename,
-        sourceFilename
-    );
+    const std::string requested =
+        normalizeSourceFilename(filename, sourceFilename);
     if (requested.empty()) {
         return {};
     }
 
     std::vector<size_t> result;
     for (size_t pc : getPCsForLine(line)) {
-        auto location = pcToSource.find(pc);
-        if (location == pcToSource.end()) {
-            continue;
-        }
-        const std::string& mappedFilename =
-            location->second.filename.empty() ? sourceFilename
-                                              : location->second.filename;
-        if (normalizeSourceFilename(mappedFilename, sourceFilename) ==
-            requested) {
+        const auto origins = getOriginsForPC(pc);
+        const bool matches = std::any_of(
+            origins.begin(),
+            origins.end(),
+            [&](const SourceOrigin& origin) {
+                if (origin.location.line != line) {
+                    return false;
+                }
+                const std::string& mapped = origin.location.filename.empty()
+                                                ? sourceFilename
+                                                : origin.location.filename;
+                return normalizeSourceFilename(mapped, sourceFilename) ==
+                       requested;
+            }
+        );
+        if (matches) {
             result.push_back(pc);
         }
     }
@@ -316,25 +875,21 @@ DebugInfo::findNearestValidLine(size_t line, size_t maxDistance) const
     if (!pcs.empty()) {
         return pcs;
     }
-
-    // 在附近查找；上限 10000 行用作粗略保护
-    for (size_t dist = 1; dist <= maxDistance; ++dist) {
-        if (line <= 10000 && dist <= 10000 - line) {
-            pcs = getPCsForLine(line + dist);
+    for (size_t distance = 1; distance <= maxDistance; ++distance) {
+        if (line <= 10000 && distance <= 10000 - line) {
+            pcs = getPCsForLine(line + distance);
             if (!pcs.empty()) {
                 return pcs;
             }
         }
-
-        if (line > dist) {
-            pcs = getPCsForLine(line - dist);
+        if (line > distance) {
+            pcs = getPCsForLine(line - distance);
             if (!pcs.empty()) {
                 return pcs;
             }
         }
     }
-
-    return std::vector<size_t>();
+    return {};
 }
 
 std::vector<size_t> DebugInfo::findNearestValidSourceLine(
@@ -347,89 +902,222 @@ std::vector<size_t> DebugInfo::findNearestValidSourceLine(
     if (!pcs.empty()) {
         return pcs;
     }
-
-    // 在同一源文件的附近查找；上限 10000 行用作粗略保护。
-    for (size_t dist = 1; dist <= maxDistance; ++dist) {
-        if (line <= 10000 && dist <= 10000 - line) {
-            pcs = getPCsForSourceLine(filename, line + dist);
+    for (size_t distance = 1; distance <= maxDistance; ++distance) {
+        if (line <= 10000 && distance <= 10000 - line) {
+            pcs = getPCsForSourceLine(filename, line + distance);
             if (!pcs.empty()) {
                 return pcs;
             }
         }
-
-        if (line > dist) {
-            pcs = getPCsForSourceLine(filename, line - dist);
+        if (line > distance) {
+            pcs = getPCsForSourceLine(filename, line - distance);
             if (!pcs.empty()) {
                 return pcs;
             }
         }
     }
-
-    return std::vector<size_t>();
+    return {};
 }
 
 const FunctionDebugInfo* DebugInfo::getFunctionAtPC(size_t pc) const
 {
-    for (const auto& [name, func] : functions) {
-        if (pc >= func.startPC && pc < func.endPC) {
-            return &func;
+    for (const auto& [name, function] : functions) {
+        (void)name;
+        if (pc >= function.startPC && pc < function.endPC) {
+            return &function;
         }
     }
     return nullptr;
 }
 
-std::vector<VariableDebugInfo> DebugInfo::getVariablesInScope(size_t pc) const
+std::shared_ptr<ScopeDebugInfo> DebugInfo::getScopeById(ScopeId id) const
 {
-    auto scope = getScopeAtPC(pc);
-    if (!scope) {
-        return std::vector<VariableDebugInfo>();
+    if (id == INVALID_SCOPE_ID) {
+        return nullptr;
     }
-
-    std::vector<VariableDebugInfo> result;
-
-    auto currentScope = scope;
-    while (currentScope) {
-        result.insert(
-            result.end(),
-            currentScope->variables.begin(),
-            currentScope->variables.end()
-        );
-        currentScope = currentScope->parent;
-    }
-
-    return result;
+    auto it = std::find_if(scopes.begin(), scopes.end(), [&](const auto& scope) {
+        return scope && scope->scopeId == id;
+    });
+    return it != scopes.end() ? *it : nullptr;
 }
 
 std::shared_ptr<ScopeDebugInfo> DebugInfo::getScopeAtPC(size_t pc) const
 {
-    // 取覆盖该 PC 的最小作用域
-    std::shared_ptr<ScopeDebugInfo> result = nullptr;
-    size_t smallestRange = SIZE_MAX;
+    return getScopeAtPC(pc, BranchTrace());
+}
 
-    for (const auto& scope : scopes) {
-        if (pc >= scope->startPC && pc < scope->endPC) {
-            size_t range = scope->endPC - scope->startPC;
-            if (range < smallestRange) {
-                smallestRange = range;
-                result = scope;
+std::shared_ptr<ScopeDebugInfo> DebugInfo::getScopeAtPC(
+    size_t pc,
+    const BranchTrace& branchTrace
+) const
+{
+    if (branchTrace.empty()) {
+        const auto origins = getOriginsForPC(pc);
+        if (origins.size() > 1) {
+            std::vector<std::shared_ptr<ScopeDebugInfo>> originScopes;
+            originScopes.reserve(origins.size());
+            for (const auto& origin : origins) {
+                auto scope = getScopeById(origin.scopeId);
+                if (!scope) {
+                    // With incomplete V1 metadata, the global scope is the
+                    // only conservative common visibility boundary.
+                    return globalScope;
+                }
+                originScopes.push_back(std::move(scope));
             }
+
+            std::unordered_set<const ScopeDebugInfo*> visited;
+            for (auto candidate = originScopes.front(); candidate;
+                 candidate = candidate->parent.lock()) {
+                if (!visited.insert(candidate.get()).second) {
+                    break;
+                }
+                const bool commonToAll = std::all_of(
+                    originScopes.begin() + 1,
+                    originScopes.end(),
+                    [&](const std::shared_ptr<ScopeDebugInfo>& scope) {
+                        std::unordered_set<const ScopeDebugInfo*> chainVisited;
+                        for (auto ancestor = scope; ancestor;
+                             ancestor = ancestor->parent.lock()) {
+                            if (!chainVisited.insert(ancestor.get()).second) {
+                                break;
+                            }
+                            if (ancestor->scopeId == candidate->scopeId) {
+                                return true;
+                            }
+                        }
+                        return false;
+                    }
+                );
+                if (commonToAll) {
+                    return candidate;
+                }
+            }
+            return globalScope;
         }
     }
 
+    if (const auto* origin = resolveOrigin(pc, branchTrace)) {
+        if (auto scope = getScopeById(origin->scopeId)) {
+            return scope;
+        }
+    } else if (!branchTrace.empty()) {
+        auto instruction = instructions.find(pc);
+        if (instruction != instructions.end() &&
+            std::any_of(
+                instruction->second.origins.begin(),
+                instruction->second.origins.end(),
+                [](const SourceOrigin& origin) { return !origin.path.empty(); }
+            )) {
+            return nullptr;
+        }
+    }
+
+    std::shared_ptr<ScopeDebugInfo> result;
+    size_t smallestCoverage = std::numeric_limits<size_t>::max();
+    size_t deepest = 0;
+    for (const auto& scope : scopes) {
+        if (!scope || !scope->containsPC(pc)) {
+            continue;
+        }
+        const size_t coverage = scope->coveredInstructionCount();
+        const size_t depth = scopeDepth(scope);
+        if (!result || coverage < smallestCoverage ||
+            (coverage == smallestCoverage && depth > deepest)) {
+            result = scope;
+            smallestCoverage = coverage;
+            deepest = depth;
+        }
+    }
     return result;
+}
+
+std::vector<VariableDebugInfo> DebugInfo::getVariablesInScope(size_t pc) const
+{
+    return getVariablesInScope(pc, BranchTrace());
+}
+
+std::vector<VariableDebugInfo> DebugInfo::getVariablesInScope(
+    size_t pc,
+    const BranchTrace& branchTrace
+) const
+{
+    std::vector<VariableDebugInfo> result;
+    std::set<std::string> visibleNames;
+    auto current = getScopeAtPC(pc, branchTrace);
+    std::unordered_set<const ScopeDebugInfo*> visited;
+    while (current && visited.insert(current.get()).second) {
+        for (const auto& variable : current->variables) {
+            if (visibleNames.insert(variable.name).second &&
+                variable.isAvailableAtPC(pc)) {
+                result.push_back(variable);
+            }
+        }
+        current = current->parent.lock();
+    }
+    return result;
+}
+
+const VariableDebugInfo* DebugInfo::getVariableInfo(const std::string& name
+) const
+{
+    auto it = variables.find(name);
+    return it != variables.end() ? &it->second : nullptr;
+}
+
+const VariableDebugInfo* DebugInfo::getVariableInfo(
+    const std::string& name,
+    size_t pc,
+    const BranchTrace& branchTrace
+) const
+{
+    auto scope = getScopeAtPC(pc, branchTrace);
+    if (scope) {
+        // A scope-aware lookup is authoritative. Falling back to the legacy
+        // name-only map here would expose inactive branch locals or values
+        // whose availability range has ended.
+        return scope->findVariable(name, pc);
+    }
+    if (!branchTrace.empty()) {
+        auto instruction = instructions.find(pc);
+        if (instruction != instructions.end() &&
+            std::any_of(
+                instruction->second.origins.begin(),
+                instruction->second.origins.end(),
+                [](const SourceOrigin& origin) { return !origin.path.empty(); }
+            )) {
+            return nullptr;
+        }
+    }
+    // V1 files without any scope data retain the legacy map fallback. V2
+    // availability still applies if such a producer supplied it.
+    const auto* legacy = getVariableInfo(name);
+    return legacy && legacy->isAvailableAtPC(pc) ? legacy : nullptr;
 }
 
 void DebugInfo::buildLineToPC()
 {
     lineToPCs.clear();
-
-    for (const auto& [pc, loc] : pcToSource) {
-        if (loc.isValid()) {
-            lineToPCs[loc.line].push_back(pc);
+    std::set<size_t> instructionsWithOrigins;
+    for (const auto& [pc, instruction] : instructions) {
+        if (!instruction.origins.empty()) {
+            instructionsWithOrigins.insert(pc);
+            for (const auto& origin : instruction.origins) {
+                if (origin.location.isValid()) {
+                    lineToPCs[origin.location.line].push_back(pc);
+                }
+            }
+        } else if (instruction.location.isValid()) {
+            lineToPCs[instruction.location.line].push_back(pc);
         }
     }
-
+    for (const auto& [pc, location] : pcToSource) {
+        if (!instructionsWithOrigins.contains(pc) && location.isValid()) {
+            lineToPCs[location.line].push_back(pc);
+        }
+    }
     for (auto& [line, pcs] : lineToPCs) {
+        (void)line;
         std::sort(pcs.begin(), pcs.end());
         pcs.erase(std::unique(pcs.begin(), pcs.end()), pcs.end());
     }
@@ -441,120 +1129,302 @@ void DebugInfo::remapPCs(
 )
 {
     const size_t invalidPC = std::numeric_limits<size_t>::max();
-
     auto mapPC = [&](size_t oldPC, size_t& newPC) {
         if (oldPC >= oldToNew.size()) {
             return false;
         }
-
-        const size_t mappedPC = oldToNew[oldPC];
-        if (mappedPC == invalidPC || mappedPC >= newInstructionCount) {
+        const size_t mapped = oldToNew[oldPC];
+        if (mapped == invalidPC || mapped >= newInstructionCount) {
             return false;
         }
-
-        newPC = mappedPC;
+        newPC = mapped;
         return true;
     };
 
     std::map<size_t, SourceLocation> remappedSources;
-    for (const auto& [oldPC, loc] : pcToSource) {
+    for (const auto& [oldPC, location] : pcToSource) {
         size_t newPC = 0;
         if (mapPC(oldPC, newPC)) {
-            remappedSources.emplace(newPC, loc);
+            remappedSources.emplace(newPC, location);
+        }
+    }
+
+    std::map<size_t, InstructionDebugInfo> remappedInstructions;
+    for (const auto& [oldPC, oldInstruction] : instructions) {
+        size_t newPC = 0;
+        if (!mapPC(oldPC, newPC)) {
+            continue;
+        }
+
+        InstructionDebugInfo copy = oldInstruction;
+        copy.pc = newPC;
+        if (copy.origins.empty() && copy.location.isValid()) {
+            SourceOrigin origin(copy.location);
+            origin.originalPC = oldPC;
+            origin.affectedVars = copy.affectedVars;
+            copy.origins.push_back(std::move(origin));
+        }
+        for (auto& origin : copy.origins) {
+            if (origin.originalPC == UNKNOWN_ORIGINAL_PC) {
+                origin.originalPC = oldPC;
+            }
+            for (auto& predicate : origin.path) {
+                size_t remappedRegion = 0;
+                if (predicate.region <=
+                        static_cast<ControlRegionId>(
+                            std::numeric_limits<size_t>::max()
+                        ) &&
+                    mapPC(
+                        static_cast<size_t>(predicate.region),
+                        remappedRegion
+                    )) {
+                    predicate.region = remappedRegion;
+                }
+            }
+        }
+
+        auto [destination, inserted] =
+            remappedInstructions.emplace(newPC, copy);
+        if (!inserted) {
+            for (const auto& origin : copy.origins) {
+                appendUniqueOrigin(destination->second.origins, origin);
+            }
+        }
+    }
+    for (auto& [pc, instruction] : remappedInstructions) {
+        if (!instruction.origins.empty()) {
+            instruction.location = instruction.origins.front().location;
+            instruction.affectedVars =
+                instruction.origins.front().affectedVars;
+            if (instruction.location.isValid()) {
+                remappedSources[pc] = instruction.location;
+            }
         }
     }
     pcToSource = std::move(remappedSources);
-
-    std::map<size_t, InstructionDebugInfo> remappedInstructions;
-    for (const auto& [oldPC, inst] : instructions) {
-        size_t newPC = 0;
-        if (mapPC(oldPC, newPC)) {
-            InstructionDebugInfo copy = inst;
-            copy.pc = newPC;
-            remappedInstructions.emplace(newPC, std::move(copy));
-        }
-    }
     instructions = std::move(remappedInstructions);
 
-    auto remapRange = [&](size_t startPC,
-                          size_t endPC,
-                          size_t& newStartPC,
-                          size_t& newEndPC) {
-        if (startPC >= endPC) {
-            return false;
-        }
-
-        bool found = false;
-        size_t minPC = std::numeric_limits<size_t>::max();
-        size_t maxPC = 0;
-        const size_t cappedEndPC = std::min(endPC, oldToNew.size());
-        for (size_t oldPC = startPC; oldPC < cappedEndPC; ++oldPC) {
-            size_t mappedPC = 0;
-            if (!mapPC(oldPC, mappedPC)) {
-                continue;
+    auto remapIntervals = [&](const std::vector<PCRange>& oldRanges) {
+        std::vector<size_t> mappedPCs;
+        for (const auto& range : oldRanges) {
+            const size_t cappedEnd = std::min(range.endPC, oldToNew.size());
+            for (size_t oldPC = range.beginPC;
+                 oldPC < cappedEnd;
+                 ++oldPC) {
+                size_t newPC = 0;
+                if (mapPC(oldPC, newPC)) {
+                    mappedPCs.push_back(newPC);
+                }
             }
-
-            found = true;
-            minPC = std::min(minPC, mappedPC);
-            maxPC = std::max(maxPC, mappedPC);
         }
-
-        if (!found) {
-            return false;
+        std::sort(mappedPCs.begin(), mappedPCs.end());
+        mappedPCs.erase(
+            std::unique(mappedPCs.begin(), mappedPCs.end()),
+            mappedPCs.end()
+        );
+        std::vector<PCRange> result;
+        for (size_t pc : mappedPCs) {
+            if (result.empty() || pc > result.back().endPC) {
+                result.emplace_back(pc, pc + 1);
+            } else if (pc == result.back().endPC) {
+                result.back().endPC = pc + 1;
+            }
         }
-
-        newStartPC = minPC;
-        newEndPC = std::min(maxPC + 1, newInstructionCount);
-        return newStartPC < newEndPC;
+        return result;
     };
 
-    for (auto& [name, func] : functions) {
-        size_t newStartPC = func.startPC;
-        size_t newEndPC = func.endPC;
-        if (remapRange(func.startPC, func.endPC, newStartPC, newEndPC)) {
-            func.startPC = newStartPC;
-            func.endPC = newEndPC;
-        } else {
-            func.endPC = func.startPC;
+    auto remapEnvelope = [&](size_t& startPC, size_t& endPC) {
+        const auto ranges = remapIntervals({PCRange(startPC, endPC)});
+        if (ranges.empty()) {
+            endPC = startPC;
+            return;
+        }
+        startPC = ranges.front().beginPC;
+        endPC = ranges.back().endPC;
+    };
+
+    auto remapVariable = [&](VariableDebugInfo& variable) {
+        if (!variable.hasExplicitAvailability) {
+            return;
+        }
+        variable.availabilityRanges =
+            remapIntervals(variable.availabilityRanges);
+    };
+
+    for (auto& [name, function] : functions) {
+        (void)name;
+        remapEnvelope(function.startPC, function.endPC);
+        for (auto& parameter : function.parameters) {
+            remapVariable(parameter);
+        }
+        for (auto& local : function.localVars) {
+            remapVariable(local);
         }
     }
-
     for (auto& scope : scopes) {
         if (!scope) {
             continue;
         }
-
-        size_t newStartPC = scope->startPC;
-        size_t newEndPC = scope->endPC;
-        if (remapRange(scope->startPC, scope->endPC, newStartPC, newEndPC)) {
-            scope->startPC = newStartPC;
-            scope->endPC = newEndPC;
-        } else {
+        scope->ranges = remapIntervals(effectiveRanges(*scope));
+        if (scope->ranges.empty()) {
             scope->endPC = scope->startPC;
+        } else {
+            scope->startPC = scope->ranges.front().beginPC;
+            scope->endPC = scope->ranges.back().endPC;
+        }
+        for (auto& variable : scope->variables) {
+            remapVariable(variable);
+        }
+    }
+    for (auto& [name, variable] : variables) {
+        (void)name;
+        remapVariable(variable);
+    }
+    buildLineToPC();
+}
+
+std::shared_ptr<DebugInfo> DebugInfo::remapped(
+    const std::vector<size_t>& oldToNew,
+    size_t newInstructionCount,
+    const std::vector<std::vector<OriginRewriteRef>>& newToOldOrigins
+) const
+{
+    if (!newToOldOrigins.empty() &&
+        newToOldOrigins.size() != newInstructionCount) {
+        return nullptr;
+    }
+    // Branch predicates use the IF/NOTIF instruction PC as their persistent
+    // region identity. Every existing predicate must therefore be mappable in
+    // this rewrite; otherwise accepting the candidate would leave stale guards.
+    const size_t invalidPC = std::numeric_limits<size_t>::max();
+    for (const auto& [pc, instruction] : instructions) {
+        (void)pc;
+        for (const auto& origin : instruction.origins) {
+            for (const auto& predicate : origin.path) {
+                if (predicate.region >
+                    static_cast<ControlRegionId>(
+                        std::numeric_limits<size_t>::max()
+                    )) {
+                    return nullptr;
+                }
+                const size_t oldRegion =
+                    static_cast<size_t>(predicate.region);
+                auto opener = instructions.find(oldRegion);
+                if (oldRegion >= oldToNew.size() ||
+                    oldToNew[oldRegion] == invalidPC ||
+                    oldToNew[oldRegion] >= newInstructionCount ||
+                    opener == instructions.end() ||
+                    !isStructuredIfOpcode(opener->second.opcode)) {
+                    return nullptr;
+                }
+            }
         }
     }
 
-    buildLineToPC();
+    auto candidate = fromJson(toJson());
+    if (!candidate) {
+        return nullptr;
+    }
+    candidate->remapPCs(oldToNew, newInstructionCount);
+
+    if (!newToOldOrigins.empty()) {
+        for (size_t newPC = 0; newPC < newToOldOrigins.size(); ++newPC) {
+            std::vector<SourceOrigin> origins;
+            for (const auto& reference : newToOldOrigins[newPC]) {
+                if (reference.oldPC >= oldToNew.size()) {
+                    return nullptr;
+                }
+                auto oldOrigins = getOriginsForPC(reference.oldPC);
+                if (oldOrigins.empty()) {
+                    return nullptr;
+                }
+                for (auto origin : oldOrigins) {
+                    if (origin.originalPC == UNKNOWN_ORIGINAL_PC) {
+                        origin.originalPC = reference.oldPC;
+                    }
+                    for (auto& predicate : origin.path) {
+                        const size_t oldRegion =
+                            static_cast<size_t>(predicate.region);
+                        predicate.region = oldToNew[oldRegion];
+                    }
+                    for (const auto& predicate : reference.path) {
+                        if (predicate.region >= newInstructionCount) {
+                            return nullptr;
+                        }
+                        auto opener = candidate->instructions.find(
+                            static_cast<size_t>(predicate.region)
+                        );
+                        if (opener == candidate->instructions.end() ||
+                            !isStructuredIfOpcode(opener->second.opcode)) {
+                            return nullptr;
+                        }
+                    }
+                    mergePath(origin.path, reference.path);
+                    appendUniqueOrigin(origins, origin);
+                }
+            }
+            candidate->setInstructionOrigins(newPC, origins);
+        }
+    }
+    return candidate->validate() ? candidate : nullptr;
+}
+
+bool DebugInfo::applyRemapTransactional(
+    const std::vector<size_t>& oldToNew,
+    size_t newInstructionCount,
+    const std::vector<std::vector<OriginRewriteRef>>& newToOldOrigins
+)
+{
+    auto candidate = remapped(
+        oldToNew,
+        newInstructionCount,
+        newToOldOrigins
+    );
+    if (!candidate) {
+        return false;
+    }
+    *this = std::move(*candidate);
+    return true;
 }
 
 void DebugInfo::syncInstructionOpcodes(const std::vector<std::string>& bytecode)
 {
     for (auto it = instructions.begin(); it != instructions.end();) {
         if (it->first >= bytecode.size()) {
+            pcToSource.erase(it->first);
             it = instructions.erase(it);
             continue;
         }
-
         it->second.pc = it->first;
         it->second.opcode = bytecode[it->first];
         it->second.operand.clear();
         ++it;
     }
+    buildLineToPC();
 }
 
 bool DebugInfo::validate(std::string* errorMessage) const
 {
-    return validate({}, errorMessage);
+    if (version != "2.0") {
+        return validate(std::vector<std::string>{}, errorMessage);
+    }
+
+    if (errorMessage) {
+        errorMessage->clear();
+    }
+    if (!scopeNestingValid) {
+        if (errorMessage) {
+            *errorMessage = "作用域 enter/exit 不配对";
+        }
+        return false;
+    }
+    if (!validateV2Core()) {
+        if (errorMessage) {
+            *errorMessage = "DebugInfo V2 内部结构无效";
+        }
+        return false;
+    }
+    return true;
 }
 
 bool DebugInfo::validate(
@@ -571,6 +1441,79 @@ bool DebugInfo::validate(
 
     if (errorMessage) {
         errorMessage->clear();
+    }
+
+    if (version == "2.0") {
+        if (!validate(errorMessage)) {
+            return false;
+        }
+        if (bytecode.empty()) {
+            return true;
+        }
+
+        size_t executableInstructionCount = bytecode.size();
+        const auto padding = std::find(bytecode.begin(), bytecode.end(), "ff");
+        if (padding != bytecode.end()) {
+            executableInstructionCount = static_cast<size_t>(
+                std::distance(bytecode.begin(), padding)
+            );
+        }
+        for (const auto& [pc, location] : pcToSource) {
+            (void)location;
+            if (pc >= executableInstructionCount ||
+                !instructions.contains(pc)) {
+                return fail(
+                    "源码映射 PC 超出真实可执行字节码范围: " +
+                    std::to_string(pc)
+                );
+            }
+        }
+        for (const auto& [pc, instruction] : instructions) {
+            if (pc >= executableInstructionCount) {
+                return fail(
+                    "调试指令 PC 超出真实可执行字节码范围: " +
+                    std::to_string(pc)
+                );
+            }
+            std::string expected = bytecode[pc];
+            std::string actual = instruction.opcode;
+            std::transform(
+                expected.begin(), expected.end(), expected.begin(),
+                [](unsigned char ch) {
+                    return static_cast<char>(std::tolower(ch));
+                }
+            );
+            std::transform(
+                actual.begin(), actual.end(), actual.begin(),
+                [](unsigned char ch) {
+                    return static_cast<char>(std::tolower(ch));
+                }
+            );
+            if (actual != expected) {
+                return fail(
+                    "调试指令与真实字节码不一致: PC " +
+                    std::to_string(pc)
+                );
+            }
+        }
+        for (const auto& [name, function] : functions) {
+            if (function.endPC > executableInstructionCount) {
+                return fail("函数范围超出真实可执行字节码: " + name);
+            }
+        }
+        for (const auto& scope : scopes) {
+            if (!scope || scope->type == ScopeType::GLOBAL) {
+                continue;
+            }
+            for (const auto& range : effectiveRanges(*scope)) {
+                if (range.endPC > executableInstructionCount) {
+                    return fail(
+                        "作用域范围超出真实可执行字节码: " + scope->name
+                    );
+                }
+            }
+        }
+        return true;
     }
 
     if (sourceFilename.empty()) {
@@ -900,7 +1843,133 @@ bool DebugInfo::validate(
     return true;
 }
 
-// ===== JSON 序列化 =====
+bool DebugInfo::validateV2Core() const
+{
+    if (sourceFilename.empty()) {
+        return false;
+    }
+    for (const auto& [pc, location] : pcToSource) {
+        (void)pc;
+        if (!location.isValid()) {
+            return false;
+        }
+    }
+    for (const auto& [name, function] : functions) {
+        (void)name;
+        // A function may legitimately emit no runtime instruction (for
+        // example, a setup helper containing only compile-time fixed data).
+        // Half-open [startPC, endPC) ranges therefore allow equality; only a
+        // reversed range is malformed.
+        if (function.startPC > function.endPC) {
+            return false;
+        }
+        if (std::any_of(
+                function.parameters.begin(),
+                function.parameters.end(),
+                [](const VariableDebugInfo& variable) {
+                    return !validVariableRanges(variable);
+                }
+            ) ||
+            std::any_of(
+                function.localVars.begin(),
+                function.localVars.end(),
+                [](const VariableDebugInfo& variable) {
+                    return !validVariableRanges(variable);
+                }
+            )) {
+            return false;
+        }
+    }
+
+    std::set<ScopeId> scopeIds;
+    for (const auto& scope : scopes) {
+        if (!scope || scope->scopeId == INVALID_SCOPE_ID ||
+            !scopeIds.insert(scope->scopeId).second) {
+            return false;
+        }
+        const auto ranges = effectiveRanges(*scope);
+        if (!std::is_sorted(
+                ranges.begin(),
+                ranges.end(),
+                [](const auto& lhs, const auto& rhs) {
+                    return lhs.beginPC < rhs.beginPC;
+                }
+            )) {
+            return false;
+        }
+        if (std::any_of(
+                scope->variables.begin(),
+                scope->variables.end(),
+                [](const VariableDebugInfo& variable) {
+                    return !validVariableRanges(variable);
+                }
+            )) {
+            return false;
+        }
+    }
+    for (const auto& scope : scopes) {
+        auto parent = scope ? scope->parent.lock() : nullptr;
+        if (parent && !scopeIds.contains(parent->scopeId)) {
+            return false;
+        }
+        std::unordered_set<const ScopeDebugInfo*> ancestry;
+        for (auto current = scope; current;
+             current = current->parent.lock()) {
+            if (!ancestry.insert(current.get()).second) {
+                return false;
+            }
+        }
+    }
+    for (const auto& [pc, instruction] : instructions) {
+        if (instruction.pc != pc) {
+            return false;
+        }
+        for (const auto& origin : instruction.origins) {
+            if (!origin.location.isValid() ||
+                hasDuplicatePathRegion(origin.path)) {
+                return false;
+            }
+            if (origin.scopeId != INVALID_SCOPE_ID &&
+                !scopeIds.contains(origin.scopeId)) {
+                return false;
+            }
+            for (const auto& predicate : origin.path) {
+                switch (predicate.arm) {
+                    case BranchArm::Then:
+                    case BranchArm::Else:
+                        break;
+                    default:
+                        return false;
+                }
+                if (predicate.region >
+                    static_cast<ControlRegionId>(
+                        std::numeric_limits<size_t>::max()
+                    )) {
+                    return false;
+                }
+                const size_t regionPC =
+                    static_cast<size_t>(predicate.region);
+                const auto opener = instructions.find(regionPC);
+                // Predicates live in final-PC space. originalPC describes the
+                // pre-rewrite instruction and must not be used for ordering.
+                if (regionPC >= pc || opener == instructions.end() ||
+                    !isStructuredIfOpcode(opener->second.opcode)) {
+                    return false;
+                }
+            }
+        }
+    }
+    if (std::any_of(
+            variables.begin(),
+            variables.end(),
+            [](const auto& entry) {
+                return !validVariableRanges(entry.second);
+            }
+        )) {
+        return false;
+    }
+    return true;
+}
 
 bool DebugInfo::save(const std::string& filename) const
 {
@@ -909,10 +1978,8 @@ bool DebugInfo::save(const std::string& filename) const
         if (!file.is_open()) {
             return false;
         }
-
         file << toJson();
-        file.close();
-        return true;
+        return file.good();
     } catch (...) {
         return false;
     }
@@ -925,13 +1992,10 @@ std::shared_ptr<DebugInfo> DebugInfo::load(const std::string& filename)
         if (!file.is_open()) {
             return nullptr;
         }
-
         std::string content(
             (std::istreambuf_iterator<char>(file)),
             std::istreambuf_iterator<char>()
         );
-        file.close();
-
         return fromJson(content);
     } catch (...) {
         return nullptr;
@@ -940,247 +2004,410 @@ std::shared_ptr<DebugInfo> DebugInfo::load(const std::string& filename)
 
 std::string DebugInfo::toJson() const
 {
-    json j;
+    json result;
+    result["version"] = "2.0";
+    result["format"] = "apc-debug";
+    result["sourceFile"] = sourceFilename;
+    result["contractName"] = contractName;
+    result["scopeNestingValid"] = scopeNestingValid;
 
-    j["version"] = "1.0";
-    j["format"] = "apc-debug";
-    j["sourceFile"] = sourceFilename;
-    j["contractName"] = contractName;
-    j["scopeNestingValid"] = scopeNestingValid;
-
-    json pcToSourceJson = json::object();
-    for (const auto& [pc, loc] : pcToSource) {
-        pcToSourceJson[std::to_string(pc)] = sourceLocationToJson(loc);
+    json sourceMap = json::object();
+    for (const auto& [pc, location] : pcToSource) {
+        sourceMap[std::to_string(pc)] = sourceLocationToJson(location);
     }
-    j["pcToSource"] = pcToSourceJson;
+    result["pcToSource"] = sourceMap;
 
-    json lineToPCJson = json::object();
+    json lineMap = json::object();
     for (const auto& [line, pcs] : lineToPCs) {
-        lineToPCJson[std::to_string(line)] = pcs;
+        lineMap[std::to_string(line)] = pcs;
     }
-    j["lineToPC"] = lineToPCJson;
+    result["lineToPC"] = lineMap;
 
-    json instructionsJson = json::array();
-    for (const auto& [pc, inst] : instructions) {
-        json instJson;
-        instJson["pc"] = inst.pc;
-        instJson["opcode"] = inst.opcode;
-        instJson["operand"] = inst.operand;
-        instJson["affectedVars"] = inst.affectedVars;
-        instJson["location"] = sourceLocationToJson(inst.location);
-        instructionsJson.push_back(instJson);
-    }
-    j["instructions"] = instructionsJson;
-
-    json functionsJson = json::array();
-    for (const auto& [name, func] : functions) {
-        json funcJson;
-        funcJson["name"] = func.name;
-        funcJson["startPC"] = func.startPC;
-        funcJson["endPC"] = func.endPC;
-        funcJson["isPublic"] = func.isPublic;
-        funcJson["location"] = sourceLocationToJson(func.location);
-
-        json paramsJson = json::array();
-        for (const auto& param : func.parameters) {
-            paramsJson.push_back(variableToJson(param));
+    result["instructions"] = json::array();
+    for (const auto& [pc, instruction] : instructions) {
+        (void)pc;
+        json item{{"pc", instruction.pc},
+                  {"opcode", instruction.opcode},
+                  {"operand", instruction.operand},
+                  {"affectedVars", instruction.affectedVars},
+                  {"location", sourceLocationToJson(instruction.location)}};
+        item["origins"] = json::array();
+        for (const auto& origin : instruction.origins) {
+            item["origins"].push_back(sourceOriginToJson(origin));
         }
-        funcJson["parameters"] = paramsJson;
+        result["instructions"].push_back(std::move(item));
+    }
 
-        json localsJson = json::array();
-        for (const auto& local : func.localVars) {
-            localsJson.push_back(variableToJson(local));
+    result["functions"] = json::array();
+    for (const auto& [name, function] : functions) {
+        (void)name;
+        json item{{"name", function.name},
+                  {"startPC", function.startPC},
+                  {"endPC", function.endPC},
+                  {"scopeId", function.scope
+                                  ? function.scope->scopeId
+                                  : function.scopeId},
+                  {"isPublic", function.isPublic},
+                  {"location", sourceLocationToJson(function.location)}};
+        item["parameters"] = json::array();
+        for (const auto& parameter : function.parameters) {
+            item["parameters"].push_back(variableToJson(parameter));
         }
-        funcJson["localVars"] = localsJson;
-
-        functionsJson.push_back(funcJson);
+        item["localVars"] = json::array();
+        for (const auto& local : function.localVars) {
+            item["localVars"].push_back(variableToJson(local));
+        }
+        result["functions"].push_back(std::move(item));
     }
-    j["functions"] = functionsJson;
 
-    json localVarsJson = json::array();
-    for (const auto& [name, func] : functions) {
-        for (const auto& local : func.localVars) {
-            localVarsJson.push_back(variableToJson(local));
+    result["localVars"] = json::array();
+    for (const auto& [name, function] : functions) {
+        (void)name;
+        for (const auto& local : function.localVars) {
+            result["localVars"].push_back(variableToJson(local));
         }
     }
-    j["localVars"] = localVarsJson;
-
-    json variablesJson = json::array();
-    for (const auto& [name, var] : variables) {
-        variablesJson.push_back(variableToJson(var));
+    result["variables"] = json::array();
+    for (const auto& [name, variable] : variables) {
+        (void)name;
+        result["variables"].push_back(variableToJson(variable));
     }
-    j["variables"] = variablesJson;
 
     std::map<const ScopeDebugInfo*, size_t> scopeIndices;
-    for (size_t i = 0; i < scopes.size(); ++i) {
-        scopeIndices[scopes[i].get()] = i;
-    }
-
-    json scopesJson = json::array();
-    for (size_t i = 0; i < scopes.size(); ++i) {
-        const auto& scope = scopes[i];
-        json scopeJson;
-        scopeJson["index"] = i;
-        scopeJson["name"] = scope->name;
-        scopeJson["type"] = scopeTypeToString(scope->type);
-        scopeJson["location"] = sourceLocationToJson(scope->location);
-        scopeJson["startPC"] = scope->startPC;
-        scopeJson["endPC"] = scope->endPC;
-        scopeJson["parentIndex"] =
-            scope->parent ? static_cast<int>(scopeIndices[scope->parent.get()])
-                          : -1;
-
-        json scopeVars = json::array();
-        for (const auto& var : scope->variables) {
-            scopeVars.push_back(variableToJson(var));
+    for (size_t index = 0; index < scopes.size(); ++index) {
+        if (scopes[index]) {
+            scopeIndices[scopes[index].get()] = index;
         }
-        scopeJson["variables"] = scopeVars;
-        scopesJson.push_back(scopeJson);
     }
-    j["scopes"] = scopesJson;
-
-    return j.dump(2);
+    result["scopes"] = json::array();
+    for (size_t index = 0; index < scopes.size(); ++index) {
+        const auto& scope = scopes[index];
+        if (!scope) {
+            continue;
+        }
+        int parentIndex = -1;
+        const auto parentScope = scope->parent.lock();
+        if (parentScope) {
+            auto parent = scopeIndices.find(parentScope.get());
+            if (parent != scopeIndices.end()) {
+                parentIndex = static_cast<int>(parent->second);
+            }
+        }
+        json item{{"index", index},
+                  {"scopeId", scope->scopeId},
+                  {"name", scope->name},
+                  {"type", scopeTypeToString(scope->type)},
+                  {"location", sourceLocationToJson(scope->location)},
+                  {"startPC", scope->startPC},
+                  {"endPC", scope->endPC},
+                  {"parentIndex", parentIndex},
+                  {"parentScopeId", parentScope
+                                        ? parentScope->scopeId
+                                        : INVALID_SCOPE_ID}};
+        item["ranges"] = json::array();
+        for (const auto& range : effectiveRanges(*scope)) {
+            item["ranges"].push_back(
+                {{"beginPC", range.beginPC}, {"endPC", range.endPC}}
+            );
+        }
+        item["variables"] = json::array();
+        for (const auto& variable : scope->variables) {
+            item["variables"].push_back(variableToJson(variable));
+        }
+        result["scopes"].push_back(std::move(item));
+    }
+    return result.dump(2);
 }
 
-std::shared_ptr<DebugInfo> DebugInfo::fromJson(const std::string& jsonStr)
+std::shared_ptr<DebugInfo> DebugInfo::fromJson(const std::string& jsonString)
 {
     try {
+        const json input = json::parse(jsonString);
+        if (input.contains("format") &&
+            input.value("format", "apc-debug") != "apc-debug") {
+            return nullptr;
+        }
+
         auto info = std::make_shared<DebugInfo>();
-        json j = json::parse(jsonStr);
+        info->version = input.value("version", "1.0");
+        info->sourceFilename = input.value("sourceFile", "");
+        info->contractName = input.value("contractName", "");
+        const bool serializedScopeNestingValid =
+            input.value("scopeNestingValid", false);
+        // Validate the upgraded graph independently of the legacy nesting
+        // marker; callers still observe and enforce the serialized value.
+        info->scopeNestingValid = true;
 
-        info->version = j.value("version", "1.0");
-        info->sourceFilename = j.value("sourceFile", "");
-        info->contractName = j.value("contractName", "");
-        // 旧文件若没有显式平衡标记，无法证明 enter/exit 配对，默认拒绝。
-        info->scopeNestingValid = j.value("scopeNestingValid", false);
-
-        if (j.contains("pcToSource")) {
-            for (auto& [pcStr, locJson] : j["pcToSource"].items()) {
-                size_t pc = std::stoull(pcStr);
-                info->pcToSource[pc] = sourceLocationFromJson(locJson);
+        if (input.contains("pcToSource")) {
+            for (const auto& [pcString, locationJson] :
+                 input["pcToSource"].items()) {
+                info->pcToSource[std::stoull(pcString)] =
+                    sourceLocationFromJson(locationJson);
             }
         }
 
-        if (j.contains("lineToPC")) {
-            for (auto& [lineStr, pcsJson] : j["lineToPC"].items()) {
-                size_t line = std::stoull(lineStr);
-                std::vector<size_t> pcs = pcsJson.get<std::vector<size_t>>();
-                info->lineToPCs[line] = pcs;
-            }
-        }
-
-        if (j.contains("instructions")) {
-            for (const auto& instJson : j["instructions"]) {
-                InstructionDebugInfo inst;
-                inst.pc = instJson.value("pc", 0);
-                inst.opcode = instJson.value("opcode", "");
-                inst.operand = instJson.value("operand", "");
-                if (instJson.contains("location")) {
-                    inst.location = sourceLocationFromJson(instJson["location"]);
-                } else {
-                    auto locIt = info->pcToSource.find(inst.pc);
-                    if (locIt != info->pcToSource.end()) {
-                        inst.location = locIt->second;
+        if (input.contains("instructions")) {
+            for (const auto& item : input["instructions"]) {
+                InstructionDebugInfo instruction;
+                instruction.pc = item.value("pc", 0);
+                instruction.opcode = item.value("opcode", "");
+                instruction.operand = item.value("operand", "");
+                if (item.contains("location")) {
+                    instruction.location =
+                        sourceLocationFromJson(item["location"]);
+                } else if (auto source =
+                               info->pcToSource.find(instruction.pc);
+                           source != info->pcToSource.end()) {
+                    instruction.location = source->second;
+                }
+                if (item.contains("affectedVars")) {
+                    instruction.affectedVars =
+                        item["affectedVars"].get<std::vector<std::string>>();
+                }
+                if (item.contains("origins")) {
+                    for (const auto& originJson : item["origins"]) {
+                        appendUniqueOrigin(
+                            instruction.origins,
+                            sourceOriginFromJson(originJson)
+                        );
                     }
                 }
-                if (instJson.contains("affectedVars")) {
-                    inst.affectedVars = instJson["affectedVars"]
-                                            .get<std::vector<std::string>>();
-                }
-                info->instructions[inst.pc] = inst;
+                info->instructions[instruction.pc] = std::move(instruction);
             }
         }
 
-        if (j.contains("functions")) {
-            for (const auto& funcJson : j["functions"]) {
-                FunctionDebugInfo func;
-                func.name = funcJson.value("name", "");
-                func.startPC = funcJson.value("startPC", 0);
-                func.endPC = funcJson.value("endPC", 0);
-                func.isPublic = funcJson.value("isPublic", false);
-                if (funcJson.contains("location")) {
-                    func.location = sourceLocationFromJson(funcJson["location"]);
+        if (input.contains("functions")) {
+            for (const auto& item : input["functions"]) {
+                FunctionDebugInfo function;
+                function.name = item.value("name", "");
+                function.startPC = item.value("startPC", 0);
+                function.endPC = item.value("endPC", 0);
+                function.scopeId = item.value("scopeId", INVALID_SCOPE_ID);
+                function.isPublic = item.value("isPublic", false);
+                if (item.contains("location")) {
+                    function.location = sourceLocationFromJson(item["location"]);
                 }
-
-                if (funcJson.contains("parameters")) {
-                    for (const auto& paramJson : funcJson["parameters"]) {
-                        VariableDebugInfo param = variableFromJson(paramJson);
-                        param.isParameter = true;
-                        func.parameters.push_back(param);
+                if (item.contains("parameters")) {
+                    for (const auto& parameterJson : item["parameters"]) {
+                        auto parameter = variableFromJson(parameterJson);
+                        parameter.isParameter = true;
+                        function.parameters.push_back(std::move(parameter));
                     }
                 }
-                if (funcJson.contains("localVars")) {
-                    for (const auto& localJson : funcJson["localVars"]) {
-                        func.localVars.push_back(variableFromJson(localJson));
+                if (item.contains("localVars")) {
+                    for (const auto& localJson : item["localVars"]) {
+                        function.localVars.push_back(
+                            variableFromJson(localJson)
+                        );
                     }
                 }
-
-                info->functions[func.name] = func;
+                info->functions[function.name] = std::move(function);
             }
         }
 
-        if (j.contains("variables")) {
-            for (const auto& varJson : j["variables"]) {
-                VariableDebugInfo var = variableFromJson(varJson);
-                info->variables[var.name] = var;
+        if (input.contains("variables")) {
+            for (const auto& item : input["variables"]) {
+                auto variable = variableFromJson(item);
+                info->variables[variable.name] = std::move(variable);
             }
         }
 
         std::vector<int> parentIndices;
-        if (j.contains("scopes")) {
-            for (const auto& scopeJson : j["scopes"]) {
+        std::vector<ScopeId> parentScopeIds;
+        ScopeId nextGeneratedScopeId = 1;
+        if (input.contains("scopes")) {
+            for (const auto& item : input["scopes"]) {
                 auto scope = std::make_shared<ScopeDebugInfo>();
-                scope->name = scopeJson.value("name", "");
-                scope->type =
-                    stringToScopeType(scopeJson.value("type", "block"));
-                if (scopeJson.contains("location")) {
-                    scope->location =
-                        sourceLocationFromJson(scopeJson["location"]);
+                scope->scopeId = item.value("scopeId", INVALID_SCOPE_ID);
+                if (scope->scopeId == INVALID_SCOPE_ID) {
+                    scope->scopeId = nextGeneratedScopeId;
                 }
-                scope->startPC = scopeJson.value("startPC", 0);
-                scope->endPC = scopeJson.value("endPC", 0);
-                if (scopeJson.contains("variables")) {
-                    for (const auto& varJson : scopeJson["variables"]) {
-                        scope->variables.push_back(variableFromJson(varJson));
+                nextGeneratedScopeId =
+                    std::max(nextGeneratedScopeId, scope->scopeId + 1);
+                scope->name = item.value("name", "");
+                scope->type =
+                    stringToScopeType(item.value("type", "block"));
+                if (item.contains("location")) {
+                    scope->location = sourceLocationFromJson(item["location"]);
+                }
+                scope->startPC = item.value("startPC", 0);
+                scope->endPC = item.value("endPC", 0);
+                if (item.contains("ranges")) {
+                    for (const auto& rangeJson : item["ranges"]) {
+                        scope->addRange(
+                            rangeJson.value("beginPC", 0),
+                            rangeJson.value("endPC", 0)
+                        );
                     }
                 }
-                parentIndices.push_back(scopeJson.value("parentIndex", -1));
+                if (scope->ranges.empty() && scope->startPC < scope->endPC) {
+                    scope->ranges.emplace_back(scope->startPC, scope->endPC);
+                }
+                if (item.contains("variables")) {
+                    for (const auto& variableJson : item["variables"]) {
+                        auto variable = variableFromJson(variableJson);
+                        if (variable.scopeId == INVALID_SCOPE_ID) {
+                            variable.scopeId = scope->scopeId;
+                        }
+                        if (variable.scopeName.empty()) {
+                            variable.scopeName = scope->name;
+                        }
+                        scope->variables.push_back(std::move(variable));
+                    }
+                }
+                parentIndices.push_back(item.value("parentIndex", -1));
+                parentScopeIds.push_back(
+                    item.value("parentScopeId", INVALID_SCOPE_ID)
+                );
                 info->scopes.push_back(scope);
                 if (scope->type == ScopeType::GLOBAL) {
                     info->globalScope = scope;
                 }
             }
 
-            for (size_t i = 0; i < info->scopes.size(); ++i) {
-                int parentIndex = parentIndices[i];
-                if (parentIndex >= 0 &&
-                    static_cast<size_t>(parentIndex) < info->scopes.size()) {
-                    info->scopes[i]->parent = info->scopes[parentIndex];
-                    info->scopes[parentIndex]->children.push_back(info->scopes[i]);
+            std::map<ScopeId, size_t> scopeIndexById;
+            for (size_t index = 0; index < info->scopes.size(); ++index) {
+                if (!scopeIndexById
+                         .emplace(info->scopes[index]->scopeId, index)
+                         .second) {
+                    return nullptr;
                 }
             }
 
-            for (auto& [name, func] : info->functions) {
+            const size_t noParent = info->scopes.size();
+            std::vector<size_t> resolvedParents(
+                info->scopes.size(), noParent
+            );
+            for (size_t index = 0; index < info->scopes.size(); ++index) {
+                if (parentScopeIds[index] != INVALID_SCOPE_ID) {
+                    auto parent = scopeIndexById.find(parentScopeIds[index]);
+                    if (parent == scopeIndexById.end()) {
+                        return nullptr;
+                    }
+                    resolvedParents[index] = parent->second;
+                } else if (parentIndices[index] >= 0) {
+                    const size_t parentIndex =
+                        static_cast<size_t>(parentIndices[index]);
+                    if (parentIndex >= info->scopes.size()) {
+                        return nullptr;
+                    }
+                    resolvedParents[index] = parentIndex;
+                }
+                if (resolvedParents[index] == index) {
+                    return nullptr;
+                }
+            }
+
+            // Validate the parent graph before creating shared ownership
+            // links; otherwise a rejected cycle would itself leak.
+            std::vector<unsigned char> parentState(info->scopes.size(), 0);
+            std::function<bool(size_t)> visitParent = [&](size_t index) {
+                if (parentState[index] == 1) {
+                    return false;
+                }
+                if (parentState[index] == 2) {
+                    return true;
+                }
+                parentState[index] = 1;
+                const size_t parent = resolvedParents[index];
+                if (parent != noParent && !visitParent(parent)) {
+                    return false;
+                }
+                parentState[index] = 2;
+                return true;
+            };
+            for (size_t index = 0; index < info->scopes.size(); ++index) {
+                if (!visitParent(index)) {
+                    return nullptr;
+                }
+            }
+
+            for (size_t index = 0; index < info->scopes.size(); ++index) {
+                if (resolvedParents[index] == noParent) {
+                    continue;
+                }
+                auto parent = info->scopes[resolvedParents[index]];
+                info->scopes[index]->parent = parent;
+                parent->children.push_back(info->scopes[index]);
+            }
+        }
+
+        for (auto& [name, function] : info->functions) {
+            if (function.scopeId != INVALID_SCOPE_ID) {
+                function.scope = info->getScopeById(function.scopeId);
+            }
+            if (!function.scope) {
                 for (const auto& scope : info->scopes) {
-                    if (scope->type == ScopeType::FUNCTION &&
+                    if (scope && scope->type == ScopeType::FUNCTION &&
                         scope->name == name &&
-                        scope->startPC == func.startPC) {
-                        func.scope = scope;
+                        scope->startPC == function.startPC) {
+                        function.scope = scope;
+                        function.scopeId = scope->scopeId;
                         break;
                     }
                 }
             }
         }
 
-        if (info->lineToPCs.empty()) {
-            info->buildLineToPC();
-        } else {
-            for (auto& [line, pcs] : info->lineToPCs) {
-                std::sort(pcs.begin(), pcs.end());
-                pcs.erase(std::unique(pcs.begin(), pcs.end()), pcs.end());
+        // Upgrade V1 instructions into the V2 one-origin representation and
+        // infer stable scope/function identities after all scopes are loaded.
+        for (auto& [pc, instruction] : info->instructions) {
+            if (instruction.origins.empty() && instruction.location.isValid()) {
+                SourceOrigin origin(instruction.location);
+                origin.originalPC = pc;
+                origin.affectedVars = instruction.affectedVars;
+                instruction.origins.push_back(std::move(origin));
+            }
+            for (auto& origin : instruction.origins) {
+                if (origin.originalPC == UNKNOWN_ORIGINAL_PC) {
+                    origin.originalPC = pc;
+                }
+                if (origin.scopeId == INVALID_SCOPE_ID) {
+                    // No path is needed for V1, so range lookup is unambiguous.
+                    std::shared_ptr<ScopeDebugInfo> best;
+                    size_t bestCoverage = std::numeric_limits<size_t>::max();
+                    size_t bestDepth = 0;
+                    for (const auto& scope : info->scopes) {
+                        if (!scope || !scope->containsPC(pc)) {
+                            continue;
+                        }
+                        const size_t coverage =
+                            scope->coveredInstructionCount();
+                        const size_t depth = scopeDepth(scope);
+                        if (!best || coverage < bestCoverage ||
+                            (coverage == bestCoverage && depth > bestDepth)) {
+                            best = scope;
+                            bestCoverage = coverage;
+                            bestDepth = depth;
+                        }
+                    }
+                    if (best) {
+                        origin.scopeId = best->scopeId;
+                    }
+                }
+                if (origin.functionName.empty()) {
+                    if (const auto* function = info->getFunctionAtPC(pc)) {
+                        origin.functionName = function->name;
+                    }
+                }
+            }
+            if (!instruction.origins.empty()) {
+                instruction.location = instruction.origins.front().location;
+                if (instruction.affectedVars.empty()) {
+                    instruction.affectedVars =
+                        instruction.origins.front().affectedVars;
+                }
+            }
+            if (instruction.location.isValid()) {
+                info->pcToSource[pc] = instruction.location;
             }
         }
 
+        info->buildLineToPC();
+        if (!info->validateV2Core()) {
+            return nullptr;
+        }
+        info->scopeNestingValid = serializedScopeNestingValid;
         return info;
     } catch (...) {
         return nullptr;
@@ -1202,36 +2429,23 @@ std::string scopeTypeToString(ScopeType type)
             return "loop";
         case ScopeType::CONDITIONAL:
             return "conditional";
-        default:
-            return "unknown";
     }
+    return "unknown";
 }
 
-ScopeType stringToScopeType(const std::string& str)
+ScopeType stringToScopeType(const std::string& value)
 {
-    if (str == "global")
+    if (value == "global")
         return ScopeType::GLOBAL;
-    if (str == "contract")
+    if (value == "contract")
         return ScopeType::CONTRACT;
-    if (str == "function")
+    if (value == "function")
         return ScopeType::FUNCTION;
-    if (str == "block")
-        return ScopeType::BLOCK;
-    if (str == "loop")
+    if (value == "loop")
         return ScopeType::LOOP;
-    if (str == "conditional")
+    if (value == "conditional")
         return ScopeType::CONDITIONAL;
     return ScopeType::BLOCK;
-}
-
-const VariableDebugInfo* DebugInfo::getVariableInfo(const std::string& varName
-) const
-{
-    auto it = variables.find(varName);
-    if (it != variables.end()) {
-        return &(it->second);
-    }
-    return nullptr;
 }
 
 } // namespace apc_debug

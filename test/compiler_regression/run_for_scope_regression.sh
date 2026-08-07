@@ -65,16 +65,34 @@ for mode in ast run; do
     fi
 done
 
-escape_output="$TMP_DIR/target_escape.out"
+for mode in ast run; do
+    output="$TMP_DIR/target_escape_${mode}.out"
+    if ! "$COMPILER" "$mode" \
+        "$SCRIPT_DIR/for_scope_target_escape.ct" main >"$output" 2>&1; then
+        echo "Expected non-empty loop target to remain visible in $mode" >&2
+        sed -n '1,160p' "$output" >&2 || true
+        exit 1
+    fi
+
+    if ! grep -q "status: finished" "$output" ||
+       ! grep -q "int=1" "$output"; then
+        echo "Expected non-empty loop target result int=1 in $mode" >&2
+        sed -n '1,160p' "$output" >&2 || true
+        exit 1
+    fi
+done
+
+empty_escape_output="$TMP_DIR/empty_target_escape.out"
 if "$COMPILER" compile \
-    "$SCRIPT_DIR/for_scope_target_escape.ct" >"$escape_output" 2>&1; then
-    echo "Expected loop target use after the loop to fail compilation" >&2
+    "$SCRIPT_DIR/for_scope_empty_target_escape.ct" \
+    >"$empty_escape_output" 2>&1; then
+    echo "Expected an empty loop not to introduce its target" >&2
     exit 1
 fi
 
-if ! grep -q "Undeclared variable: 'i'" "$escape_output"; then
-    echo "Expected an undeclared loop target diagnostic" >&2
-    sed -n '1,160p' "$escape_output" >&2 || true
+if ! grep -q "Undeclared variable: 'i'" "$empty_escape_output"; then
+    echo "Expected an undeclared empty-loop target diagnostic" >&2
+    sed -n '1,160p' "$empty_escape_output" >&2 || true
     exit 1
 fi
 

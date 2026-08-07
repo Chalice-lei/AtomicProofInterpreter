@@ -1,0 +1,6 @@
+Contract GlobalReassignmentContract:
+    global TapeFlagSize = 9
+
+    def main():
+        TapeFlagSize = 10
+        Return TapeFlagSize

@@ -14,7 +14,11 @@ library_name ::= IDENTIFIER ["." IDENTIFIER]*
 lib_member ::= function | struct    // 禁止 constructor 和 def main
 
 // 合约定义
-contract ::= "Contract" IDENTIFIER ":" NEWLINE INDENT [member]* DEDENT
+contract ::= "Contract" IDENTIFIER ":" NEWLINE INDENT [global_decl]* [member]* DEDENT
+
+// 合约级只读编译期常量（必须位于所有 Struct / def 之前）
+global_decl ::= "global" IDENTIFIER "=" scalar_literal NEWLINE
+scalar_literal ::= NUMBER | HEX | STRING | ADDRESS
 
 member ::= function | struct | constructor
 
@@ -118,14 +122,44 @@ program ::= [library]* contract
 
 ### 1.2 合约定义
 ```
-contract ::= "Contract" IDENTIFIER ":" NEWLINE INDENT [member]* DEDENT
+contract ::= "Contract" IDENTIFIER ":" NEWLINE INDENT [global_decl]* [member]* DEDENT
 
 member ::= function | struct | constructor
 ```
 
 合约以关键字 `Contract` 开始，后跟合约名称，使用Python风格的缩进结构。
 
-### 1.3 库定义
+### 1.3 合约级全局常量
+
+```bnf
+global_decl ::= "global" IDENTIFIER "=" scalar_literal NEWLINE
+scalar_literal ::= NUMBER | HEX | STRING | ADDRESS
+```
+
+`global` 声明是合约级、只读、编译期的标量常量。它们必须紧跟在
+`Contract` 头部之后，并位于所有 `Struct` 和 `def` 之前。类型由字面量
+自动推断；不支持函数调用、数组、结构体或一般表达式作为初始值。
+
+```python
+Contract TBC20Contract:
+    global TapeFlag = "TBC20TAPE" # tape后缀
+    global TapeFlagSize = 9
+
+    def main(tape: hex):
+        tapeSize = Size(tape)
+        suffix = tape.Slice(tapeSize - TapeFlagSize, -1)
+        EqualVerify(suffix, TapeFlag)
+```
+
+合约的构造函数、公开函数、私有函数和导入后合并的 Library 函数都可以读取
+这些常量。常量不能重新赋值，也不能被参数、局部变量、解构目标或
+循环变量遮蔽。`global` 不允许出现在 Library 或函数体中。
+
+全局常量只占用“值标识符”命名空间：裸标识符表达式会解析为常量；函数调用名、
+方法名和字段名属于独立命名空间。例如声明 `global Size = 9` 后，`Size` 表示常量
+`9`，而 `Size(data)` 仍表示对内建函数 `Size` 的调用。
+
+### 1.4 库定义
 ```
 library ::= "Library" library_name ":" NEWLINE INDENT [lib_member]+ DEDENT
 library_name ::= IDENTIFIER ["." IDENTIFIER]*
@@ -194,7 +228,7 @@ parameter ::= IDENTIFIER ":" TYPE
 **示例：**
 ```python
 def main(sig: string, pubkey: hex):
-    result = CheckSig(sig, pubkey)
+    result = CheckSig(pubkey, sig)
     return result
 ```
 
@@ -232,9 +266,18 @@ if_statement ::= "if" expression ":" block ["else" ":" block]
 **示例：**
 ```python
 if _check_lock_time(current_time, timeout):
-    CheckSig(senderSig, sender)
+    CheckSig(sender, senderSig)
 else:
-    CheckSig(recipientSig, recipient)
+    CheckSig(recipient, recipientSig)
+```
+
+`else` 可以省略；条件为假的路径此时等价于一个空分支。对于运行时条件，能够正常到达汇合点的真分支必须保持与入口兼容的主栈、副栈和入口可见编译器存储状态。以大写 `Return` 终止的真分支不会到达汇合点，因此不参与该检查。
+
+```python
+if needsCheck:
+    Verify(condition.Clone())
+
+Return condition
 ```
 
 ### 4.3 返回语句
@@ -309,7 +352,7 @@ argument_list ::= expression ["," expression]*
 
 **示例：**
 ```python
-CheckSig(sig, pubkey)
+CheckSig(pubkey, sig)
 Sha256(data)
 EqualVerify(hash1, hash2)
 ```
@@ -346,7 +389,8 @@ unary_operator ::= "-" | "+"
 
 ### 6.1 关键字
 ```
-keywords ::= "Contract" | "def" | "Struct" | "if" | "else" | "Return" | "return"
+keywords ::= "Contract" | "Library" | "global" | "def" | "Struct"
+           | "if" | "else" | "Return" | "return" | "for" | "in"
 ```
 
 ### 6.2 标识符和字面量
@@ -408,22 +452,22 @@ cloned_value = original_value.Clone()
 **局部变量的所有权转移：**
 ```python
 data = Push("0x1234")
-result1 = CheckSig(signature, data)  # data 被消耗，不能再次使用
-# result2 = CheckSig(signature2, data)  # 错误：data 已被消耗
+result1 = CheckSig(data, signature)  # data 被消耗，不能再次使用
+# result2 = CheckSig(data, signature2)  # 错误：data 已被消耗
 
 # 需要克隆才能多次使用
 data2 = Push("0x5678")
 cloned_data = data2.Clone()
-result1 = CheckSig(signature1, data2)
-result2 = CheckSig(signature2, cloned_data)  # 正确：使用克隆的副本
+result1 = CheckSig(data2, signature1)
+result2 = CheckSig(cloned_data, signature2)  # 正确：使用克隆的副本
 ```
 
 **合约成员变量的特殊行为：**
 ```python
 def main(sig1: string, sig2: string):
     # 合约成员变量可以多次使用，无需 Clone
-    result1 = CheckSig(sig1, self.pubKey)
-    result2 = CheckSig(sig2, self.pubKey)  # 正确：self.pubKey 可以重复使用
+    result1 = CheckSig(self.pubKey, sig1)
+    result2 = CheckSig(self.pubKey, sig2)  # 正确：self.pubKey 可以重复使用
     return {result1, result2}
 ```
 

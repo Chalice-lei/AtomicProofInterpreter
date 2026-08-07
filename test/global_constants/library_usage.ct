@@ -1,0 +1,8 @@
+import "./library_helpers.ct"
+
+Contract GlobalLibraryUsageContract:
+    global TapeFlag = "TBC20TAPE"
+
+    def main():
+        result = readTapeFlag()
+        Return result

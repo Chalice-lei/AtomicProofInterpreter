@@ -70,6 +70,10 @@ struct CallFrame
     size_t entryPC;
     size_t instructionCount;
     std::shared_ptr<ScopeDebugInfo> scope;
+    // Branch choices belong to one execution frame. Keeping the trace after
+    // OP_ENDIF is required for instructions hoisted out of both branches by
+    // the structured common-tail optimizer.
+    BranchTrace branchTrace;
     size_t suspendedPC;
     SourceLocation suspendedLocation;
     std::vector<StackElement> suspendedMainStack;
@@ -246,6 +250,14 @@ public:
         return m_callStack.size();
     }
     const CallFrame* getCurrentFrame() const;
+
+    // Runtime provenance used by path-aware source mappings. The root trace
+    // covers scripts for which no synthetic debugger call frame exists.
+    const BranchTrace& getActiveBranchTrace() const;
+    bool isSourceOriginActive(
+        const std::string& filename,
+        size_t line
+    ) const;
 
     // 简单 PC 断点；向后兼容，新代码用 BreakpointManager
     void addBreakpoint(size_t pc);
@@ -436,6 +448,7 @@ private:
     void popCallFrame();
 
     bool shouldStopForStep();
+    BranchTrace& activeBranchTrace();
 
     std::vector<std::string> m_bytecode;
     std::shared_ptr<DebugInfo> m_debugInfo;
@@ -466,10 +479,12 @@ private:
     std::shared_ptr<ExpressionEvaluator> m_exprEvaluator;
     bool m_varInspectionEnabled;
     size_t m_stepStartLine;
+    SourceLocation m_stepStartLocation;
     size_t m_stepStartCallDepth;
 
     // if/else/endif 用
     std::vector<bool> m_conditionStack;
+    BranchTrace m_rootBranchTrace;
 
     std::string m_lastError;
 

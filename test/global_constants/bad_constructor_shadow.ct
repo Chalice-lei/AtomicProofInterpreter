@@ -1,0 +1,8 @@
+Contract GlobalConstructorShadowContract:
+    global TapeFlagSize = 9
+
+    def __init__(TapeFlagSize: int):
+        self.value = TapeFlagSize
+
+    def main():
+        Return 1

@@ -1,0 +1,11 @@
+Contract PrivateStructArrayArgument:
+    Struct Pair:
+        left: number
+        right: number
+    def _consume(items: Pair[2]):
+        sum = items[0].left + items[0].right
+        Delete(sum)
+    def main(values: Pair[2]):
+        blocker = Push(9)
+        _consume(values)
+        Return(blocker)

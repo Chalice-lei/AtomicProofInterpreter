@@ -1091,13 +1091,11 @@ ASTInterpreter::ControlFlow ASTInterpreter::execFor(ForNode& node)
     }
 
     std::vector<RuntimeValue> iterationValues;
-    if (node.hasStaticIterations()) {
-        for (int64_t value : node.getStaticIterations()) {
-            iterationValues.push_back(RuntimeValue::fromInt(value, "int"));
-        }
-    } else if (auto* rangeCall = dynamic_cast<CallNode*>(node.iterable.get());
-               rangeCall && (rangeCall->funcName == "Range" ||
-                              rangeCall->isRangeCall)) {
+    bool isStaticRangeLoop = false;
+    if (auto* rangeCall = dynamic_cast<CallNode*>(node.iterable.get());
+        rangeCall && (rangeCall->funcName == "Range" ||
+                      rangeCall->isRangeCall)) {
+        isStaticRangeLoop = true;
         for (int64_t value : evalRange(*rangeCall)) {
             iterationValues.push_back(RuntimeValue::fromInt(value, "int"));
         }
@@ -1122,7 +1120,14 @@ ASTInterpreter::ControlFlow ASTInterpreter::execFor(ForNode& node)
             if (loopEnv->contains(node.target)) {
                 loopEnv->assign(node.target, std::move(value));
             } else {
-                loopEnv->define(
+                // A non-empty static loop introduces its induction target in
+                // the enclosing environment. Iteration bodies still execute
+                // in child scopes, so their locals do not leak across rounds.
+                // Empty loops never reach this definition and introduce no
+                // target, matching bytecode lowering.
+                auto targetEnvironment =
+                    isStaticRangeLoop ? previousEnv : loopEnv;
+                targetEnvironment->define(
                     node.target,
                     RuntimeSlot(
                         std::move(value),

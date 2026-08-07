@@ -1,0 +1,16 @@
+Contract PrivateAltStructArrayWholeEscape:
+    Struct Input:
+        Data: { txid: hex32, vout: hex4 }
+    def _stash(value: hex36):
+        inputData: Input[1]
+        inputData[0] = value
+        SetAlt(inputData[0])
+    def _restore():
+        SetMain(inputData[0])
+        result = Size(inputData[0])
+        Delete(inputData[0])
+        return result
+    def main(value: hex36):
+        _stash(value)
+        result = _restore()
+        Return(result)

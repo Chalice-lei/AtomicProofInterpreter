@@ -509,8 +509,12 @@ void CLIDebugger::cmdPrint(const std::vector<std::string>& args)
     }
 
     auto evaluator = m_vm->getExpressionEvaluator();
-    auto result =
-        evaluator->evaluate(expr, m_vm->getMainStack(), m_vm->getPC());
+    auto result = evaluator->evaluate(
+        expr,
+        m_vm->getMainStack(),
+        m_vm->getPC(),
+        m_vm->getActiveBranchTrace()
+    );
 
     if (result.success) {
         std::cout << expr << " = " << result.value << " (" << result.type << ")"
@@ -528,13 +532,19 @@ void CLIDebugger::cmdPrint(const std::vector<std::string>& args)
 void CLIDebugger::cmdLocals(const std::vector<std::string>& /*args*/)
 {
     auto varInspector = m_vm->getVariableInspector();
-    auto localVars =
-        varInspector->getLocalVariables(m_vm->getMainStack(), m_vm->getPC());
+    auto localVars = varInspector->getLocalVariables(
+        m_vm->getMainStack(),
+        m_vm->getPC(),
+        m_vm->getActiveBranchTrace()
+    );
 
     // 退化到全部变量，避免显示 "局部变量 (0 个)" 造成误导
     if (localVars.empty()) {
-        localVars =
-            varInspector->getAllVariables(m_vm->getMainStack(), m_vm->getPC());
+        localVars = varInspector->getAllVariables(
+            m_vm->getMainStack(),
+            m_vm->getPC(),
+            m_vm->getActiveBranchTrace()
+        );
     }
 
     if (m_language == Language::English) {
@@ -573,8 +583,11 @@ void CLIDebugger::cmdInfo(const std::vector<std::string>& args)
         showStackState();
     } else if (type == "variables" || type == "vars") {
         auto varInspector = m_vm->getVariableInspector();
-        auto allVars =
-            varInspector->getAllVariables(m_vm->getMainStack(), m_vm->getPC());
+        auto allVars = varInspector->getAllVariables(
+            m_vm->getMainStack(),
+            m_vm->getPC(),
+            m_vm->getActiveBranchTrace()
+        );
         if (m_language == Language::English) {
             showVariables(allVars, "All variables");
         } else {
@@ -582,7 +595,9 @@ void CLIDebugger::cmdInfo(const std::vector<std::string>& args)
         }
     } else if (type == "scope") {
         auto scopeInspector = m_vm->getScopeInspector();
-        std::string desc = scopeInspector->getScopeDescription(m_vm->getPC());
+        std::string desc = scopeInspector->getScopeDescription(
+            m_vm->getPC(), m_vm->getActiveBranchTrace()
+        );
         if (m_language == Language::English) {
             std::cout << "Current scope: " << desc << std::endl;
         } else {

@@ -1,0 +1,9 @@
+Contract GlobalPrivateUsageContract:
+    global TapeFlag = "TBC20TAPE"
+
+    def _readTapeFlag():
+        return TapeFlag
+
+    def main():
+        result = _readTapeFlag()
+        Return result

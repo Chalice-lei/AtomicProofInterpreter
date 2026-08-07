@@ -1,0 +1,4 @@
+Contract GlobalBasicBaselineContract:
+    def main(data: string):
+        EqualVerify(data, "TBC20TAPE")
+        Return 9

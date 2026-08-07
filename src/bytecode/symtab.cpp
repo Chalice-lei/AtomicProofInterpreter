@@ -1,6 +1,8 @@
 #include "symtab.h"
 
 #include <algorithm>
+#include <iterator>
+#include <set>
 #include <sstream>
 #include <stdexcept>
 
@@ -70,6 +72,8 @@ void SymbolTable::resetFunctionState()
     m_keepSymbol.clear();
     m_bindSymbol.clear();
     m_currentScope.clear();
+    m_activeBindSymbolStart = 0;
+    m_activeScopeEntryStart = 0;
 
     m_savedSharedAltStackElements = {};
     m_savedAltStackCombinedStackSize = {};
@@ -140,6 +144,11 @@ bool SymbolTable::validateState(std::string* error) const
         return fail("incomplete alternative-stack snapshot metadata");
     }
 
+    if (m_activeBindSymbolStart > m_bindSymbol.size() ||
+        m_activeScopeEntryStart > m_currentScope.size()) {
+        return fail("private-call frame boundary is outside symbol metadata");
+    }
+
     if (error) {
         error->clear();
     }
@@ -158,8 +167,21 @@ void SymbolTable::roll(const int offsetFromTop)
 
 void SymbolTable::dropAt(const int offsetFromTop)
 {
-    // NIP 语义: 直接删除该位置, 不上栈顶
+    // NIP 语义: 直接删除该位置, 不上栈顶。物理槽和作用域清理跟踪
+    // 必须保持一致，避免 exitScope() 重复清理或丢失幸存元素记录。
     validateStackOperation(offsetFromTop, "dropAt");
+    const std::string removedName =
+        m_stackPtr->at(static_cast<uint64_t>(offsetFromTop)).getName();
+    auto tracked = std::find_if(
+        m_newSymbol.rbegin(),
+        m_newSymbol.rend(),
+        [&removedName](const std::string& item) {
+            return item == removedName;
+        }
+    );
+    if (tracked != m_newSymbol.rend()) {
+        m_newSymbol.erase(std::next(tracked).base());
+    }
     m_stackPtr->erase(offsetFromTop);
 }
 
@@ -193,24 +215,90 @@ SymbolTable::getPos(StackElement& element, bool isAltFlag /*= false*/) const
     return std::nullopt;
 }
 
+std::optional<int64_t> SymbolTable::getPhysicalPos(
+    const std::string& name,
+    bool isAltFlag
+) const
+{
+    auto stackPtr = isAltFlag ? m_altStackPtr : m_stackPtr;
+    if (!stackPtr) {
+        std::ostringstream oss;
+        oss << "SymbolTable::getPhysicalPos() error: "
+            << (isAltFlag ? "Alternative stack" : "Main stack")
+            << " pointer is null. Cannot find physical element: " << name;
+        throw std::runtime_error(oss.str());
+    }
+
+    const StackElement physicalElement(name);
+    for (size_t i = 0; i < stackPtr->size(); ++i) {
+        if (stackPtr->at(i) == physicalElement) {
+            return static_cast<int64_t>(i);
+        }
+    }
+    return std::nullopt;
+}
+
 std::string SymbolTable::resolveBindSymbol(const std::string& name) const
 {
     std::string resolved = name;
+    const size_t activeBindingStart = activeBindSymbolStart();
+    const size_t activeScopeStart = activeScopeEntryStart();
+    bool followedActiveBinding = false;
+
+    auto findLatestBinding = [&](size_t begin, size_t end)
+        -> const std::pair<std::string, std::string>* {
+        for (size_t i = end; i > begin; --i) {
+            const auto& binding = m_bindSymbol[i - 1];
+            if (binding.first == resolved) {
+                return &binding;
+            }
+        }
+        return nullptr;
+    };
+
+    auto isOwnedByActiveScope = [&](const std::string& candidate) {
+        for (size_t i = activeScopeStart; i < m_currentScope.size(); ++i) {
+            const std::string& root = m_currentScope[i].first;
+            if (candidate == root ||
+                (candidate.size() > root.size() &&
+                 candidate.compare(0, root.size(), root) == 0 &&
+                 (candidate[root.size()] == '.' ||
+                  candidate[root.size()] == '['))) {
+                return true;
+            }
+        }
+        return false;
+    };
 
     // At most one transition per binding prevents malformed cyclic bindings
-    // from looping forever while still supporting nested private calls.
+    // from looping forever while still supporting nested private calls. The
+    // innermost frame is consulted first. A call-local declaration with no
+    // active alias shadows same-spelled aliases from its caller; after an
+    // active parameter alias is followed, resolution may continue through
+    // parent frames to reach the physical caller slot.
     for (size_t depth = 0; depth < m_bindSymbol.size(); ++depth) {
-        auto it = std::find_if(
-            m_bindSymbol.rbegin(),
-            m_bindSymbol.rend(),
-            [&resolved](const std::pair<std::string, std::string>& binding) {
-                return binding.first == resolved;
-            }
+        const auto* binding = findLatestBinding(
+            activeBindingStart, m_bindSymbol.size()
         );
-        if (it == m_bindSymbol.rend() || it->second == resolved) {
+        if (binding) {
+            if (binding->second == resolved) {
+                break;
+            }
+            resolved = binding->second;
+            followedActiveBinding = true;
+            continue;
+        }
+
+        if (!followedActiveBinding && isOwnedByActiveScope(resolved)) {
             break;
         }
-        resolved = it->second;
+
+        binding = findLatestBinding(0, activeBindingStart);
+        if (!binding || binding->second == resolved) {
+            break;
+        }
+        resolved = binding->second;
+        followedActiveBinding = true;
     }
 
     return resolved;
@@ -218,9 +306,11 @@ std::string SymbolTable::resolveBindSymbol(const std::string& name) const
 
 void SymbolTable::removeBindSymbol(const std::string& paramName)
 {
+    auto activeBegin = m_bindSymbol.begin() +
+                       static_cast<std::ptrdiff_t>(activeBindSymbolStart());
     m_bindSymbol.erase(
         std::remove_if(
-            m_bindSymbol.begin(),
+            activeBegin,
             m_bindSymbol.end(),
             [&paramName](const std::pair<std::string, std::string>& pair) {
                 return pair.first == paramName;
@@ -233,6 +323,7 @@ void SymbolTable::removeBindSymbol(const std::string& paramName)
 void SymbolTable::clearBindSymbols()
 {
     m_bindSymbol.clear();
+    m_activeBindSymbolStart = 0;
 }
 
 void SymbolTable::stackStatus(std::string& statusStr)
@@ -360,8 +451,8 @@ bool SymbolTable::defineSymbol(
     std::string modifiers /* = ""*/
 )
 {
-    if (symbolExists(name)) {
-        return false; // 不允许重名
+    if (isDeclaredInCurrentScope(name)) {
+        return false; // 同一词法作用域不允许重名; 内层作用域可遮蔽外层.
     }
 
     m_currentScope.emplace_back(name, SymbolInfo{name, type, modifiers});
@@ -387,17 +478,39 @@ bool SymbolTable::isDeclaredInCurrentScope(const std::string& name) const
            m_declaredSymbols.end();
 }
 
+bool SymbolTable::hasScopeEntry(const std::string& name) const
+{
+    return std::any_of(
+        m_currentScope.rbegin(),
+        m_currentScope.rend(),
+        [&name](const std::pair<std::string, SymbolInfo>& entry) {
+            return entry.first == name;
+        }
+    );
+}
+
+bool SymbolTable::isExternalArrayView(const std::string& name) const
+{
+    for (auto it = m_currentScope.rbegin(); it != m_currentScope.rend(); ++it) {
+        if (it->first == name) {
+            return it->second.isArray() &&
+                   it->second.m_isExternalArrayView;
+        }
+    }
+    return false;
+}
+
 void SymbolTable::removeSymbol(const std::string& name)
 {
     auto scopeIt = std::find_if(
-        m_currentScope.begin(),
-        m_currentScope.end(),
+        m_currentScope.rbegin(),
+        m_currentScope.rend(),
         [&name](const std::pair<std::string, SymbolInfo>& pair) {
             return pair.first == name;
         }
     );
-    if (scopeIt != m_currentScope.end()) {
-        m_currentScope.erase(scopeIt);
+    if (scopeIt != m_currentScope.rend()) {
+        m_currentScope.erase(std::next(scopeIt).base());
     }
     m_declaredSymbols.erase(
         std::remove(m_declaredSymbols.begin(), m_declaredSymbols.end(), name),
@@ -471,7 +584,7 @@ bool SymbolTable::defineArray(
     bool isFixedSize
 )
 {
-    if (symbolExists(const_cast<std::string&>(name))) {
+    if (isDeclaredInCurrentScope(name)) {
         return false;
     }
 
@@ -483,11 +596,37 @@ bool SymbolTable::defineArray(
     return true;
 }
 
+bool SymbolTable::importExternalArrayView(
+    const std::string& name,
+    const std::string& elementType,
+    size_t size,
+    bool isFixedSize
+)
+{
+    for (auto it = m_currentScope.rbegin(); it != m_currentScope.rend(); ++it) {
+        if (it->first != name) {
+            continue;
+        }
+        if (!it->second.isArray()) {
+            return false;
+        }
+        const ArrayInfo& existing = it->second.getArrayInfo();
+        return existing.elementType == elementType && existing.size == size &&
+               existing.isFixedSize == isFixedSize;
+    }
+
+    ArrayInfo arrayInfo(name, elementType, size, isFixedSize);
+    SymbolInfo externalView(arrayInfo);
+    externalView.m_isExternalArrayView = true;
+    m_currentScope.emplace_back(name, std::move(externalView));
+    return true;
+}
+
 bool SymbolTable::isArraySymbol(const std::string& name) const
 {
-    for (const auto& entry : m_currentScope) {
-        if (entry.first == name) {
-            return entry.second.isArray();
+    for (auto it = m_currentScope.rbegin(); it != m_currentScope.rend(); ++it) {
+        if (it->first == name) {
+            return it->second.isArray();
         }
     }
     return false;
@@ -496,9 +635,11 @@ bool SymbolTable::isArraySymbol(const std::string& name) const
 std::optional<ArrayInfo> SymbolTable::getArrayInfo(const std::string& name
 ) const
 {
-    for (const auto& entry : m_currentScope) {
-        if (entry.first == name && entry.second.isArray()) {
-            return entry.second.getArrayInfo();
+    for (auto it = m_currentScope.rbegin(); it != m_currentScope.rend(); ++it) {
+        if (it->first == name) {
+            return it->second.isArray()
+                       ? std::optional<ArrayInfo>(it->second.getArrayInfo())
+                       : std::nullopt;
         }
     }
     return std::nullopt;
@@ -1044,16 +1185,16 @@ static void eraseScopeEntriesByKey(
     const std::string& key
 )
 {
-    scope.erase(
-        std::remove_if(
-            scope.begin(),
-            scope.end(),
-            [&key](const std::pair<std::string, SymbolInfo>& p) {
-                return p.first == key;
-            }
-        ),
-        scope.end()
+    auto it = std::find_if(
+        scope.rbegin(),
+        scope.rend(),
+        [&key](const std::pair<std::string, SymbolInfo>& entry) {
+            return entry.first == key;
+        }
     );
+    if (it != scope.rend()) {
+        scope.erase(std::next(it).base());
+    }
 }
 
 static void eraseScopeEntriesByPrefix(
@@ -1061,18 +1202,18 @@ static void eraseScopeEntriesByPrefix(
     const std::string& prefix
 )
 {
-    scope.erase(
-        std::remove_if(
-            scope.begin(),
-            scope.end(),
-            [&prefix](const std::pair<std::string, SymbolInfo>& p) {
-                const std::string& k = p.first;
-                return k.size() >= prefix.size() &&
-                       k.compare(0, prefix.size(), prefix) == 0;
-            }
-        ),
-        scope.end()
-    );
+    // Remove only the innermost entry for each matching key. Older entries
+    // belong to outer lexical scopes and must survive a shadowed transfer.
+    std::set<std::string> erasedKeys;
+    for (size_t i = scope.size(); i > 0;) {
+        --i;
+        const std::string& key = scope[i].first;
+        if (key.size() >= prefix.size() &&
+            key.compare(0, prefix.size(), prefix) == 0 &&
+            erasedKeys.insert(key).second) {
+            scope.erase(scope.begin() + static_cast<std::ptrdiff_t>(i));
+        }
+    }
 }
 
 bool SymbolTable::renameSymbolEntry(
@@ -1083,22 +1224,23 @@ bool SymbolTable::renameSymbolEntry(
     // 先清掉 newName 的骨架条目, 避免键重复
     eraseScopeEntriesByKey(m_currentScope, newName);
 
-    auto it = std::find_if(
-        m_currentScope.begin(),
-        m_currentScope.end(),
+    auto reverseIt = std::find_if(
+        m_currentScope.rbegin(),
+        m_currentScope.rend(),
         [&oldName](const std::pair<std::string, SymbolInfo>& p) {
             return p.first == oldName;
         }
     );
-    if (it == m_currentScope.end()) {
+    if (reverseIt == m_currentScope.rend()) {
         return false;
     }
+    auto it = std::prev(reverseIt.base());
     it->first = newName;
     it->second.m_stackElement.setName(newName);
     renameOrAppendInList(m_newSymbol, oldName, newName);
     renameExistingInList(m_declaredSymbols, oldName, newName);
     if (m_stackPtr) {
-        m_stackPtr->rename(oldName, newName);
+        m_stackPtr->renameTopToBottom(oldName, newName);
     }
     return true;
 }
@@ -1110,16 +1252,18 @@ bool SymbolTable::renameArraySymbol(
 {
     eraseScopeEntriesByKey(m_currentScope, newName);
 
-    auto it = std::find_if(
-        m_currentScope.begin(),
-        m_currentScope.end(),
+    auto reverseIt = std::find_if(
+        m_currentScope.rbegin(),
+        m_currentScope.rend(),
         [&oldName](const std::pair<std::string, SymbolInfo>& p) {
             return p.first == oldName;
         }
     );
-    if (it == m_currentScope.end() || !it->second.isArray()) {
+    if (reverseIt == m_currentScope.rend() ||
+        !reverseIt->second.isArray()) {
         return false;
     }
+    auto it = std::prev(reverseIt.base());
 
     ArrayInfo& arrInfo = it->second.getArrayInfo();
     const size_t arraySize = arrInfo.size;
@@ -1131,7 +1275,7 @@ bool SymbolTable::renameArraySymbol(
             const std::string newQual =
                 newName + "[" +
                 numberToScriptHex(static_cast<int64_t>(elem.index)) + "]";
-            m_stackPtr->rename(oldQual, newQual);
+            m_stackPtr->renameTopToBottom(oldQual, newQual);
         }
     }
 
@@ -1158,16 +1302,18 @@ bool SymbolTable::renameCompoundSymbol(
 {
     eraseScopeEntriesByKey(m_currentScope, newName);
 
-    auto it = std::find_if(
-        m_currentScope.begin(),
-        m_currentScope.end(),
+    auto reverseIt = std::find_if(
+        m_currentScope.rbegin(),
+        m_currentScope.rend(),
         [&oldName](const std::pair<std::string, SymbolInfo>& p) {
             return p.first == oldName;
         }
     );
-    if (it == m_currentScope.end() || !it->second.isCompoundType()) {
+    if (reverseIt == m_currentScope.rend() ||
+        !reverseIt->second.isCompoundType()) {
         return false;
     }
+    auto it = std::prev(reverseIt.base());
 
     it->second.getCompoundInfo().name = newName;
     it->first = newName;
@@ -1177,7 +1323,7 @@ bool SymbolTable::renameCompoundSymbol(
 
     // 同步栈上的占位槽
     if (m_stackPtr) {
-        m_stackPtr->rename(oldName, newName);
+        m_stackPtr->renameTopToBottom(oldName, newName);
     }
     return true;
 }
@@ -1191,18 +1337,20 @@ void SymbolTable::renameEntriesByPrefix(
         return;
     }
 
-    // 1) 主栈、副栈和 fixed 区中所有以 oldPrefix 开头的
-    // 槽位改名. 结构体身份转移必须覆盖每一种存储位置.
+    // 1) 主栈、副栈和 fixed 区中每个字段名只改最靠近栈顶的一项。
+    // 同名的更深槽位可能属于被遮蔽的外层变量。
     auto renameStackEntries = [&](const std::shared_ptr<tbc::OpStack>& stack) {
         if (!stack) {
             return;
         }
+        std::set<std::string> renamedNames;
         const size_t n = stack->size();
         for (size_t i = 0; i < n; ++i) {
             auto& elem = stack->at(i);
-            const std::string& cur = elem.getName();
+            const std::string cur = elem.getName();
             if (cur.size() >= oldPrefix.size() &&
-                cur.compare(0, oldPrefix.size(), oldPrefix) == 0) {
+                cur.compare(0, oldPrefix.size(), oldPrefix) == 0 &&
+                renamedNames.insert(cur).second) {
                 elem.setName(newPrefix + cur.substr(oldPrefix.size()));
             }
         }
@@ -1213,10 +1361,14 @@ void SymbolTable::renameEntriesByPrefix(
 
     // 2) 作用域条目: 先清除 newPrefix 骨架, 再改键
     eraseScopeEntriesByPrefix(m_currentScope, newPrefix);
-    for (auto& entry : m_currentScope) {
-        const std::string& key = entry.first;
+    std::set<std::string> renamedKeys;
+    for (size_t i = m_currentScope.size(); i > 0;) {
+        --i;
+        auto& entry = m_currentScope[i];
+        const std::string key = entry.first;
         if (key.size() >= oldPrefix.size() &&
-            key.compare(0, oldPrefix.size(), oldPrefix) == 0) {
+            key.compare(0, oldPrefix.size(), oldPrefix) == 0 &&
+            renamedKeys.insert(key).second) {
             std::string newKey = newPrefix + key.substr(oldPrefix.size());
             entry.first = newKey;
             entry.second.m_stackElement.setName(newKey);

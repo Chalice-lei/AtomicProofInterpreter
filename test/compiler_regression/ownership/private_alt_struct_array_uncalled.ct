@@ -1,0 +1,10 @@
+Contract PrivateAltStructArrayUncalled:
+    Struct Input:
+        Data: hex36
+    def _stash(value: hex36):
+        inputData: Input[1]
+        inputData[0] = value
+        SetAlt(inputData[0])
+    def main():
+        SetMain(inputData[0])
+        Return(1)

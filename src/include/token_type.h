@@ -11,6 +11,7 @@ enum TokenType {
 
     TOKEN_CONTRACT,
     TOKEN_LIBRARY, // 可被合约导入的自由函数 / 结构体集合
+    TOKEN_GLOBAL,  // 合约头部的全局常量声明
     TOKEN_DEF,
     TOKEN_STRUCT,
     TOKEN_INDENT,
@@ -106,6 +107,7 @@ static const std::unordered_map<TokenType, std::string> TokenTypeToString = {
     {TOKEN_ARROW, "TOKEN_ARROW"},
     {TOKEN_CONTRACT, "TOKEN_CONTRACT"},
     {TOKEN_LIBRARY, "TOKEN_LIBRARY"},
+    {TOKEN_GLOBAL, "TOKEN_GLOBAL"},
     {TOKEN_DEF, "TOKEN_DEF"},
     {TOKEN_STRUCT, "TOKEN_STRUCT"},
     {TOKEN_INDENT, "TOKEN_INDENT"},

@@ -1,9 +1,57 @@
 #include "op_stack.h"
 
 #include <algorithm>
+#include <limits>
 #include <sstream>
 
 using namespace tbc;
+
+namespace
+{
+
+int64_t deserializeScriptNumber(const valtype& bytes)
+{
+    if (bytes.empty()) {
+        return 0;
+    }
+    if (bytes.size() > sizeof(int64_t) + 1) {
+        throw script_num_error("Script number overflow");
+    }
+
+    const bool negative = (bytes.back() & 0x80) != 0;
+    uint64_t magnitude = 0;
+    for (size_t i = 0; i < bytes.size(); ++i) {
+        uint8_t byte = bytes[i];
+        if (i + 1 == bytes.size()) {
+            byte &= 0x7f;
+        }
+        if (i >= sizeof(uint64_t)) {
+            if (byte != 0) {
+                throw script_num_error("Script number overflow");
+            }
+            continue;
+        }
+        magnitude |= static_cast<uint64_t>(byte) << (8 * i);
+    }
+
+    constexpr uint64_t signMagnitude = uint64_t{1} << 63;
+    if (negative) {
+        if (magnitude > signMagnitude) {
+            throw script_num_error("Script number overflow");
+        }
+        if (magnitude == signMagnitude) {
+            return std::numeric_limits<int64_t>::min();
+        }
+        return -static_cast<int64_t>(magnitude);
+    }
+    if (magnitude >
+        static_cast<uint64_t>(std::numeric_limits<int64_t>::max())) {
+        throw script_num_error("Script number overflow");
+    }
+    return static_cast<int64_t>(magnitude);
+}
+
+} // namespace
 
 // ===== StackElement =====
 
@@ -73,20 +121,7 @@ CScriptNum::CScriptNum(const valtype& vch, bool fRequireMinimal)
         throw script_num_error("Script number is not minimally encoded");
     }
 
-    if (vch.empty()) {
-        m_value = 0;
-        return;
-    }
-
-    m_value = 0;
-    for (size_t i = 0; i < vch.size(); ++i) {
-        m_value |= static_cast<int64_t>(vch[i]) << (8 * i);
-    }
-
-    if (vch.back() & 0x80) {
-        m_value &= ~(0x80ULL << (8 * (vch.size() - 1)));
-        m_value = -m_value;
-    }
+    m_value = deserializeScriptNumber(vch);
 }
 
 CScriptNum::CScriptNum(const valtype& vch, bool fRequireMinimal, size_t maxSize)
@@ -99,20 +134,7 @@ CScriptNum::CScriptNum(const valtype& vch, bool fRequireMinimal, size_t maxSize)
         throw script_num_error("Script number is not minimally encoded");
     }
 
-    if (vch.empty()) {
-        m_value = 0;
-        return;
-    }
-
-    m_value = 0;
-    for (size_t i = 0; i < vch.size(); ++i) {
-        m_value |= static_cast<int64_t>(vch[i]) << (8 * i);
-    }
-
-    if (vch.back() & 0x80) {
-        m_value &= ~(0x80ULL << (8 * (vch.size() - 1)));
-        m_value = -m_value;
-    }
+    m_value = deserializeScriptNumber(vch);
 }
 
 bool CScriptNum::IsMinimallyEncoded(const valtype& data)
@@ -137,7 +159,11 @@ valtype CScriptNum::Serialize(const int64_t& value)
 
     valtype result;
     const bool neg = value < 0;
-    uint64_t absvalue = neg ? -value : value;
+    // Avoid signed overflow for INT64_MIN. Offset before negation, then
+    // restore the removed unit in the unsigned domain.
+    uint64_t absvalue = neg
+                            ? static_cast<uint64_t>(-(value + 1)) + 1
+                            : static_cast<uint64_t>(value);
 
     while (absvalue) {
         result.push_back(absvalue & 0xff);

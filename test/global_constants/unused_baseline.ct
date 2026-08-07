@@ -1,0 +1,3 @@
+Contract GlobalUnusedBaselineContract:
+    def main():
+        Return 1

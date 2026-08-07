@@ -1,0 +1,5 @@
+Contract GlobalUnusedInvalidNumberContract:
+    global BadNumber = 999999999999999999999999999999999999999999999999
+
+    def main():
+        Return 1

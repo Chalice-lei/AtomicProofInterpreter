@@ -1,27 +1,76 @@
 #include "ast_to_bytecode_visitor.h"
 
+#include <algorithm>
 #include <climits>
 #include <cctype>
+#include <cstdint>
 #include <functional>
+#include <limits>
 #include <optional>
 #include <sstream>
+#include <stdexcept>
 #include <unordered_map>
+#include <unordered_set>
 
 #include "../bytecode/bytecode_builtin_function.h"
 #include "../bytecode/bytecode_builtin_struct.h"
 #include "../bytecode/bytecode_helper_fun.h"
 #include "../bytecode/bytecode_operation_calcu.h"
 #include "../bytecode/bytecode_operation_functions.h"
+#include "../bytecode/stack_permutation_planner.h"
 #include "../bytecode/type_validator.h"
 #include "../util/compiler_placeholder.h"
 #include "../util/defer.h"
 #include "../util/type_utils.h"
 #include "control_flow_analysis.h"
+#include "static_integer_evaluator.h"
 
 using namespace tbc;
 
 namespace
 {
+
+class ScopeRollbackGuard
+{
+public:
+    ScopeRollbackGuard(
+        const std::shared_ptr<Scope>& scope,
+        bool enabled
+    )
+        : m_scope(scope)
+    {
+        if (enabled && m_scope) {
+            m_snapshot = m_scope->captureControlFlowState();
+        }
+    }
+
+    ~ScopeRollbackGuard() noexcept
+    {
+        if (!m_snapshot.has_value() || m_committed || !m_scope) {
+            return;
+        }
+        try {
+            m_scope->restoreControlFlowState(m_snapshot.value());
+        } catch (const std::exception& error) {
+            LOG_ERROR("Failed to restore Delete() scope state: ", error.what());
+        } catch (...) {
+            LOG_ERROR("Failed to restore Delete() scope state");
+        }
+    }
+
+    ScopeRollbackGuard(const ScopeRollbackGuard&) = delete;
+    ScopeRollbackGuard& operator=(const ScopeRollbackGuard&) = delete;
+
+    void commit() noexcept
+    {
+        m_committed = true;
+    }
+
+private:
+    std::shared_ptr<Scope> m_scope;
+    std::optional<ControlFlowStateSnapshot> m_snapshot;
+    bool m_committed{false};
+};
 
 using compiler_flow::ControlFlowOutcomes;
 using compiler_flow::controlFlowOutcomes;
@@ -114,12 +163,11 @@ StorageLocation storageAfterStatement(
     }
 
     if (auto forNode = dynamic_cast<const ForNode*>(stmt)) {
-        StorageLocation current = initial;
-        for (size_t i = 0; i < forNode->getStaticIterations().size(); ++i) {
-            current =
-                storageAfterStatement(forNode->body.get(), symbol, current);
-        }
-        return current;
+        // The iteration count may depend on an outer fixed binding. Preserve
+        // the possible zero-iteration path in this context-free prediction.
+        const StorageLocation afterBody =
+            storageAfterStatement(forNode->body.get(), symbol, initial);
+        return afterBody == initial ? initial : StorageLocation::Unknown;
     }
 
     return initial;
@@ -176,15 +224,359 @@ bool isImmutableSuffixStatement(const StmtNode* statement)
     return call && call->funcName == "Push";
 }
 
+bool isDirectScriptReturn(const StmtNode* statement)
+{
+    const auto* returnStatement =
+        dynamic_cast<const ReturnNode*>(statement);
+    return returnStatement && !returnStatement->isValueReturn;
+}
+
+size_t encodedScriptByteSize(const std::string& encoding)
+{
+    size_t offset = 0;
+    if (encoding.size() >= 2 && encoding[0] == '0' &&
+        (encoding[1] == 'x' || encoding[1] == 'X')) {
+        offset = 2;
+    }
+    return (encoding.size() - offset) / 2;
+}
+
+size_t rollByteCost(size_t depth)
+{
+    if (depth == 0) {
+        return 0;
+    }
+    if (depth <= 2) {
+        return 1;
+    }
+    return encodedScriptByteSize(
+               numberToScriptHex(static_cast<int64_t>(depth))
+           ) +
+           1;
+}
+
+struct ArgumentLayoutAnalysis
+{
+    std::vector<size_t> argumentSlots;
+    size_t legacyBytes{0};
+    std::optional<StackPermutationPlan> strictMovePlan;
+
+    size_t selectedBytes() const
+    {
+        return strictMovePlan.has_value() ? strictMovePlan->serializedBytes
+                                          : legacyBytes;
+    }
+};
+
+std::optional<ArgumentLayoutAnalysis> analyzeArgumentLayout(
+    Scope& scope,
+    const std::vector<StackElement>& arguments
+)
+{
+    if (arguments.empty()) {
+        return ArgumentLayoutAnalysis{};
+    }
+
+    ArgumentLayoutAnalysis analysis;
+    analysis.argumentSlots.reserve(arguments.size());
+    for (auto argument : arguments) {
+        if (isScript(argument.getName())) {
+            return std::nullopt;
+        }
+        auto position = scope.getPos(argument);
+        if (!position.has_value() || position.value() < 0) {
+            return std::nullopt;
+        }
+        const size_t slot = static_cast<size_t>(position.value());
+        if (std::find(
+                analysis.argumentSlots.begin(),
+                analysis.argumentSlots.end(),
+                slot
+            ) != analysis.argumentSlots.end()) {
+            return std::nullopt;
+        }
+        analysis.argumentSlots.push_back(slot);
+    }
+
+    bool alreadyInOpcodeOrder = true;
+    for (size_t i = 0; i < analysis.argumentSlots.size(); ++i) {
+        if (analysis.argumentSlots[i] !=
+            analysis.argumentSlots.size() - 1 - i) {
+            alreadyInOpcodeOrder = false;
+            break;
+        }
+    }
+    if (alreadyInOpcodeOrder) {
+        analysis.legacyBytes = 0;
+    } else if (analysis.argumentSlots.size() == 2 &&
+               ((analysis.argumentSlots[0] == 3 &&
+                 analysis.argumentSlots[1] == 1) ||
+                (analysis.argumentSlots[0] == 5 &&
+                 analysis.argumentSlots[1] == 3))) {
+        // Mirror the two pair shortcuts in adjustStackToMatch().
+        analysis.legacyBytes = 1;
+    } else {
+        std::vector<size_t> remaining(scope.size());
+        for (size_t i = 0; i < remaining.size(); ++i) {
+            remaining[i] = i;
+        }
+
+        for (size_t index = 0; index < analysis.argumentSlots.size(); ++index) {
+            auto found = std::find(
+                remaining.begin(),
+                remaining.end(),
+                analysis.argumentSlots[index]
+            );
+            if (found == remaining.end()) {
+                return std::nullopt;
+            }
+            const size_t symbolicPosition =
+                static_cast<size_t>(std::distance(remaining.begin(), found));
+            analysis.legacyBytes += rollByteCost(symbolicPosition + index);
+            remaining.erase(found);
+        }
+    }
+
+    const size_t windowSize =
+        *std::max_element(
+            analysis.argumentSlots.begin(), analysis.argumentSlots.end()
+        ) +
+        1;
+    if (windowSize > StackPermutationPlanner::MAX_MOVE_WINDOW ||
+        analysis.legacyBytes == 0) {
+        return analysis;
+    }
+
+    // Physical depths are stable, call-local slot ids.  Names are deliberately
+    // excluded because StackElement equality is name-based and may alias.
+    std::vector<uint64_t> currentTopFirst;
+    currentTopFirst.reserve(windowSize);
+    for (size_t depth = 0; depth < windowSize; ++depth) {
+        currentTopFirst.push_back(static_cast<uint64_t>(depth));
+    }
+
+    std::vector<uint64_t> targetTopFirst;
+    targetTopFirst.reserve(windowSize);
+    std::vector<bool> isArgumentSlot(windowSize, false);
+    for (auto slot = analysis.argumentSlots.rbegin();
+         slot != analysis.argumentSlots.rend();
+         ++slot) {
+        targetTopFirst.push_back(static_cast<uint64_t>(*slot));
+        isArgumentSlot[*slot] = true;
+    }
+    for (size_t depth = 0; depth < windowSize; ++depth) {
+        if (!isArgumentSlot[depth]) {
+            targetTopFirst.push_back(static_cast<uint64_t>(depth));
+        }
+    }
+
+    auto movePlan = StackPermutationPlanner::planMoveOnly(
+        currentTopFirst, targetTopFirst
+    );
+    if (movePlan.has_value() &&
+        movePlan->serializedBytes < analysis.legacyBytes) {
+        analysis.strictMovePlan = std::move(movePlan);
+    }
+    return analysis;
+}
+
+std::optional<size_t> estimateArgumentLayoutCost(
+    Scope& scope,
+    const std::vector<StackElement>& arguments
+)
+{
+    const auto analysis = analyzeArgumentLayout(scope, arguments);
+    if (!analysis.has_value()) {
+        return std::nullopt;
+    }
+    return analysis->selectedBytes();
+}
+
+void emitStackPlan(
+    BytecodeGenerator& generator,
+    const StackPermutationPlan& plan
+)
+{
+    for (const auto& instruction : plan.encodedInstructions()) {
+        generator.emit(instruction);
+    }
+}
+
+void applyMoveOnlyStep(Scope& scope, const StackPlanStep& step)
+{
+    switch (step.op) {
+        case StackPlanOp::Swap:
+            scope.roll(1);
+            return;
+        case StackPlanOp::Rot:
+            scope.roll(2);
+            return;
+        case StackPlanOp::TwoSwap:
+            scope.roll(3);
+            scope.roll(3);
+            return;
+        case StackPlanOp::TwoRot:
+            scope.roll(5);
+            scope.roll(5);
+            return;
+        case StackPlanOp::Roll:
+            scope.roll(static_cast<int>(step.depth));
+            return;
+        default:
+            throw std::logic_error("non-move step in move-only stack plan");
+    }
+}
+
+void emitAndApplyMoveOnlyPlan(
+    BytecodeGenerator& generator,
+    Scope& scope,
+    const StackPermutationPlan& plan
+)
+{
+    for (const auto& step : plan.steps) {
+        applyMoveOnlyStep(scope, step);
+        for (const auto& instruction : step.encodedInstructions()) {
+            generator.emit(instruction);
+        }
+    }
+}
+
+StackPermutationPlan makeStackPlan(std::vector<StackPlanStep> steps)
+{
+    StackPermutationPlan plan;
+    plan.steps = std::move(steps);
+    for (const auto& step : plan.steps) {
+        plan.serializedBytes += step.serializedByteSize();
+        plan.emittedInstructions += step.emittedInstructionCount();
+        plan.maximumTouchedDepth =
+            std::max(plan.maximumTouchedDepth, step.touchedDepth());
+    }
+    return plan;
+}
+
+StackPermutationPlan buildLegacyCopyAssignmentPlan(
+    size_t sourceDepth,
+    size_t targetDepth
+)
+{
+    if (sourceDepth == targetDepth) {
+        throw std::invalid_argument("copy assignment requires distinct slots");
+    }
+
+    std::vector<StackPlanStep> steps;
+    if (targetDepth < sourceDepth) {
+        for (size_t i = 0; i < targetDepth; ++i) {
+            steps.push_back({StackPlanOp::ToAltStack, 0});
+        }
+        steps.push_back({StackPlanOp::Drop, 0});
+        steps.push_back(
+            {StackPlanOp::Pick, sourceDepth - targetDepth - 1}
+        );
+        for (size_t i = 0; i < targetDepth; ++i) {
+            steps.push_back({StackPlanOp::FromAltStack, 0});
+        }
+    } else if (sourceDepth == 0 && targetDepth == 1) {
+        steps.push_back({StackPlanOp::Nip, 0});
+        steps.push_back({StackPlanOp::Dup, 0});
+    } else {
+        steps.push_back({StackPlanOp::Pick, sourceDepth});
+        for (size_t i = 0; i < targetDepth; ++i) {
+            steps.push_back({StackPlanOp::Swap, 1});
+            steps.push_back({StackPlanOp::ToAltStack, 0});
+        }
+        steps.push_back({StackPlanOp::ToAltStack, 0});
+        steps.push_back({StackPlanOp::Drop, 0});
+        for (size_t i = 0; i <= targetDepth; ++i) {
+            steps.push_back({StackPlanOp::FromAltStack, 0});
+        }
+    }
+    return makeStackPlan(std::move(steps));
+}
+
+struct CopyAssignmentEmission
+{
+    size_t legacyBytes{0};
+    size_t emittedBytes{0};
+    bool usedPlanner{false};
+};
+
+CopyAssignmentEmission emitCopyAssignment(
+    BytecodeGenerator& generator,
+    size_t sourceDepth,
+    size_t targetDepth
+)
+{
+    const size_t legacyBytes =
+        StackPermutationPlanner::legacyCopyAssignmentByteCost(
+            sourceDepth, targetDepth
+        );
+    auto chosenPlan = StackPermutationPlanner::planCopyAssignment(
+        sourceDepth, targetDepth, legacyBytes
+    );
+    const bool usedPlanner = chosenPlan.has_value();
+    if (!chosenPlan.has_value()) {
+        chosenPlan =
+            buildLegacyCopyAssignmentPlan(sourceDepth, targetDepth);
+        if (chosenPlan->serializedBytes != legacyBytes) {
+            throw std::logic_error(
+                "legacy copy plan size disagrees with planner cost model"
+            );
+        }
+    }
+    emitStackPlan(generator, *chosenPlan);
+    return {legacyBytes, chosenPlan->serializedBytes, usedPlanner};
+}
+
+class ScopedStringOverride
+{
+public:
+    ScopedStringOverride(std::string& target, std::string replacement)
+        : m_target(target), m_original(target)
+    {
+        m_target = std::move(replacement);
+    }
+
+    ~ScopedStringOverride()
+    {
+        m_target = std::move(m_original);
+    }
+
+    ScopedStringOverride(const ScopedStringOverride&) = delete;
+    ScopedStringOverride& operator=(const ScopedStringOverride&) = delete;
+
+private:
+    std::string& m_target;
+    std::string m_original;
+};
+
 } // namespace
 
 void ASTToBytecodeVisitor::visit(ContractNode& node)
 {
     LOG_DEBUG("Visiting contract node start. name: " + node.name);
 
+    collectSelfPlaceholderLengths(node);
+
+    const BlockNode* previousImmutableSuffixBlock = m_immutableSuffixBlock;
+    m_immutableSuffixBlock = nullptr;
+    DEFER_BLOCK(m_immutableSuffixBlock = previousImmutableSuffixBlock;);
+
+    // Public functions are emitted in member order. Only the final emitted
+    // function can append immutable bytes at the physical script end.
+    for (auto it = node.members.rbegin(); it != node.members.rend(); ++it) {
+        const auto* function = dynamic_cast<const FunctionNode*>(it->get());
+        if (!function || function->fromLibrary || function->name.empty() ||
+            function->name[0] == '_') {
+            continue;
+        }
+        m_immutableSuffixBlock = function->block.get();
+        break;
+    }
+
     // 副栈可在同一合约的相邻 public 函数之间中继状态，但不能跨越
     // 独立合约/编译会话。函数级 clean 会保留它，合约入口统一清空。
     m_scopePtr->getCurrentSymtab().clearSharedAltStack();
+    m_escapedAltArrays.clear();
 
 #ifdef ENABLE_DEBUGGER
     if (m_debugInfoGen) {
@@ -201,6 +593,292 @@ void ASTToBytecodeVisitor::visit(ContractNode& node)
     }
 #endif
     LOG_DEBUG("Visiting contract node end. name: " + node.name);
+}
+
+void ASTToBytecodeVisitor::collectSelfPlaceholderLengths(
+    const ContractNode& node
+)
+{
+    m_selfPlaceholderLengths.clear();
+
+    for (const auto& member : node.members) {
+        const auto* constructor =
+            dynamic_cast<const ConstructorNode*>(member.get());
+        if (!constructor || !constructor->block) {
+            continue;
+        }
+
+        std::unordered_map<std::string, std::string> paramTypes;
+        for (const auto& param : constructor->parameters) {
+            paramTypes[param.name] = param.type;
+        }
+
+        collectSelfPlaceholderLengthsFromStmt(
+            constructor->block.get(), paramTypes
+        );
+    }
+}
+
+void ASTToBytecodeVisitor::collectSelfPlaceholderLengthsFromStmt(
+    const StmtNode* stmt,
+    const std::unordered_map<std::string, std::string>& paramTypes
+)
+{
+    if (!stmt) {
+        return;
+    }
+
+    if (const auto* block = dynamic_cast<const BlockNode*>(stmt)) {
+        for (const auto& child : block->statements) {
+            collectSelfPlaceholderLengthsFromStmt(child.get(), paramTypes);
+        }
+        return;
+    }
+
+    if (const auto* assign = dynamic_cast<const AssignNode*>(stmt)) {
+        auto selfPath = extractSelfPath(assign->name.get());
+        auto paramName = extractIdentifierName(assign->value.get());
+        if (!selfPath.has_value() || !paramName.has_value()) {
+            return;
+        }
+
+        auto typeIt = paramTypes.find(paramName.value());
+        if (typeIt == paramTypes.end()) {
+            return;
+        }
+
+        auto byteLength = fixedByteLengthFromType(typeIt->second);
+        if (!byteLength.has_value()) {
+            return;
+        }
+
+        m_selfPlaceholderLengths[selfPath.value()] = byteLength.value();
+        LOG_DEBUG(
+            "Registered self placeholder length: ",
+            selfPath.value(),
+            " -> ",
+            byteLength.value(),
+            " bytes"
+        );
+        return;
+    }
+
+    if (const auto* ifNode = dynamic_cast<const IfNode*>(stmt)) {
+        collectSelfPlaceholderLengthsFromStmt(
+            ifNode->thenBranch.get(), paramTypes
+        );
+        collectSelfPlaceholderLengthsFromStmt(
+            ifNode->elseBranch.get(), paramTypes
+        );
+        return;
+    }
+
+    if (const auto* forNode = dynamic_cast<const ForNode*>(stmt)) {
+        collectSelfPlaceholderLengthsFromStmt(forNode->body.get(), paramTypes);
+    }
+}
+
+std::optional<std::string> ASTToBytecodeVisitor::extractSelfPath(
+    const ExprNode* expr
+)
+{
+    if (!expr) {
+        return std::nullopt;
+    }
+
+    if (const auto* identifier = dynamic_cast<const IdentifierNode*>(expr)) {
+        if (identifier->name == "self") {
+            return std::string("self");
+        }
+        return std::nullopt;
+    }
+
+    if (const auto* field = dynamic_cast<const FieldAccessNode*>(expr)) {
+        auto basePath = extractSelfPath(field->base.get());
+        if (!basePath.has_value()) {
+            return std::nullopt;
+        }
+        return basePath.value() + "." + field->field;
+    }
+
+    return std::nullopt;
+}
+
+std::optional<std::string> ASTToBytecodeVisitor::extractIdentifierName(
+    const ExprNode* expr
+)
+{
+    if (!expr) {
+        return std::nullopt;
+    }
+    if (const auto* identifier = dynamic_cast<const IdentifierNode*>(expr)) {
+        return identifier->name;
+    }
+    return std::nullopt;
+}
+
+std::optional<size_t> ASTToBytecodeVisitor::fixedByteLengthFromType(
+    const std::string& type
+)
+{
+    auto parseHexLength = [](const std::string& value)
+        -> std::optional<size_t> {
+        if (value.rfind("hex", 0) != 0 || value.size() <= 3) {
+            return std::nullopt;
+        }
+        const std::string digits = value.substr(3);
+        if (digits.empty() ||
+            !std::all_of(digits.begin(), digits.end(), [](unsigned char c) {
+                return std::isdigit(c) != 0;
+            })) {
+            return std::nullopt;
+        }
+        try {
+            const size_t parsed = std::stoull(digits);
+            return parsed == 0 ? std::nullopt
+                               : std::optional<size_t>(parsed);
+        } catch (...) {
+            return std::nullopt;
+        }
+    };
+
+    if (auto arrayType = apc::util::parseFixedArrayType(type)) {
+        const auto elementLength =
+            arrayType->elementType == "uint64"
+                ? std::optional<size_t>(8)
+                : parseHexLength(arrayType->elementType);
+        if (!elementLength.has_value() ||
+            arrayType->size >
+                std::numeric_limits<size_t>::max() /
+                    elementLength.value()) {
+            return std::nullopt;
+        }
+        return arrayType->size * elementLength.value();
+    }
+
+    if (auto hexLength = parseHexLength(type)) {
+        return hexLength.value();
+    }
+
+    if (type == "uint64") {
+        return 8;
+    }
+    if (type == "bool" || type == "boolean") {
+        return 1;
+    }
+    if (type == "ripemd160" || type == "pubkeyhash" || type == "sha1" ||
+        type == "address") {
+        return 20;
+    }
+    if (type == "sha256" || type == "privkey") {
+        return 32;
+    }
+
+    return std::nullopt;
+}
+
+std::string ASTToBytecodeVisitor::appendSelfPlaceholderLengths(
+    const std::string& script,
+    const ASTNode& node
+) const
+{
+    auto startsWith = [](const std::string& value,
+                         const std::string& prefix) {
+        return value.size() >= prefix.size() &&
+               value.compare(0, prefix.size(), prefix) == 0;
+    };
+    auto endsWith = [](const std::string& value,
+                       const std::string& suffix) {
+        return value.size() >= suffix.size() &&
+               value.compare(
+                   value.size() - suffix.size(), suffix.size(), suffix
+               ) == 0;
+    };
+
+    std::string result;
+    result.reserve(script.size() + 8);
+
+    size_t i = 0;
+    while (i < script.size()) {
+        if (script[i] != '<') {
+            result += script[i++];
+            continue;
+        }
+
+        const size_t end = script.find('>', i + 1);
+        if (end == std::string::npos) {
+            result += script.substr(i);
+            break;
+        }
+
+        std::string label = script.substr(i + 1, end - i - 1);
+        if (!startsWith(label, "self.")) {
+            result += script.substr(i, end - i + 1);
+            i = end + 1;
+            continue;
+        }
+
+        auto lengthIt = m_selfPlaceholderLengths.find(label);
+        if (lengthIt == m_selfPlaceholderLengths.end()) {
+            size_t digitStart = label.size();
+            while (digitStart > 0 &&
+                   std::isdigit(static_cast<unsigned char>(
+                       label[digitStart - 1]
+                   )) != 0) {
+                --digitStart;
+            }
+            if (digitStart < label.size() && digitStart > 0) {
+                const std::string baseLabel = label.substr(0, digitStart);
+                auto baseIt = m_selfPlaceholderLengths.find(baseLabel);
+                if (baseIt != m_selfPlaceholderLengths.end()) {
+                    const std::string suffix = label.substr(digitStart);
+                    try {
+                        size_t parsedChars = 0;
+                        const size_t suffixLength =
+                            std::stoull(suffix, &parsedChars, 10);
+                        if (parsedChars == suffix.size() &&
+                            suffixLength == baseIt->second) {
+                            lengthIt = baseIt;
+                        }
+                    } catch (...) {
+                    }
+                }
+            }
+        }
+
+        if (lengthIt == m_selfPlaceholderLengths.end()) {
+            if (m_isEmittingImmutableSuffix) {
+                result += "<" + label + ">";
+                i = end + 1;
+                continue;
+            }
+
+            SourceLocation loc = getNodeLocation(node);
+            SEMANTIC_ERROR(
+                "placeholder '<" + label +
+                    ">' appears in Push() but has no fixed byte length "
+                    "declaration",
+                loc,
+                "Declare the constructor source parameter with a fixed-size "
+                "type such as hex20 before using Push(self.x)"
+            );
+            LOG_ERROR(
+                "Push placeholder missing fixed byte length: <", label, ">"
+            );
+            throw std::runtime_error(
+                "Push placeholder missing fixed byte length: <" + label + ">"
+            );
+        }
+
+        const std::string lengthSuffix = std::to_string(lengthIt->second);
+        if (!endsWith(label, lengthSuffix)) {
+            label += lengthSuffix;
+        }
+        result += "<" + label + ">";
+        i = end + 1;
+    }
+
+    return result;
 }
 
 void ASTToBytecodeVisitor::visit(FunctionNode& node)
@@ -300,7 +978,7 @@ void ASTToBytecodeVisitor::visit(FunctionNode& node)
             LOG_DEBUG(
                 "Parameter '", paramName, "' is a basic type '", paramType, "'"
             );
-            m_scopePtr->defineSymbol(paramName);
+            m_scopePtr->defineSymbol(paramName, paramType);
             m_scopePtr->push(paramName, paramType, paramName);
             m_generator.emitUnlock("<" + paramName + ">");
         }
@@ -310,6 +988,9 @@ void ASTToBytecodeVisitor::visit(FunctionNode& node)
 
     std::string previousReturnType = m_currentFunctionReturnType;
     m_currentFunctionReturnType = node.returnType;
+    const auto* previousLifetimePlan = m_currentLifetimePlan;
+    m_currentLifetimePlan = lifetimePlanFor(node);
+    DEFER_BLOCK(m_currentLifetimePlan = previousLifetimePlan;);
     if (node.block) {
         const BlockNode* previousPublicFunctionBlock = m_publicFunctionBlock;
         m_publicFunctionBlock = node.block.get();
@@ -594,17 +1275,15 @@ std::optional<std::string> ASTToBytecodeVisitor::getAssignmentStorageName(
 
     if (auto index = dynamic_cast<const IndexAccessNode*>(expr)) {
         auto baseName = getAssignmentStorageName(index->base.get());
-        auto literal = dynamic_cast<const LiteralNode*>(index->index.get());
-        if (!baseName.has_value() || !literal ||
-            literal->type != LiteralNode::Type::Number) {
+        const auto indexValue = index->index
+                                    ? resolveCompileTimeIndex(*index->index)
+                                    : std::nullopt;
+        if (!baseName.has_value() || !indexValue.has_value() ||
+            indexValue.value() < 0) {
             return std::nullopt;
         }
-        try {
-            return baseName.value() + "[" +
-                   numberToScriptHex(std::stoll(literal->value)) + "]";
-        } catch (const std::exception&) {
-            return std::nullopt;
-        }
+        return baseName.value() + "[" +
+               numberToScriptHex(indexValue.value()) + "]";
     }
 
     return std::nullopt;
@@ -1172,10 +1851,56 @@ void ASTToBytecodeVisitor::visit(IfNode& node)
 {
     DEFER([]() { LOG_DEBUG("Visiting if node end."); });
     LOG_DEBUG("Visiting if node start.");
+    ++m_lifetimeControlFlowDepth;
+    DEFER_BLOCK(--m_lifetimeControlFlowDepth;);
 
 #ifdef ENABLE_DEBUGGER
     setCurrentLocationForGenerator(node);
 #endif
+
+    if (!node.thenBranch) {
+        SourceLocation loc = getNodeLocation(node);
+        LOG_ERROR(
+            "Syntax error at line ",
+            node.pos.first,
+            ", column ",
+            node.pos.second,
+            " - if statement missing then branch"
+        );
+        SYNTAX_ERROR(
+            "if statement missing then branch",
+            loc,
+            "Add a then branch after the condition"
+        );
+        return;
+    }
+
+    // Statically expanded Range targets and ordinary fixed numeric bindings
+    // can make the condition constant. Emit only the reachable branch; a
+    // false condition without else is an empty statement.
+    if (node.condition) {
+        auto compileTimeCondition =
+            resolveCompileTimeCondition(*node.condition);
+        if (compileTimeCondition.has_value()) {
+            StmtNode* selectedBranch = compileTimeCondition.value() != 0
+                                           ? node.thenBranch.get()
+                                           : node.elseBranch.get();
+            if (!selectedBranch) {
+                m_lastFlowResult = FlowResult::FallsThrough;
+                return;
+            }
+
+            m_lastFlowResult = FlowResult::FallsThrough;
+            selectedBranch->accept(*this);
+            const FlowResult selectedFlow = m_lastFlowResult;
+
+            // BlockNode keeps its selected child scope active. Commit the
+            // emitted state and discard only the saved entry snapshot.
+            m_scopePtr->popScopeStack();
+            m_lastFlowResult = selectedFlow;
+            return;
+        }
+    }
 
     // 优化: if (a != b) 用 OP_EQUAL+OP_NOTIF 替 OP_EQUAL+OP_NOT+OP_IF (省 1 字节).
     auto* condOpNode = dynamic_cast<OpNode*>(node.condition.get());
@@ -1186,10 +1911,10 @@ void ASTToBytecodeVisitor::visit(IfNode& node)
         getAssignmentStorageName(node.condition.get());
 
     if (useNotIf) {
-        // 临时把 != 改 ==, 仅生成 OP_EQUAL.
-        condOpNode->op = "==";
+        // 临时把 != 改 ==, 仅生成 OP_EQUAL. The scoped override restores
+        // the shared AST even when lowering the condition throws.
+        ScopedStringOverride emitAsEqual(condOpNode->op, "==");
         visitExpr(*node.condition);
-        condOpNode->op = "!=";
     } else {
         visitExpr(*node.condition);
     }
@@ -1219,12 +1944,58 @@ void ASTToBytecodeVisitor::visit(IfNode& node)
         }
     }
 
+#ifdef ENABLE_DEBUGGER
+    // Visiting the condition updates the generator location. Attribute the
+    // actual control-flow opcode to the if statement instead.
+    setCurrentLocationForGenerator(node);
+#endif
     m_generator.emit(
         useNotIf ? tbc::BytOpcode::OP_NOTIF : tbc::BytOpcode::OP_IF
     );
 
     const SymbolTable entryState = m_scopePtr->getCurrentSymtab();
     const AltStackSnapshot entryAltStack = captureAltStack();
+    const ControlFlowStateSnapshot entryControlState =
+        m_scopePtr->captureControlFlowState();
+
+    auto reportImplicitJoinError = [this, &node](
+                                       const ControlFlowJoinResult& result
+                                   ) {
+        SourceLocation loc = getNodeLocation(node);
+        std::string stateName = "compiler storage";
+        switch (result.mismatch) {
+            case ControlFlowMismatch::MAIN_STACK_DEPTH:
+            case ControlFlowMismatch::MAIN_STACK_LAYOUT:
+                stateName = "main-stack";
+                break;
+            case ControlFlowMismatch::ALT_STACK_DEPTH:
+            case ControlFlowMismatch::ALT_STACK_LAYOUT:
+                stateName = "alternative-stack";
+                break;
+            case ControlFlowMismatch::LEXICAL_SCOPE:
+                stateName = "lexical-scope";
+                break;
+            default:
+                break;
+        }
+
+        std::ostringstream oss;
+        oss << "if without else changes " << stateName
+            << " state at the join point";
+        if (!result.detail.empty()) {
+            oss << " - " << result.detail;
+        }
+        const std::string message = oss.str();
+        SEMANTIC_ERROR(
+            message,
+            loc,
+            "Restore the entry state before leaving the if branch, or add an "
+            "else branch that produces a compatible state"
+        );
+        LOG_ERROR(message);
+        throw std::runtime_error(message);
+    };
+
     const auto mergeSymbols =
         collectIfMergeSymbols(node, entryState, entryAltStack);
     AltStackSnapshot desiredAltStack = entryAltStack;
@@ -1461,33 +2232,24 @@ void ASTToBytecodeVisitor::visit(IfNode& node)
         state.push(inlineGuardName, "bool", inlineGuardName);
     };
 
-    if (!node.thenBranch) {
-        SourceLocation loc = getNodeLocation(node);
-        LOG_ERROR(
-            "Syntax error at line ",
-            node.pos.first,
-            ", column ",
-            node.pos.second,
-            " - if statement missing then branch"
-        );
-        SYNTAX_ERROR(
-            "if statement missing then branch",
-            loc,
-            "Add a then branch after the condition"
-        );
-        return; // 跳过这个 if, 让编译继续.
-    } else {
-        m_lastFlowResult = FlowResult::FallsThrough;
-        node.thenBranch->accept(*this);
-    }
+    m_lastFlowResult = FlowResult::FallsThrough;
+    node.thenBranch->accept(*this);
+    const FlowResult emittedThenFlow = m_lastFlowResult;
 
 #ifdef ENABLE_DEBUGGER
     setCurrentLocationForGenerator(node);
 #endif
-    if (thenReachesEnd) {
+    if (node.elseBranch && thenReachesEnd) {
         materializeBranchSymbols(mergeSymbols, node, desiredAltStack);
     }
-    appendInlineGuardState(thenFlow);
+    if (node.elseBranch) {
+        appendInlineGuardState(thenFlow);
+    } else if (emittedThenFlow == FlowResult::InlineReturn) {
+        reportImplicitJoinError(
+            {ControlFlowMismatch::SYMBOL_METADATA,
+             "lowercase return state differs at the join point"}
+        );
+    }
     LOG_DEBUG("End of if branch");
     SymbolTable thenState = m_scopePtr->exitScope();
     const AltStackSnapshot thenAltStack = captureAltStack();
@@ -1496,26 +2258,39 @@ void ASTToBytecodeVisitor::visit(IfNode& node)
     m_scopePtr->replaceCurrentSymtab(entryState);
     restoreAltStack(entryAltStack);
 
-    if (node.elseBranch) {
-        m_generator.emit(tbc::BytOpcode::OP_ELSE);
+    if (!node.elseBranch) {
+        if (emittedThenFlow == FlowResult::FallsThrough) {
+            ControlFlowStateSnapshot thenControlState;
+            thenControlState.symbolTable = thenState;
+            thenControlState.altStack = thenAltStack.elements;
+            thenControlState.mainCombinedSize =
+                thenState.m_stackPtr
+                    ? thenState.m_stackPtr->getCombinedStackSize()
+                    : 0;
+            thenControlState.altCombinedSize =
+                thenAltStack.combinedStackSize;
+            thenControlState.lexicalDepth = entryControlState.lexicalDepth;
+
+            const auto joinResult = m_scopePtr->compareControlFlowStates(
+                entryControlState,
+                thenControlState,
+                ControlFlowJoinPolicy::IMPLICIT_EMPTY_BRANCH
+            );
+            if (!joinResult.compatible()) {
+                reportImplicitJoinError(joinResult);
+            }
+        }
+
+        m_generator.emit(tbc::BytOpcode::OP_ENDIF);
+        m_scopePtr->replaceCurrentSymtab(entryState);
+        restoreAltStack(entryAltStack);
         m_lastFlowResult = FlowResult::FallsThrough;
-        node.elseBranch->accept(*this);
-    } else {
-        // TODO: 暂不支持缺 else 分支.
-        SourceLocation loc = getNodeLocation(node);
-        std::ostringstream oss;
-        oss << "if statement at line " << node.pos.first << ", column "
-            << node.pos.second
-            << " is missing else branch - this is currently not supported";
-        SYNTAX_ERROR(
-            oss.str(),
-            loc,
-            "Add an else branch to the if statement or use a different control "
-            "structure"
-        );
-        LOG_ERROR(oss.str());
-        throw std::runtime_error(oss.str());
+        return;
     }
+
+    m_generator.emit(tbc::BytOpcode::OP_ELSE);
+    m_lastFlowResult = FlowResult::FallsThrough;
+    node.elseBranch->accept(*this);
 
 #ifdef ENABLE_DEBUGGER
     setCurrentLocationForGenerator(node);
@@ -1678,17 +2453,83 @@ void ASTToBytecodeVisitor::visit(IfNode& node)
 void ASTToBytecodeVisitor::visit(ForNode& node)
 {
     LOG_DEBUG("Visiting for node start.");
+    ++m_lifetimeControlFlowDepth;
+    DEFER_BLOCK(--m_lifetimeControlFlowDepth;);
 
 #ifdef ENABLE_DEBUGGER
     setCurrentLocationForGenerator(node);
 #endif
 
-    const auto& iterations = node.getStaticIterations();
-
-    if (iterations.empty()) {
-        LOG_WARNING(
-            "for loop has no iterations after static analysis, skipping body"
+    auto* rangeCall = dynamic_cast<CallNode*>(node.iterable.get());
+    if (!rangeCall || rangeCall->funcName != "Range" ||
+        rangeCall->args.empty() || rangeCall->args.size() > 3) {
+        SourceLocation loc = getNodeLocation(node);
+        SEMANTIC_ERROR(
+            "invalid static Range loop reached bytecode lowering",
+            loc,
+            "Use Range with one to three compile-time integer arguments"
         );
+        throw std::runtime_error("invalid static Range loop");
+    }
+
+    std::vector<int64_t> bounds;
+    bounds.reserve(rangeCall->args.size());
+    for (const auto& argument : rangeCall->args) {
+        const auto value = evaluateCompileTimeInteger(*argument, true);
+        if (!value.isKnown()) {
+            SourceLocation loc = getNodeLocation(*argument);
+            std::string message =
+                "range() arguments must remain compile-time integers during "
+                "bytecode lowering";
+            if (value.isError()) {
+                message += ": " + value.diagnostic;
+            }
+            SEMANTIC_ERROR(
+                message,
+                loc,
+                "Use literals, fixed integer bindings, or outer loop targets"
+            );
+            throw std::runtime_error(
+                "range argument lost its compile-time binding"
+            );
+        }
+        bounds.push_back(value.value);
+    }
+
+    int64_t start = 0;
+    int64_t stop = 0;
+    int64_t step = 1;
+    if (bounds.size() == 1) {
+        stop = bounds[0];
+    } else if (bounds.size() == 2) {
+        start = bounds[0];
+        stop = bounds[1];
+    } else {
+        start = bounds[0];
+        stop = bounds[1];
+        step = bounds[2];
+    }
+
+    auto planResult = apc::compiler::RangePlan::build(
+        start,
+        stop,
+        step,
+        apc::compiler::RangeLimits{
+            apc::compiler::kMaxStaticRangeIterations}
+    );
+    if (!planResult) {
+        SourceLocation loc = getNodeLocation(node);
+        SEMANTIC_ERROR(
+            planResult.error().message,
+            loc,
+            "Reduce the static range or raise the compiler loop limit"
+        );
+        throw std::runtime_error(planResult.error().message);
+    }
+    const auto& plan = planResult.value();
+
+    if (plan.empty()) {
+        LOG_DEBUG("static RangePlan is empty; skipping loop body");
         m_lastFlowResult = FlowResult::FallsThrough;
         return;
     }
@@ -1699,11 +2540,6 @@ void ASTToBytecodeVisitor::visit(ForNode& node)
         (void)unusedInfo;
         loopOuterWholeArrays.insert(arrayName);
     }
-    std::string targetName = node.target;
-    const bool targetExistedBeforeLoop =
-        m_scopePtr->symbolExists(targetName);
-    const std::string& inferredType = node.getInferredType();
-
     // loop target 属于 for scope；每次展开的 body 又属于独立 BlockNode
     // scope。这样 body 局部变量能在下一轮重新声明，外层变量的更新则从
     // 上一轮延续。
@@ -1780,6 +2616,16 @@ void ASTToBytecodeVisitor::visit(ForNode& node)
         // 留下的声明/新槽元数据，同时保留外层变量在 body 中重新绑定后
         // 产生的新槽记录。
         state.m_declaredSymbols = iterationEntry.m_declaredSymbols;
+        state.m_declaredSymbols.erase(
+            std::remove_if(
+                state.m_declaredSymbols.begin(),
+                state.m_declaredSymbols.end(),
+                [&](const std::string& name) {
+                    return !state.hasScopeEntry(name);
+                }
+            ),
+            state.m_declaredSymbols.end()
+        );
         state.m_newSymbol.erase(
             std::remove_if(
                 state.m_newSymbol.begin(),
@@ -1802,43 +2648,34 @@ void ASTToBytecodeVisitor::visit(ForNode& node)
 
     FlowResult loopFlow = FlowResult::FallsThrough;
 
-    for (size_t idx = 0; idx < iterations.size(); ++idx) {
-        std::string literalStr = std::to_string(iterations[idx]);
-
-        if (!targetExistedBeforeLoop && idx == 0) {
-            auto literalExpr = std::make_unique<LiteralNode>(
-                LiteralNode::Type::Number,
-                literalStr,
-                node.pos.first,
-                node.pos.second
+    for (uint64_t idx = 0; idx < plan.count(); ++idx) {
+        if (auto budgetError = m_loopExpansionBudget.consume()) {
+            SourceLocation loc = getNodeLocation(node);
+            SEMANTIC_ERROR(
+                budgetError->message,
+                loc,
+                "Reduce nested static loop expansion"
             );
-            auto varDecl = VarDeclNode(
-                node.target,
-                inferredType,
-                node.pos.first,
-                node.pos.second,
-                std::move(literalExpr)
-            );
-            varDecl.accept(*this);
-        } else {
-            auto literalExpr = std::make_unique<LiteralNode>(
-                LiteralNode::Type::Number,
-                literalStr,
-                node.pos.first,
-                node.pos.second
-            );
-            auto identifierExpr = std::make_unique<IdentifierNode>(
-                node.target, node.pos.first, node.pos.second
-            );
-            auto assign = AssignNode(
-                std::move(identifierExpr),
-                std::move(literalExpr),
-                node.pos.first,
-                node.pos.second
-            );
-            assign.accept(*this);
+            throw std::runtime_error(budgetError->message);
         }
 
+        const auto iterationResult = plan.valueAt(idx);
+        const auto* iterationValue = std::get_if<int64_t>(&iterationResult);
+        if (!iterationValue) {
+            const auto& error =
+                std::get<apc::compiler::RangeError>(iterationResult);
+            SourceLocation loc = getNodeLocation(node);
+            INTERNAL_ERROR(
+                error.message,
+                loc,
+                "Report this invalid RangePlan value calculation"
+            );
+            throw std::runtime_error(error.message);
+        }
+
+        bindStaticLoopTarget(node, *iterationValue);
+
+        FlowResult bodyFlow = FlowResult::FallsThrough;
         if (node.body) {
             const SymbolTable iterationEntry =
                 m_scopePtr->getCurrentSymtab();
@@ -1847,7 +2684,7 @@ void ASTToBytecodeVisitor::visit(ForNode& node)
             // 复用统一的运行时局部清理逻辑。
             m_lastFlowResult = FlowResult::FallsThrough;
             node.body->accept(*this);
-            const FlowResult bodyFlow = m_lastFlowResult;
+            bodyFlow = m_lastFlowResult;
             SymbolTable iterationExit = m_scopePtr->getCurrentSymtab();
 
             // BlockNode::visit() 的 enterScope 只建立清理边界；for 在此
@@ -1860,41 +2697,31 @@ void ASTToBytecodeVisitor::visit(ForNode& node)
                     bodyFlow != FlowResult::FallsThrough
                 )
             );
+        }
 
-            if (bodyFlow != FlowResult::FallsThrough) {
-                loopFlow = bodyFlow;
-                break;
-            }
+        if (m_generator.getCurrentPC() >
+            apc::compiler::kMaxGeneratedLoopInstructions) {
+            SourceLocation loc = getNodeLocation(node);
+            const std::string message =
+                "generated instruction count exceeds static expansion limit "
+                + std::to_string(
+                    apc::compiler::kMaxGeneratedLoopInstructions);
+            SEMANTIC_ERROR(
+                message,
+                loc,
+                "Reduce the loop body or static iteration count"
+            );
+            throw std::runtime_error(message);
+        }
+
+        if (bodyFlow != FlowResult::FallsThrough) {
+            loopFlow = bodyFlow;
+            break;
         }
     }
 
     SymbolTable loopExitState = m_scopePtr->getCurrentSymtab();
     m_scopePtr->exitScope();
-
-    if (!targetExistedBeforeLoop) {
-        loopExitState.removeSymbol(node.target);
-        loopExitState.removeFixed(targetName);
-
-        auto isLoopTargetStorage = [&](const std::string& storageName) {
-            return storageBelongsTo(storageName, node.target);
-        };
-        loopExitState.m_newSymbol.erase(
-            std::remove_if(
-                loopExitState.m_newSymbol.begin(),
-                loopExitState.m_newSymbol.end(),
-                isLoopTargetStorage
-            ),
-            loopExitState.m_newSymbol.end()
-        );
-        loopExitState.m_keepSymbol.erase(
-            std::remove_if(
-                loopExitState.m_keepSymbol.begin(),
-                loopExitState.m_keepSymbol.end(),
-                isLoopTargetStorage
-            ),
-            loopExitState.m_keepSymbol.end()
-        );
-    }
 
     // 恢复父作用域的声明归属；栈/fixed/alt 内容来自最后一轮，确保外层
     // 变量的重新绑定跨迭代、跨 for 继续生效。
@@ -1912,6 +2739,88 @@ void ASTToBytecodeVisitor::visit(ForNode& node)
     m_lastFlowResult = loopFlow;
 
     LOG_DEBUG("Visiting for node end.");
+}
+
+void ASTToBytecodeVisitor::bindStaticLoopTarget(
+    ForNode& loop,
+    int64_t value
+)
+{
+    const bool isNewSymbol = !m_scopePtr->symbolExists(loop.target);
+    if (!isNewSymbol) {
+        const auto symbols =
+            m_scopePtr->getCurrentSymtab().getCurrentScopeSymbols();
+        const auto existing = std::find_if(
+            symbols.rbegin(),
+            symbols.rend(),
+            [&loop](const tbc::SymbolInfo& symbol) {
+                return symbol.getSymbolName() == loop.target;
+            }
+        );
+        const std::string existingType =
+            existing == symbols.rend()
+                ? std::string()
+                : existing->m_stackElement.getType();
+        const bool isNumericScalar =
+            existing != symbols.rend() && !existing->isArray() &&
+            !existing->isCompoundType() &&
+            apc::compiler::isCompatibleLoopTargetType(existingType);
+        if (!isNumericScalar) {
+            SourceLocation loc = getNodeLocation(loop);
+            const std::string message =
+                "for loop target '" + loop.target +
+                "' must be a numeric scalar";
+            SEMANTIC_ERROR(
+                message,
+                loc,
+                "Use a new loop target or an existing integer variable"
+            );
+            throw std::runtime_error(message);
+        }
+    }
+    if (isNewSymbol &&
+        !m_scopePtr->defineSymbol(loop.target, loop.getInferredType())) {
+        throw std::runtime_error(
+            "failed to define static loop target '" + loop.target + "'"
+        );
+    }
+
+    // A body assignment may have materialized the target on either runtime
+    // stack. The next induction assignment removes that slot before restoring
+    // a compiler-only fixed binding.
+    if (m_scopePtr->getPos(loop.target, true).has_value() &&
+        !moveAltElementToMain(loop.target)) {
+        throw std::runtime_error(
+            "failed to restore loop target from alternative stack"
+        );
+    }
+
+    if (auto position = m_scopePtr->getPos(loop.target)) {
+        if (*position != STACK_TOP_POS) {
+            emitRoll(*position);
+            m_scopePtr->roll(*position);
+        }
+        m_generator.emit(tbc::BytOpcode::OP_DROP);
+        m_scopePtr->pop();
+    }
+
+    m_scopePtr->setFixed(tbc::StackElement(
+        loop.target, "num", numberToScriptHex(value)
+    ));
+    m_scopePtr->markSymbolInitialized(loop.target);
+
+#ifdef ENABLE_DEBUGGER
+    if (isNewSymbol && m_debugInfoGen) {
+        m_debugInfoGen->onVariableDecl(
+            loop.target,
+            loop.getInferredType(),
+            extractDebugLocation(loop),
+            false,
+            -1,
+            false
+        );
+    }
+#endif
 }
 
 void ASTToBytecodeVisitor::visit(AssignNode& node)
@@ -1973,8 +2882,19 @@ void ASTToBytecodeVisitor::visit(AssignNode& node)
     visitExpr(*node.value);
 
     auto valueElementOpt = m_scopePtr->pop();
+    const auto* rhsCall = dynamic_cast<const CallNode*>(node.value.get());
+    const bool isPrivateCallResult =
+        rhsCall && m_privateFunctions.find(rhsCall->funcName) !=
+                       m_privateFunctions.end();
     auto rightHandSideElement =
         generalLamd(*node.value, valueElementOpt, "right-hand side");
+    // A private/library call may return a literal. Its lowercase-return path
+    // has already emitted the literal, so the script-shaped descriptor is a
+    // real runtime result rather than a compile-time fixed value.
+    if (!rightHandSideElement.has_value() && isPrivateCallResult &&
+        valueElementOpt.has_value()) {
+        rightHandSideElement = valueElementOpt;
+    }
     if (!rightHandSideElement.has_value()) {
         SourceLocation loc = getNodeLocation(*node.value);
         std::ostringstream oss;
@@ -2080,7 +3000,16 @@ void ASTToBytecodeVisitor::visit(AssignNode& node)
                         if (const auto arrayInfo =
                                 m_scopePtr->getArrayInfo(baseName.value());
                             arrayInfo.has_value() &&
-                            arrayInfo->isValidIndex(elementIndex)) {
+                            arrayInfo->isValidIndex(elementIndex) &&
+                            m_structDefinitions.find(arrayInfo->elementType) ==
+                                m_structDefinitions.end()) {
+                            // A missing scalar element can be recreated as one
+                            // slot. A struct-array element is represented by a
+                            // flattened/packed composite layout and must keep
+                            // using the ordinary assignment path; treating an
+                            // unmaterialized element as a deleted scalar would
+                            // incorrectly require the RHS type to equal the
+                            // struct name (for example Input vs hex36).
                             restoredTargetType = arrayInfo->elementType;
                             restoringDeletedTarget = true;
                         } else if (const auto wholeInfo =
@@ -2323,10 +3252,6 @@ void ASTToBytecodeVisitor::visit(AssignNode& node)
         throw std::runtime_error(oss.str());
     }
 
-    const auto* rhsCall = dynamic_cast<const CallNode*>(node.value.get());
-    const bool isPrivateCallResult =
-        rhsCall && m_privateFunctions.find(rhsCall->funcName) !=
-                       m_privateFunctions.end();
     const bool isRuntimeExpressionResult =
         CompilerPlaceholder::isPlaceholder(valueElementStr) ||
         isPrivateCallResult;
@@ -2371,6 +3296,9 @@ void ASTToBytecodeVisitor::visit(AssignNode& node)
         elementPosOpt.has_value() && comElementPos.has_value();
 
     if (isStackToStackCopy) {
+        if (!nameElementStr.empty()) {
+            m_scopePtr->removeFixed(nameElementStr);
+        }
         int64_t posA = elementPosOpt.value();
         int64_t posB = comElementPos.value();
 
@@ -2386,45 +3314,24 @@ void ASTToBytecodeVisitor::visit(AssignNode& node)
             );
             LOG_ERROR(errorStream.str());
             throw std::runtime_error(errorStream.str());
-        } else if (posB < posA) {
-            // A: b 比 a 更靠近栈顶 (posB < posA).
-            // 1. TOALTSTACK × posB: b 上方元素暂存到 alt.
-            for (int64_t i = 0; i < posB; i++) {
-                m_generator.emit(tbc::BytOpcode::OP_TOALTSTACK);
-            }
-            // 2. DROP: 移除栈顶 b.
-            m_generator.emit(tbc::BytOpcode::OP_DROP);
-            // 3. PICK(posA - posB - 1): 按移动后深度修正, 拷贝 a 到栈顶.
-            emitPick(posA - posB - 1);
-            // 4. FROMALTSTACK × posB: 恢复保存的元素.
-            for (int64_t i = 0; i < posB; i++) {
-                m_generator.emit(tbc::BytOpcode::OP_FROMALTSTACK);
-            }
-        } else {
-            // B: a 比 b 更靠近栈顶 (posA < posB).
-            // 特例 posA==0 && posB==1: a, b, T -> a, a, T,
-            // 用 OP_NIP+OP_DUP (2 字节) 替代通用 7 字节序列.
-            if (posA == 0 && posB == 1) {
-                m_generator.emit(tbc::BytOpcode::OP_NIP);
-                m_generator.emit(tbc::BytOpcode::OP_DUP);
-            } else {
-                // 通用序列 (posA<posB): 约 2·posB + 4 字节.
-                // 1. PICK(posA): 拷贝 a 到栈顶.
-                emitPick(posA);
-                // 2. (SWAP+TOALTSTACK) × posB: 元素转 alt, 保留 a 的拷贝.
-                for (int64_t i = 0; i < posB; i++) {
-                    emitRoll(1);
-                    m_generator.emit(tbc::BytOpcode::OP_TOALTSTACK);
-                }
-                // 3. TOALTSTACK: a 的拷贝最后压入 alt (先弹出).
-                m_generator.emit(tbc::BytOpcode::OP_TOALTSTACK);
-                // 4. DROP: 移除栈顶 b.
-                m_generator.emit(tbc::BytOpcode::OP_DROP);
-                // 5. FROMALTSTACK × (posB+1): 弹 a 拷贝, 再恢复 s0..s_{posB-1}.
-                for (int64_t i = 0; i <= posB; i++) {
-                    m_generator.emit(tbc::BytOpcode::OP_FROMALTSTACK);
-                }
-            }
+        }
+
+#ifdef ENABLE_DEBUGGER
+        setCurrentLocationForGenerator(node);
+#endif
+        const auto copyEmission = emitCopyAssignment(
+            m_generator,
+            static_cast<size_t>(posA),
+            static_cast<size_t>(posB)
+        );
+        if (copyEmission.usedPlanner) {
+            LOG_DEBUG(
+                "Shortest shallow copy-assignment plan selected: ",
+                copyEmission.legacyBytes,
+                " -> ",
+                copyEmission.emittedBytes,
+                " bytes"
+            );
         }
         LOG_INFO(
             "Variable \"",
@@ -2471,6 +3378,7 @@ void ASTToBytecodeVisitor::visit(AssignNode& node)
         if (!comElementPos.has_value()) {
             if (isZeroCostAssignment) {
                 // 3a: 非栈左 = 栈上右 -> 原地重命名, 零字节码.
+                m_scopePtr->removeFixed(nameElementStr);
                 m_scopePtr->renameAtPosition(
                     static_cast<int>(elementPosOpt.value()), nameElementStr
                 );
@@ -2484,6 +3392,7 @@ void ASTToBytecodeVisitor::visit(AssignNode& node)
                 );
             } else if (isRuntimeExpressionResult) {
                 // 3b: 非栈左 = 运行时表达式结果 -> push 左值并绑定栈顶槽.
+                m_scopePtr->removeFixed(nameElementStr);
                 m_scopePtr->push(
                     nameElementStr,
                     rightHandSideElement.value().getType(),
@@ -2513,6 +3422,7 @@ void ASTToBytecodeVisitor::visit(AssignNode& node)
             if (isRuntimeExpressionResult) {
                 // 1b: 栈左 = 运行时表达式结果 -> 字节码已含 +1 偏移
                 // ROLL+DROP，编译器层 roll LHS 到栈顶作为新内容。
+                m_scopePtr->removeFixed(nameElementStr);
                 m_scopePtr->roll(comElementPos.value());
                 LOG_INFO(
                     "Stack to placeholder assignment: rolled \"",
@@ -2597,10 +3507,15 @@ void ASTToBytecodeVisitor::visit(ExprStmtNode& node)
     LOG_DEBUG("Visiting exprstmt node end.");
 }
 
-bool ASTToBytecodeVisitor::moveAltElementToMain(const std::string& name)
+bool ASTToBytecodeVisitor::moveAltElementToMain(
+    const std::string& name,
+    bool resolveBinding
+)
 {
     SymbolTable& symbolTable = m_scopePtr->getCurrentSymtab();
-    auto positionOpt = symbolTable.getPos(name, true);
+    auto positionOpt = resolveBinding
+                           ? symbolTable.getPos(name, true)
+                           : symbolTable.getPhysicalPos(name, true);
     if (!positionOpt.has_value()) {
         return false;
     }
@@ -2626,6 +3541,418 @@ bool ASTToBytecodeVisitor::moveAltElementToMain(const std::string& name)
         );
     }
 
+    return true;
+}
+
+std::optional<ASTToBytecodeVisitor::ResolvedCompositeArrayElement>
+ASTToBytecodeVisitor::resolveCompositeArrayElement(
+    ExprNode& expression,
+    const std::string& functionName,
+    const SourceLocation& loc
+)
+{
+    auto* access = dynamic_cast<IndexAccessNode*>(&expression);
+    if (!access || !access->base || !access->index) {
+        return std::nullopt;
+    }
+    auto* base = dynamic_cast<IdentifierNode*>(access->base.get());
+    if (!base) {
+        return std::nullopt;
+    }
+
+    const std::string arrayName = base->name;
+    auto lexicalArray = m_scopePtr->getArrayInfo(arrayName);
+    SymbolTable& symtab = m_scopePtr->getCurrentSymtab();
+    const bool lexicalNameExists = symtab.hasScopeEntry(arrayName);
+    if (lexicalNameExists && !lexicalArray.has_value()) {
+        // A scalar/struct with the same spelling shadows the escaped channel.
+        // Let the ordinary expression path diagnose the invalid index access.
+        return std::nullopt;
+    }
+    auto escapedIt = m_escapedAltArrays.find(arrayName);
+    const bool usesEscapedView = !lexicalArray.has_value() ||
+                                 symtab.isExternalArrayView(arrayName);
+
+    std::optional<ArrayInfo> arrayInfo = lexicalArray;
+    if (!arrayInfo.has_value() && functionName == "SetMain" &&
+        escapedIt != m_escapedAltArrays.end()) {
+        arrayInfo = escapedIt->second.arrayInfo;
+    }
+    if (!arrayInfo.has_value()) {
+        return std::nullopt;
+    }
+    if (m_structDefinitions.find(arrayInfo->elementType) ==
+        m_structDefinitions.end()) {
+        return std::nullopt;
+    }
+
+    auto index = resolveCompileTimeIndex(*access->index);
+    if (!index.has_value()) {
+        const std::string message =
+            functionName + "() requires a compile-time index for composite "
+            "array '" + arrayName + "'";
+        SEMANTIC_ERROR(
+            message, loc,
+            "Use a constant index or a statically unrolled Range loop"
+        );
+        throw std::runtime_error(message);
+    }
+    if (index.value() < 0 ||
+        static_cast<uint64_t>(index.value()) >= arrayInfo->size) {
+        const std::string message =
+            "Array index " + std::to_string(index.value()) +
+            " is out of bounds for '" + arrayName + "' of length " +
+            std::to_string(arrayInfo->size);
+        SEMANTIC_ERROR(message, loc, "Use an index within the array bounds");
+        throw std::runtime_error(message);
+    }
+
+    ResolvedCompositeArrayElement group;
+    group.arrayName = arrayName;
+    group.arrayInfo = arrayInfo.value();
+    group.elementLabel = arrayInfo->getElementLabel(
+        static_cast<size_t>(index.value())
+    );
+    group.usesEscapedView = usesEscapedView;
+
+    // SetMain must restore exactly the physical slots captured by SetAlt.
+    if (functionName == "SetMain" && usesEscapedView &&
+        escapedIt != m_escapedAltArrays.end()) {
+        auto layoutsIt =
+            escapedIt->second.elementLayouts.find(group.elementLabel);
+        if (layoutsIt != escapedIt->second.elementLayouts.end()) {
+            SymbolTable& currentSymtab = m_scopePtr->getCurrentSymtab();
+            // A channel may be produced repeatedly with different actual
+            // arguments. Select the newest complete layout still live on the
+            // altstack. A partially present newest batch is always an error.
+            for (auto layout = layoutsIt->second.rbegin();
+                 layout != layoutsIt->second.rend();
+                 ++layout) {
+                const size_t liveLeafCount = static_cast<size_t>(
+                    std::count_if(
+                        layout->begin(),
+                        layout->end(),
+                        [&](const StackElement& slot) {
+                            return currentSymtab
+                                .getPhysicalPos(slot.getName(), true)
+                                .has_value();
+                        }
+                    )
+                );
+                if (liveLeafCount == layout->size()) {
+                    group.slots = *layout;
+                    return group;
+                }
+                if (liveLeafCount != 0) {
+                    const std::string message =
+                        "Alternate-stack binding for composite element '" +
+                        group.elementLabel + "' is only partially live (" +
+                        std::to_string(liveLeafCount) + "/" +
+                        std::to_string(layout->size()) + " leaves)";
+                    SEMANTIC_ERROR(
+                        message, loc,
+                        "Move and restore the complete struct-array element "
+                        "as one ownership group"
+                    );
+                    throw std::runtime_error(message);
+                }
+            }
+        }
+    }
+
+    if (functionName == "SetMain" && usesEscapedView) {
+        const std::string message =
+            "No live alternate-stack binding was produced for '" +
+            group.elementLabel + "'";
+        SEMANTIC_ERROR(
+            message, loc,
+            "Call the private producer before restoring this array element"
+        );
+        throw std::runtime_error(message);
+    }
+
+    const bool fromAlt = functionName == "SetMain";
+    auto onExpectedStack = [&](const std::string& name) {
+        return symtab.getPos(name, fromAlt).has_value();
+    };
+    auto onOppositeStack = [&](const std::string& name) {
+        return symtab.getPos(name, !fromAlt).has_value();
+    };
+
+    auto fields = getStructFieldsExpanded(
+        arrayInfo->elementType, group.elementLabel, m_structDefinitions
+    );
+    const bool rootExpected = onExpectedStack(group.elementLabel);
+    const bool rootOpposite = onOppositeStack(group.elementLabel);
+    size_t expectedFields = 0;
+    size_t oppositeFields = 0;
+    for (const auto& [fieldName, fieldType] : fields) {
+        (void)fieldType;
+        expectedFields += onExpectedStack(fieldName) ? 1 : 0;
+        oppositeFields += onOppositeStack(fieldName) ? 1 : 0;
+    }
+
+    if (rootExpected && !rootOpposite && expectedFields == 0 &&
+        oppositeFields == 0) {
+        const std::string physicalRoot =
+            symtab.resolveBindSymbol(group.elementLabel);
+        group.slots.emplace_back(
+            physicalRoot, arrayInfo->elementType, physicalRoot
+        );
+        return group;
+    }
+
+    if (!rootExpected && !rootOpposite && !fields.empty() &&
+        expectedFields == fields.size() && oppositeFields == 0) {
+        for (const auto& [fieldName, fieldType] : fields) {
+            const std::string physicalField =
+                symtab.resolveBindSymbol(fieldName);
+            group.slots.emplace_back(
+                physicalField, fieldType, physicalField
+            );
+        }
+        return group;
+    }
+
+    const std::string message =
+        "Composite array element '" + group.elementLabel +
+        "' is missing, ambiguous, or split across main and alternate stacks";
+    SEMANTIC_ERROR(
+        message, loc,
+        "Move or consume the complete struct-array element as one value"
+    );
+    throw std::runtime_error(message);
+}
+
+void ASTToBytecodeVisitor::moveCompositeArrayElementToAlt(
+    const ResolvedCompositeArrayElement& group,
+    const SourceLocation& loc
+)
+{
+    SymbolTable& symtab = m_scopePtr->getCurrentSymtab();
+    std::unordered_set<std::string> uniqueNames;
+    for (const auto& slot : group.slots) {
+        const std::string& name = slot.getName();
+        if (!uniqueNames.insert(name).second ||
+            !symtab.getPhysicalPos(name).has_value() ||
+            symtab.getPhysicalPos(name, true).has_value()) {
+            const std::string message =
+                "Cannot move composite element '" + group.elementLabel +
+                "' to alternate stack: leaf '" + name +
+                "' is missing or has inconsistent residency";
+            SEMANTIC_ERROR(
+                message, loc,
+                "Ensure every composite leaf is present on the main stack"
+            );
+            throw std::runtime_error(message);
+        }
+    }
+
+    // Move top-most canonical leaves first. The resulting altstack has the
+    // first declaration-order leaf on top, so SetMain can restore leaves in
+    // canonical order without reversing the runtime value.
+    for (auto it = group.slots.rbegin(); it != group.slots.rend(); ++it) {
+        auto position = symtab.getPhysicalPos(it->getName());
+        if (!position.has_value()) {
+            throw std::runtime_error(
+                "composite SetAlt preflight became invalid"
+            );
+        }
+        emitRoll(position.value());
+        if (position.value() > 0) {
+            m_scopePtr->roll(position.value());
+        }
+        m_generator.emit(tbc::BytOpcode::OP_TOALTSTACK);
+        symtab.m_altStackPtr->moveTopToStack(
+            *symtab.m_stackPtr.get(), true
+        );
+    }
+}
+
+void ASTToBytecodeVisitor::moveCompositeArrayElementToMain(
+    const ResolvedCompositeArrayElement& group,
+    const SourceLocation& loc
+)
+{
+    SymbolTable& symtab = m_scopePtr->getCurrentSymtab();
+    std::unordered_set<std::string> uniqueNames;
+    for (const auto& slot : group.slots) {
+        const std::string& name = slot.getName();
+        if (!uniqueNames.insert(name).second ||
+            !symtab.getPhysicalPos(name, true).has_value() ||
+            symtab.getPhysicalPos(name).has_value()) {
+            const std::string message =
+                "Cannot restore composite element '" + group.elementLabel +
+                "': leaf '" + name +
+                "' is missing or has inconsistent residency";
+            SEMANTIC_ERROR(
+                message, loc,
+                "Restore each alternate-stack binding exactly once"
+            );
+            throw std::runtime_error(message);
+        }
+    }
+
+    for (const auto& slot : group.slots) {
+        if (!moveAltElementToMain(slot.getName(), false)) {
+            throw std::runtime_error(
+                "composite SetMain preflight became invalid"
+            );
+        }
+    }
+}
+
+void ASTToBytecodeVisitor::deleteCompositeArrayElement(
+    const ResolvedCompositeArrayElement& group,
+    const SourceLocation& loc
+)
+{
+    SymbolTable& symtab = m_scopePtr->getCurrentSymtab();
+    std::unordered_set<std::string> uniqueNames;
+    for (const auto& slot : group.slots) {
+        if (!uniqueNames.insert(slot.getName()).second ||
+            !symtab.getPhysicalPos(slot.getName()).has_value()) {
+            const std::string message =
+                "Cannot delete composite element '" + group.elementLabel +
+                "': leaf '" + slot.getName() + "' is missing";
+            SEMANTIC_ERROR(
+                message, loc,
+                "Restore the complete element before deleting it"
+            );
+            throw std::runtime_error(message);
+        }
+    }
+
+    for (auto it = group.slots.rbegin(); it != group.slots.rend(); ++it) {
+        auto position = symtab.getPhysicalPos(it->getName());
+        if (!position.has_value()) {
+            throw std::runtime_error(
+                "composite Delete preflight became invalid"
+            );
+        }
+        emitRoll(position.value());
+        if (position.value() > 0) {
+            m_scopePtr->roll(position.value());
+        }
+        m_scopePtr->pop();
+        m_generator.emit(tbc::BytOpcode::OP_DROP);
+    }
+}
+
+bool ASTToBytecodeVisitor::tryProcessCompositeArrayBuiltin(
+    const std::string& functionName,
+    const std::vector<std::unique_ptr<ExprNode>>& args,
+    const ExprNode& node
+)
+{
+    if ((functionName != "SetAlt" && functionName != "SetMain" &&
+         functionName != "Delete") ||
+        args.size() != 1) {
+        return false;
+    }
+
+    const SourceLocation loc = getNodeLocation(node);
+    auto group = resolveCompositeArrayElement(
+        *args[0], functionName, loc
+    );
+    if (!group.has_value()) {
+        return false;
+    }
+
+    if (functionName == "SetAlt") {
+        auto existing = m_escapedAltArrays.find(group->arrayName);
+        if (existing != m_escapedAltArrays.end() &&
+            (existing->second.arrayInfo.elementType !=
+                 group->arrayInfo.elementType ||
+             existing->second.arrayInfo.size != group->arrayInfo.size)) {
+            const std::string message =
+                "Conflicting alternate-stack array schema for '" +
+                group->arrayName + "'";
+            SEMANTIC_ERROR(
+                message, loc,
+                "Use a unique channel name for each fixed-array shape"
+            );
+            throw std::runtime_error(message);
+        }
+
+        moveCompositeArrayElementToAlt(group.value(), loc);
+
+        auto [it, inserted] = m_escapedAltArrays.emplace(
+            group->arrayName,
+            EscapedAltArrayView{group->arrayInfo, {}}
+        );
+        (void)inserted;
+        it->second.elementLayouts[group->elementLabel].push_back(
+            group->slots
+        );
+        return true;
+    }
+
+    if (functionName == "SetMain") {
+        moveCompositeArrayElementToMain(group.value(), loc);
+        if (group->usesEscapedView &&
+            !m_scopePtr->importExternalArrayView(
+                group->arrayName,
+                group->arrayInfo.elementType,
+                group->arrayInfo.size,
+                group->arrayInfo.isFixedSize
+            )) {
+            const std::string message =
+                "Cannot materialize escaped array view '" +
+                group->arrayName + "' in the current scope";
+            SEMANTIC_ERROR(
+                message, loc,
+                "Rename the local array that shadows this altstack channel"
+            );
+            throw std::runtime_error(message);
+        }
+        if (group->usesEscapedView) {
+            SymbolTable& symtab = m_scopePtr->getCurrentSymtab();
+            auto bindExternalLeaf = [&](const std::string& logical,
+                                        const std::string& physical) {
+                // Repeated SetMain calls in one consumer must replace the
+                // previous batch's logical-to-physical mapping.
+                symtab.removeBindSymbol(logical);
+                if (logical != physical) {
+                    std::pair<std::string, std::string> binding(
+                        logical, physical
+                    );
+                    symtab.addBindSymbol(binding);
+                }
+            };
+            if (group->slots.size() == 1) {
+                bindExternalLeaf(
+                    group->elementLabel, group->slots[0].getName()
+                );
+            } else {
+                auto logicalFields = getStructFieldsExpanded(
+                    group->arrayInfo.elementType,
+                    group->elementLabel,
+                    m_structDefinitions
+                );
+                if (logicalFields.size() != group->slots.size()) {
+                    const std::string message =
+                        "Escaped array layout mismatch for '" +
+                        group->elementLabel + "'";
+                    SEMANTIC_ERROR(
+                        message, loc,
+                        "Restore the element using the schema captured by "
+                        "SetAlt"
+                    );
+                    throw std::runtime_error(message);
+                }
+                for (size_t i = 0; i < logicalFields.size(); ++i) {
+                    bindExternalLeaf(
+                        logicalFields[i].first,
+                        group->slots[i].getName()
+                    );
+                }
+            }
+        }
+        return true;
+    }
+
+    deleteCompositeArrayElement(group.value(), loc);
     return true;
 }
 
@@ -2672,6 +3999,29 @@ void ASTToBytecodeVisitor::preserveStructReturn(
     auto returnedFields = getStructFieldsExpanded(
         structType, resolvedRoot, m_structDefinitions
     );
+
+    // A struct parameter is represented by leaf bindings rather than a root
+    // symbol. Record that origin explicitly: caller and callee may legally
+    // reuse the same root name, so name equality alone cannot distinguish a
+    // caller-owned value from a local composite.
+    if (!m_structReturnFrames.empty()) {
+        const std::string parameterPrefix = rootName + ".";
+        const auto activeBindingBegin =
+            symbolTable.m_bindSymbol.begin() +
+            static_cast<std::ptrdiff_t>(
+                symbolTable.activeBindSymbolStart()
+            );
+        m_structReturnFrames.back().returnedBoundComposite = std::any_of(
+            activeBindingBegin,
+            symbolTable.m_bindSymbol.end(),
+            [&](const auto& binding) {
+                return binding.first.size() > parameterPrefix.size() &&
+                       binding.first.compare(
+                           0, parameterPrefix.size(), parameterPrefix
+                       ) == 0;
+            }
+        );
+    }
 
     auto keepOnce = [&](const std::string& valueName) {
         if (std::find(
@@ -2964,6 +4314,16 @@ void ASTToBytecodeVisitor::visit(ReturnNode& node)
                     valueName
                 ) == symbolTable.m_keepSymbol.end()) {
                 symbolTable.m_keepSymbol.push_back(valueName);
+            }
+            if (!m_structReturnFrames.empty() &&
+                std::find(
+                    m_structReturnFrames.back().returnedValues.begin(),
+                    m_structReturnFrames.back().returnedValues.end(),
+                    valueName
+                ) == m_structReturnFrames.back().returnedValues.end()) {
+                m_structReturnFrames.back().returnedValues.push_back(
+                    valueName
+                );
             }
         };
 
@@ -4009,6 +5369,30 @@ void ASTToBytecodeVisitor::visitOperator(OpNode& node)
 {
     DEFER([]() { LOG_DEBUG("Visiting op node end."); });
     LOG_DEBUG("Visiting op node start. op: " + node.op);
+
+    // Fold complete numeric expressions over fixed bindings (notably static
+    // loop targets). Runtime slots remain authoritative and force the normal
+    // stack-aware lowering path.
+    const auto staticValue = evaluateCompileTimeInteger(node, true);
+    if (staticValue.isError()) {
+        SourceLocation loc = getNodeLocation(node);
+        SEMANTIC_ERROR(
+            staticValue.diagnostic,
+            loc,
+            "Keep the compile-time integer expression within int64 bounds"
+        );
+        throw std::runtime_error(staticValue.diagnostic);
+    }
+    if (staticValue.isKnown()) {
+        LiteralNode folded(
+            LiteralNode::Type::Number,
+            std::to_string(staticValue.value),
+            node.pos.first,
+            node.pos.second
+        );
+        visitLiteral(folded);
+        return;
+    }
 
     auto lamd = [this](
                     std::optional<StackElement> elementOpt,
@@ -5404,15 +6788,37 @@ void ASTToBytecodeVisitor::privateFunctionResolution(
     SymbolTable& callSymtab = m_scopePtr->getCurrentSymtab();
     const auto savedBindings = callSymtab.m_bindSymbol;
     const auto savedKeepSymbols = callSymtab.m_keepSymbol;
+    const auto savedCurrentScope = callSymtab.m_currentScope;
+    const auto savedNewSymbols = callSymtab.m_newSymbol;
+    const auto savedDeclaredSymbols = callSymtab.m_declaredSymbols;
+    const auto savedWholeArrayElements = m_wholeArrayElements;
+    const auto savedFixedStack =
+        callSymtab.m_fixedStackPtr->getStackContent();
+    const size_t savedFixedCombinedSize =
+        callSymtab.m_fixedStackPtr->getCombinedStackSize();
+    const size_t savedBindSymbolStart =
+        callSymtab.activeBindSymbolStart();
+    const size_t savedScopeEntryStart =
+        callSymtab.activeScopeEntryStart();
+    callSymtab.beginBindSymbolFrame();
+    callSymtab.beginScopeEntryFrame();
     m_activePrivateFunctions.push_back(&node);
     m_structReturnFrames.emplace_back();
     DEFER_BLOCK(
         SymbolTable& currentSymtab = m_scopePtr->getCurrentSymtab();
         currentSymtab.m_bindSymbol = savedBindings;
+        currentSymtab.restoreBindSymbolFrame(savedBindSymbolStart);
+        currentSymtab.restoreScopeEntryFrame(savedScopeEntryStart);
         currentSymtab.m_keepSymbol = savedKeepSymbols;
         m_structReturnFrames.pop_back();
         m_activePrivateFunctions.pop_back();
     );
+
+    // The inline callee forms a nested lexical layer over the caller. Array
+    // and scalar declarations use this list to decide whether a name may
+    // shadow an outer declaration; the caller's exact list is restored after
+    // the call.
+    callSymtab.m_declaredSymbols.clear();
 
     // 把实参映射到形参名.
     LOG_DEBUG("Binding parameters");
@@ -5421,7 +6827,9 @@ void ASTToBytecodeVisitor::privateFunctionResolution(
         const auto& paramInfo = node.parameters[i];
         const std::string& paramName = paramInfo.name;
         const std::string& paramType = paramInfo.type;
-        auto argRootName = existingArgs[i].getName();
+        auto argRootName = callSymtab.resolveBindSymbol(
+            existingArgs[i].getName()
+        );
 
         // 不在此处对 argRootName 改名:
         //  - CompilerPlaceholder 实参: 走普通栈元素路径, 保留 /Compiler.../ 原名
@@ -5433,11 +6841,136 @@ void ASTToBytecodeVisitor::privateFunctionResolution(
         // 副本上, 真栈毫无变化, 反而让 BindSymbol 指向真栈上不存在的 funcName_paramName,
         // 导致 visitIdentifier 形参访问失败.
 
+        const auto arrayType = apc::util::parseFixedArrayType(paramType);
         bool isStructType = !paramType.empty() &&
                             (m_structDefinitions.find(paramType) !=
                              m_structDefinitions.end());
 
-        if (isStructType) {
+        if (arrayType.has_value()) {
+            auto sourceArray = m_scopePtr->getArrayInfo(argRootName);
+            if (!sourceArray.has_value() ||
+                sourceArray->elementType != arrayType->elementType ||
+                sourceArray->size != arrayType->size) {
+                std::ostringstream oss;
+                oss << "Unable to bind fixed-array argument '" << argRootName
+                    << "' to parameter '" << paramName << "' of type '"
+                    << paramType << "'";
+                SourceLocation loc("", node.pos.first, node.pos.second);
+                SEMANTIC_ERROR(
+                    oss.str(), loc,
+                    "Pass a fixed array with the exact declared shape"
+                );
+                throw std::runtime_error(oss.str());
+            }
+
+            if (!m_scopePtr->defineArray(
+                    paramName,
+                    arrayType->elementType,
+                    arrayType->size,
+                    true
+                )) {
+                throw std::runtime_error(
+                    "failed to declare private fixed-array parameter '" +
+                    paramName + "'"
+                );
+            }
+
+            if (paramName != argRootName) {
+                std::pair<std::string, std::string> rootBinding(
+                    paramName, argRootName
+                );
+                m_scopePtr->addBindSymbol(rootBinding);
+            }
+
+            const bool isStructArray =
+                m_structDefinitions.find(arrayType->elementType) !=
+                m_structDefinitions.end();
+
+            for (size_t elementIndex = 0;
+                 elementIndex < arrayType->size;
+                 ++elementIndex) {
+                const std::string paramElement =
+                    m_scopePtr->getArrayElementLabel(
+                        paramName, elementIndex
+                    );
+                const std::string argumentElement =
+                    sourceArray->getElementLabel(elementIndex);
+                if (paramElement != argumentElement) {
+                    std::pair<std::string, std::string> elementBinding(
+                        paramElement, argumentElement
+                    );
+                    m_scopePtr->addBindSymbol(elementBinding);
+                }
+
+                if (!isStructArray) {
+                    m_scopePtr->defineSymbol(
+                        paramElement, arrayType->elementType
+                    );
+                    continue;
+                }
+
+                const auto paramFields = getStructFieldsExpanded(
+                    arrayType->elementType,
+                    paramElement,
+                    m_structDefinitions
+                );
+                const auto argumentFields = getStructFieldsExpanded(
+                    arrayType->elementType,
+                    argumentElement,
+                    m_structDefinitions
+                );
+                if (paramFields.size() != argumentFields.size()) {
+                    std::ostringstream oss;
+                    oss << "Unable to bind struct-array parameter '"
+                        << paramName << "' element " << elementIndex
+                        << ": parameter has " << paramFields.size()
+                        << " runtime fields, argument has "
+                        << argumentFields.size();
+                    SourceLocation loc("", node.pos.first, node.pos.second);
+                    SEMANTIC_ERROR(
+                        oss.str(), loc,
+                        "Pass a struct array with the exact declared shape"
+                    );
+                    throw std::runtime_error(oss.str());
+                }
+
+                for (size_t fieldIndex = 0;
+                     fieldIndex < paramFields.size();
+                     ++fieldIndex) {
+                    const auto& [paramFieldPath, paramFieldType] =
+                        paramFields[fieldIndex];
+                    const auto& [argumentFieldPath, argumentFieldType] =
+                        argumentFields[fieldIndex];
+                    if (paramFieldType != argumentFieldType) {
+                        std::ostringstream oss;
+                        oss << "Unable to bind struct-array parameter '"
+                            << paramName << "' field '" << paramFieldPath
+                            << "': expected type '" << paramFieldType
+                            << "', argument field has type '"
+                            << argumentFieldType << "'";
+                        SourceLocation loc(
+                            "", node.pos.first, node.pos.second
+                        );
+                        SEMANTIC_ERROR(
+                            oss.str(), loc,
+                            "Pass a struct array with the exact declared shape"
+                        );
+                        throw std::runtime_error(oss.str());
+                    }
+
+                    m_scopePtr->defineSymbol(
+                        paramFieldPath, paramFieldType
+                    );
+                    if (paramFieldPath != argumentFieldPath) {
+                        std::pair<std::string, std::string> fieldBinding(
+                            paramFieldPath, argumentFieldPath
+                        );
+                        m_scopePtr->addBindSymbol(fieldBinding);
+                    }
+                }
+            }
+            m_scopePtr->markSymbolInitialized(paramName);
+        } else if (isStructType) {
             LOG_DEBUG(
                 "Binding struct parameter '" + paramName + "' of type '" +
                 paramType + "'"
@@ -5546,9 +7079,254 @@ void ASTToBytecodeVisitor::privateFunctionResolution(
     if (node.block) {
         LOG_DEBUG("Executing private function body inline");
         m_lastFlowResult = FlowResult::FallsThrough;
+        const auto* previousLifetimePlan = m_currentLifetimePlan;
+        m_currentLifetimePlan = lifetimePlanFor(node);
+        DEFER_BLOCK(m_currentLifetimePlan = previousLifetimePlan;);
         node.block->accept(*this);
 
         cleanupFunctionParameters(node);
+    }
+
+    // Inline execution shares the caller's runtime stacks, but lexical
+    // metadata must remain call-local. Publish only returned values, then
+    // restore the caller snapshot exactly. A locally-created struct is first
+    // detached under a unique compiler placeholder root so a same-named
+    // caller object cannot be overwritten by the caller's assignment.
+    SymbolTable& currentSymtab = m_scopePtr->getCurrentSymtab();
+    auto& returnFrame = m_structReturnFrames.back();
+    std::vector<std::pair<std::string, SymbolInfo>> publishedScopeEntries;
+    std::vector<std::string> publishedDeclaredSymbols;
+    std::vector<std::string> publishedNewSymbols;
+    std::map<std::string, std::pair<size_t, size_t>> publishedWholeArrays;
+    bool returnedCallerComposite = false;
+
+    auto belongsToComposite = [](const std::string& name,
+                                 const std::string& root) {
+        return name == root ||
+               (name.size() > root.size() &&
+                name.compare(0, root.size(), root) == 0 &&
+                name[root.size()] == '.');
+    };
+    auto renamedCompositeName = [](const std::string& name,
+                                   const std::string& oldRoot,
+                                   const std::string& newRoot) {
+        return newRoot + name.substr(oldRoot.size());
+    };
+
+    if (!returnFrame.descriptor.has_value()) {
+        bool publishedReturnValue = false;
+        for (const std::string& returnedName : returnFrame.returnedValues) {
+            auto position = currentSymtab.getPos(returnedName);
+            if (!position.has_value() &&
+                moveAltElementToMain(returnedName)) {
+                position = currentSymtab.getPos(returnedName);
+            }
+            if (!position.has_value()) {
+                // Mutually-exclusive lowercase returns may use different
+                // source names for the same runtime slot. If lowering keeps
+                // the then-branch metadata at the join, the else name is not
+                // expected to remain addressable (and vice versa).
+                continue;
+            }
+
+            tbc::CompilerPlaceholder placeholder;
+            m_scopePtr->renameAtPosition(
+                static_cast<int>(position.value()), placeholder.toString()
+            );
+            publishedReturnValue = true;
+        }
+
+        if (!returnFrame.returnedValues.empty() &&
+            !publishedReturnValue) {
+            const std::string& returnedName =
+                returnFrame.returnedValues.front();
+            const std::string message =
+                "private function return value '" + returnedName +
+                "' is no longer available";
+            SourceLocation loc = getNodeLocation(node);
+            SEMANTIC_ERROR(
+                message,
+                loc,
+                "Preserve the returned value on the main or alt stack"
+            );
+            throw std::runtime_error(message);
+        }
+    } else {
+        const std::string returnedRoot = returnFrame.descriptor->getName();
+        const std::string returnedType = returnFrame.descriptor->getType();
+        const bool callerHasComposite = std::any_of(
+            savedCurrentScope.begin(),
+            savedCurrentScope.end(),
+            [&](const auto& entry) {
+                return belongsToComposite(entry.first, returnedRoot);
+            }
+        );
+        const bool calleeDeclaredComposite = std::any_of(
+            currentSymtab.m_declaredSymbols.begin(),
+            currentSymtab.m_declaredSymbols.end(),
+            [&](const std::string& name) {
+                return belongsToComposite(name, returnedRoot);
+            }
+        );
+        returnedCallerComposite =
+            returnFrame.returnedBoundComposite ||
+            (callerHasComposite && !calleeDeclaredComposite);
+
+        if (!returnedCallerComposite) {
+            const std::string publishedRoot =
+                tbc::CompilerPlaceholder().toString();
+
+            for (const std::string& fieldName : returnFrame.returnedFields) {
+                if (!belongsToComposite(fieldName, returnedRoot)) {
+                    continue;
+                }
+                auto position = currentSymtab.getPos(fieldName);
+                if (!position.has_value()) {
+                    const std::string message =
+                        "returned struct field '" + fieldName +
+                        "' is no longer available";
+                    SourceLocation loc = getNodeLocation(node);
+                    SEMANTIC_ERROR(
+                        message,
+                        loc,
+                        "Preserve every returned field on the main stack"
+                    );
+                    throw std::runtime_error(message);
+                }
+                m_scopePtr->renameAtPosition(
+                    static_cast<int>(position.value()),
+                    renamedCompositeName(
+                        fieldName, returnedRoot, publishedRoot
+                    )
+                );
+            }
+
+            const size_t localMetadataStart = std::min(
+                savedCurrentScope.size(), currentSymtab.m_currentScope.size()
+            );
+            for (size_t i = localMetadataStart;
+                 i < currentSymtab.m_currentScope.size();
+                 ++i) {
+                auto entry = currentSymtab.m_currentScope[i];
+                if (!belongsToComposite(entry.first, returnedRoot)) {
+                    continue;
+                }
+                const std::string newName = renamedCompositeName(
+                    entry.first, returnedRoot, publishedRoot
+                );
+                entry.first = newName;
+                entry.second.m_stackElement.setName(newName);
+                if (entry.second.isArray()) {
+                    ArrayInfo& arrayInfo = entry.second.getArrayInfo();
+                    arrayInfo.name = newName;
+                    const size_t arraySize = arrayInfo.size;
+                    arrayInfo.elements.clear();
+                    arrayInfo.elements.reserve(arraySize);
+                    for (size_t elementIndex = 0;
+                         elementIndex < arraySize;
+                         ++elementIndex) {
+                        arrayInfo.elements.emplace_back(
+                            newName,
+                            arrayInfo.elementType,
+                            elementIndex,
+                            elementIndex
+                        );
+                    }
+                } else if (entry.second.isCompoundType()) {
+                    entry.second.getCompoundInfo().name = newName;
+                }
+                publishedScopeEntries.push_back(std::move(entry));
+            }
+
+            if (std::none_of(
+                    publishedScopeEntries.begin(),
+                    publishedScopeEntries.end(),
+                    [&](const auto& entry) {
+                        return entry.first == publishedRoot;
+                    }
+                )) {
+                SymbolInfo rootInfo(publishedRoot, returnedType);
+                rootInfo.setInitialized();
+                publishedScopeEntries.emplace_back(
+                    publishedRoot, std::move(rootInfo)
+                );
+            }
+
+            auto captureNames = [&](const std::vector<std::string>& names,
+                                    std::vector<std::string>& output) {
+                for (const std::string& name : names) {
+                    if (belongsToComposite(name, returnedRoot)) {
+                        output.push_back(renamedCompositeName(
+                            name, returnedRoot, publishedRoot
+                        ));
+                    }
+                }
+            };
+            captureNames(
+                currentSymtab.m_declaredSymbols,
+                publishedDeclaredSymbols
+            );
+            captureNames(currentSymtab.m_newSymbol, publishedNewSymbols);
+            if (std::find(
+                    publishedDeclaredSymbols.begin(),
+                    publishedDeclaredSymbols.end(),
+                    publishedRoot
+                ) == publishedDeclaredSymbols.end()) {
+                publishedDeclaredSymbols.push_back(publishedRoot);
+            }
+
+            for (const auto& [name, info] : m_wholeArrayElements) {
+                if (belongsToComposite(name, returnedRoot)) {
+                    publishedWholeArrays.emplace(
+                        renamedCompositeName(
+                            name, returnedRoot, publishedRoot
+                        ),
+                        info
+                    );
+                }
+            }
+
+            returnFrame.descriptor = tbc::StackElement(
+                publishedRoot, returnedType, publishedRoot
+            );
+        }
+    }
+
+    currentSymtab.m_currentScope = savedCurrentScope;
+    currentSymtab.m_newSymbol = savedNewSymbols;
+    currentSymtab.m_declaredSymbols = savedDeclaredSymbols;
+    currentSymtab.m_fixedStackPtr->replaceStackContent(savedFixedStack);
+    currentSymtab.m_fixedStackPtr->setCombinedStackSize(
+        savedFixedCombinedSize
+    );
+    m_wholeArrayElements = savedWholeArrayElements;
+
+    if (returnedCallerComposite) {
+        // preserveStructReturn materialized every field on main. Discard stale
+        // fixed copies restored from the caller snapshot.
+        for (const std::string& fieldName : returnFrame.returnedFields) {
+            std::string mutableName = fieldName;
+            currentSymtab.removeFixed(mutableName);
+        }
+    } else if (returnFrame.descriptor.has_value()) {
+        currentSymtab.m_currentScope.insert(
+            currentSymtab.m_currentScope.end(),
+            publishedScopeEntries.begin(),
+            publishedScopeEntries.end()
+        );
+        currentSymtab.m_declaredSymbols.insert(
+            currentSymtab.m_declaredSymbols.end(),
+            publishedDeclaredSymbols.begin(),
+            publishedDeclaredSymbols.end()
+        );
+        currentSymtab.m_newSymbol.insert(
+            currentSymtab.m_newSymbol.end(),
+            publishedNewSymbols.begin(),
+            publishedNewSymbols.end()
+        );
+        m_wholeArrayElements.insert(
+            publishedWholeArrays.begin(), publishedWholeArrays.end()
+        );
     }
 
 #ifdef ENABLE_DEBUGGER
@@ -5603,10 +7381,14 @@ void ASTToBytecodeVisitor::cleanupFunctionParameters(const FunctionNode& node)
 
         LOG_DEBUG("Cleaning up parameter: " + paramName);
 
+        const bool isArrayType =
+            apc::util::parseFixedArrayType(paramType).has_value();
         bool isStructType = m_structDefinitions.find(paramType) !=
                             m_structDefinitions.end();
 
-        if (isStructType) {
+        if (isArrayType) {
+            cleanupArrayParameter(paramName, paramType);
+        } else if (isStructType) {
             cleanupStructParameter(paramName, paramType);
         } else {
             cleanupBasicParameter(paramName);
@@ -5617,6 +7399,68 @@ void ASTToBytecodeVisitor::cleanupFunctionParameters(const FunctionNode& node)
     // privateFunctionResolution(). Removing only the root parameter name is
     // insufficient for flattened struct bindings (param.field -> arg.field)
     // and corrupts nested calls with reused parameter names.
+}
+
+void ASTToBytecodeVisitor::cleanupArrayParameter(
+    const std::string& paramName,
+    const std::string& paramType
+)
+{
+    auto declaredType = apc::util::parseFixedArrayType(paramType);
+    auto arrayInfo = m_scopePtr->getArrayInfo(paramName);
+    if (!declaredType.has_value() || !arrayInfo.has_value()) {
+        throw std::runtime_error(
+            "invalid private fixed-array parameter metadata for '" +
+            paramName + "'"
+        );
+    }
+
+    if (m_structDefinitions.find(declaredType->elementType) !=
+        m_structDefinitions.end()) {
+        // Struct-array elements are represented solely by flattened leaves.
+        for (size_t i = arrayInfo->size; i > 0; --i) {
+            cleanupStructParameter(
+                arrayInfo->getElementLabel(i - 1),
+                declaredType->elementType
+            );
+        }
+        return;
+    }
+
+    SymbolTable& currentSymtab = m_scopePtr->getCurrentSymtab();
+    for (size_t i = 0; i < arrayInfo->size; ++i) {
+        const std::string logicalElement = arrayInfo->getElementLabel(i);
+        const std::string resolvedElement =
+            currentSymtab.resolveBindSymbol(logicalElement);
+        const bool isReturned = std::find(
+                                    currentSymtab.m_keepSymbol.begin(),
+                                    currentSymtab.m_keepSymbol.end(),
+                                    resolvedElement
+                                ) != currentSymtab.m_keepSymbol.end();
+        if (isReturned) {
+            continue;
+        }
+
+        auto position = currentSymtab.getPos(logicalElement);
+        if (!position.has_value() &&
+            currentSymtab.getPos(logicalElement, true).has_value()) {
+            if (!moveAltElementToMain(logicalElement)) {
+                throw std::runtime_error(
+                    "failed to recover private array parameter element '" +
+                    resolvedElement + "' from altstack"
+                );
+            }
+            position = currentSymtab.getPos(logicalElement);
+        }
+        if (!position.has_value()) {
+            continue;
+        }
+
+        emitRoll(position.value());
+        currentSymtab.roll(position.value());
+        m_generator.emit(tbc::BytOpcode::OP_DROP);
+        currentSymtab.pop();
+    }
 }
 
 void ASTToBytecodeVisitor::cleanupStructParameter(
@@ -5794,6 +7638,76 @@ void ASTToBytecodeVisitor::emitPick(int64_t pos)
     }
     m_generator.emit(numberToScriptHex(pos));
     m_generator.emit(tbc::BytOpcode::OP_PICK);
+}
+
+std::optional<int64_t> ASTToBytecodeVisitor::resolveCompileTimeIndex(
+    const ExprNode& expr
+) const
+{
+    return resolveCompileTimeInteger(expr, false);
+}
+
+std::optional<int64_t> ASTToBytecodeVisitor::resolveCompileTimeCondition(
+    const ExprNode& expr
+) const
+{
+    return resolveCompileTimeInteger(expr, true);
+}
+
+std::optional<int64_t> ASTToBytecodeVisitor::resolveCompileTimeInteger(
+    const ExprNode& expr,
+    bool requireNumericFixedValue
+) const
+{
+    const auto result = evaluateCompileTimeInteger(
+        expr, requireNumericFixedValue
+    );
+    return result.isKnown() ? std::optional<int64_t>(result.value)
+                            : std::nullopt;
+}
+
+compiler::StaticIntegerResult
+ASTToBytecodeVisitor::evaluateCompileTimeInteger(
+    const ExprNode& expr,
+    bool requireNumericFixedValue
+) const
+{
+    return compiler::StaticIntegerEvaluator::evaluate(
+        expr,
+        [this, requireNumericFixedValue](const IdentifierNode& identifier) {
+            std::string name = identifier.name;
+
+            // A materialized runtime slot always supersedes a fixed copy.
+            if (m_scopePtr->getPos(name).has_value() ||
+                m_scopePtr->getPos(name, true).has_value()) {
+                return compiler::StaticIntegerResult::unknown();
+            }
+
+            auto fixed = m_scopePtr->getFixed(name);
+            if (!fixed.has_value()) {
+                return compiler::StaticIntegerResult::unknown();
+            }
+            const std::string& encoded = fixed->getData().empty()
+                                             ? fixed->getName()
+                                             : fixed->getData();
+            if (requireNumericFixedValue) {
+                const std::string& type = fixed->getType();
+                const bool isNumericType =
+                    type == "int" || type == "num" || type == "number" ||
+                    type == "uint64";
+                if (!isNumericType || !isStrictScriptNumberHex(encoded)) {
+                    return compiler::StaticIntegerResult::unknown();
+                }
+            }
+            try {
+                return compiler::StaticIntegerResult::known(
+                    scriptHexToNumber(encoded)
+                );
+            } catch (...) {
+                return compiler::StaticIntegerResult::unknown();
+            }
+        }
+    );
 }
 
 BytecodeType ASTToBytecodeVisitor::inferLiteralType(const LiteralNode& node)
@@ -6060,29 +7974,167 @@ void ASTToBytecodeVisitor::processGenericFunctionCall(
         std::to_string(args.size()) + " arguments"
     );
 
-    // Delete: 删除 fixed 数据.
-    if ("Delete" == functionName) {
+    const bool isDelete = functionName == "Delete";
+    ScopeRollbackGuard deleteStateGuard(m_scopePtr, isDelete);
+    std::vector<std::string> deleteTargetNames;
+    struct PreservedDeleteArray
+    {
+        ArrayInfo info;
+        bool externalView{false};
+    };
+    std::vector<PreservedDeleteArray> preservedDeleteArrays;
+
+    // Delete consumes l-values rather than their values. Resolve every target
+    // before changing fixed storage, then remove all matching fixed leaves in
+    // one transaction. This covers scalars, struct fields and array elements
+    // without making visitIdentifier()/visitFieldAccess() materialize them.
+    if (isDelete) {
         LOG_DEBUG(
             "Special handling for Delete function with " +
             std::to_string(args.size()) + " arguments"
         );
 
-        for (const auto& arg : args) {
-            if (auto identifierNode =
-                    dynamic_cast<const IdentifierNode*>(arg.get())) {
-                std::string varName = identifierNode->name;
-
-                if (auto fixedVar = m_scopePtr->getFixed(varName)) {
-                    LOG_INFO("Deleting fixed data: " + varName);
-                    m_scopePtr->removeFixed(varName);
+        std::function<std::optional<std::string>(const ExprNode&)>
+            resolveDeleteTarget;
+        resolveDeleteTarget = [&](const ExprNode& expression)
+            -> std::optional<std::string> {
+            if (const auto* identifier =
+                    dynamic_cast<const IdentifierNode*>(&expression)) {
+                return identifier->name;
+            }
+            if (const auto* field =
+                    dynamic_cast<const FieldAccessNode*>(&expression)) {
+                auto base = resolveDeleteTarget(*field->base);
+                if (!base.has_value()) {
+                    return std::nullopt;
                 }
+                return base.value() + "." + field->field;
+            }
+            if (const auto* index =
+                    dynamic_cast<const IndexAccessNode*>(&expression)) {
+                auto base = resolveDeleteTarget(*index->base);
+                auto resolvedIndex = resolveCompileTimeIndex(*index->index);
+                if (!base.has_value() || !resolvedIndex.has_value() ||
+                    resolvedIndex.value() < 0) {
+                    return std::nullopt;
+                }
+                return m_scopePtr->getArrayElementLabel(
+                    base.value(), static_cast<size_t>(resolvedIndex.value())
+                );
+            }
+            return std::nullopt;
+        };
+
+        auto isSameOrDescendant = [](
+                                      const std::string& candidate,
+                                      const std::string& root
+                                  ) {
+            return candidate == root || candidate.find(root + ".") == 0 ||
+                   candidate.find(root + "[") == 0;
+        };
+
+        auto& symbolTable = m_scopePtr->getCurrentSymtab();
+        deleteTargetNames.reserve(args.size());
+        for (const auto& arg : args) {
+            auto target = resolveDeleteTarget(*arg);
+            if (!target.has_value()) {
+                SourceLocation loc = getNodeLocation(*arg);
+                const std::string message =
+                    "Delete() target must be a variable, field, or "
+                    "compile-time array element";
+                SEMANTIC_ERROR(
+                    message,
+                    loc,
+                    "Pass an assignable storage location to Delete()"
+                );
+                throw std::invalid_argument(message);
+            }
+            for (const auto& claimed : deleteTargetNames) {
+                if (isSameOrDescendant(target.value(), claimed) ||
+                    isSameOrDescendant(claimed, target.value())) {
+                    throw std::invalid_argument(
+                        "Delete() contains duplicate or overlapping target '" +
+                        target.value() + "'"
+                    );
+                }
+            }
+            if (auto arrayInfo = m_scopePtr->getArrayInfo(target.value())) {
+                preservedDeleteArrays.push_back(
+                    {*arrayInfo,
+                     symbolTable.isExternalArrayView(target.value())}
+                );
+            }
+            deleteTargetNames.push_back(target.value());
+        }
+
+        std::vector<StackElement> fixedEntries;
+        if (symbolTable.m_fixedStackPtr) {
+            fixedEntries = symbolTable.m_fixedStackPtr->getStackContent();
+        }
+        std::vector<std::string> fixedTargets;
+        std::unordered_set<std::string> claimedFixedTargets;
+        for (const auto& target : deleteTargetNames) {
+            std::vector<std::string> physicalRoots;
+            const size_t bindingStart = symbolTable.activeBindSymbolStart();
+            for (size_t bindingIndex = bindingStart;
+                 bindingIndex < symbolTable.m_bindSymbol.size();
+                 ++bindingIndex) {
+                const auto& binding = symbolTable.m_bindSymbol[bindingIndex];
+                if (isSameOrDescendant(binding.first, target)) {
+                    physicalRoots.push_back(
+                        symbolTable.resolveBindSymbol(binding.first)
+                    );
+                }
+            }
+            const bool targetsActiveBinding = !physicalRoots.empty();
+            if (!targetsActiveBinding) {
+                physicalRoots.push_back(target);
+                physicalRoots.push_back(
+                    symbolTable.resolveBindSymbol(target)
+                );
+                const size_t scopeEntryStart =
+                    symbolTable.activeScopeEntryStart();
+                for (size_t scopeIndex = scopeEntryStart;
+                     scopeIndex < symbolTable.m_currentScope.size();
+                     ++scopeIndex) {
+                    const std::string logicalName =
+                        symbolTable.m_currentScope[scopeIndex]
+                            .second.getSymbolName();
+                    if (isSameOrDescendant(logicalName, target)) {
+                        physicalRoots.push_back(
+                            symbolTable.resolveBindSymbol(logicalName)
+                        );
+                    }
+                }
+            }
+
+            std::unordered_set<std::string> fixedForArgument;
+            for (const auto& fixed : fixedEntries) {
+                const std::string& fixedName = fixed.getName();
+                for (const auto& root : physicalRoots) {
+                    if (isSameOrDescendant(fixedName, root)) {
+                        fixedForArgument.insert(fixedName);
+                        break;
+                    }
+                }
+            }
+            for (const auto& fixedName : fixedForArgument) {
+                if (!claimedFixedTargets.insert(fixedName).second) {
+                    throw std::invalid_argument(
+                        "Delete() contains aliased fixed target '" +
+                        fixedName + "'"
+                    );
+                }
+                fixedTargets.push_back(fixedName);
             }
         }
 
-        // 继续走主栈/副栈删除流程.
-        LOG_DEBUG(
-            "Fixed data deletion completed, continuing with stack deletion"
-        );
+        for (auto fixedName : fixedTargets) {
+            LOG_INFO("Deleting fixed data: " + fixedName);
+            m_scopePtr->removeFixed(fixedName);
+        }
+
+        LOG_DEBUG("Fixed target preflight completed");
     }
 
     // Size: 不消耗参数.
@@ -6168,6 +8220,37 @@ void ASTToBytecodeVisitor::processGenericFunctionCall(
         int expectedArgCount = opFuncPtr->getExpectedArgCount();
         auto processedArgs =
             processArguments(args, expectedArgCount, functionName);
+
+#ifdef ENABLE_DEBUGGER
+        // Argument visits update the generator location.  Attribute the stack
+        // layout and the consuming opcode to the call expression itself.
+        setCurrentLocationForGenerator(node);
+#endif
+
+        // Preserve source evaluation order, but let commutative binary
+        // opcodes choose the cheaper physical stack layout afterwards.
+        if (processedArgs.size() == 2 &&
+            !opFuncPtr->isArgOrderSensitive()) {
+            auto swappedArgs = processedArgs;
+            std::swap(swappedArgs[0], swappedArgs[1]);
+            const auto originalCost =
+                estimateArgumentLayoutCost(*m_scopePtr, processedArgs);
+            const auto swappedCost =
+                estimateArgumentLayoutCost(*m_scopePtr, swappedArgs);
+            if (originalCost.has_value() && swappedCost.has_value() &&
+                swappedCost.value() < originalCost.value()) {
+                LOG_DEBUG(
+                    "Commutative argument layout selected for ",
+                    functionName,
+                    ": ",
+                    originalCost.value(),
+                    " -> ",
+                    swappedCost.value(),
+                    " bytes"
+                );
+                processedArgs = std::move(swappedArgs);
+            }
+        }
         adjustStackToMatch(processedArgs);
         for (size_t i = 0; i < opFuncPtr->getReturnCount(); ++i) {
             CompilerPlaceholder ph;
@@ -6183,9 +8266,75 @@ void ASTToBytecodeVisitor::processGenericFunctionCall(
         )) {
         LOG_DEBUG("Found BuiltinFunction: " + functionName);
 
+        if (functionName == "Slice" &&
+            (!isMethodCall || !objectElement.has_value())) {
+            SourceLocation loc = getNodeLocation(node);
+            SEMANTIC_ERROR(
+                "Slice must be called as a method on a byte string",
+                loc,
+                "Use value.Slice(start, length)"
+            );
+            throw std::runtime_error(
+                "Slice must be called as a method on a byte string"
+            );
+        }
+
+        if (!isMethodCall &&
+            tryProcessCompositeArrayBuiltin(functionName, args, node)) {
+            deleteStateGuard.commit();
+            return;
+        }
+
+        // SetAlt needs a real named runtime slot. Fixed values normally stay
+        // compiler-only and visitIdentifier creates only a temporary encoded
+        // argument, which the generic argument collector immediately removes.
+        // Materialize the fixed identifier under its logical name first so
+        // both the emitted opcode and the symbolic main/alt stacks agree.
+        if (functionName == "SetAlt" && args.size() == 1) {
+            if (const auto* identifier =
+                    dynamic_cast<const IdentifierNode*>(args[0].get())) {
+                std::string name = identifier->name;
+                if (!m_scopePtr->getPos(name).has_value()) {
+                    if (auto fixed = m_scopePtr->getFixed(name)) {
+                        const std::string encoded = fixed->getData().empty()
+                                                        ? fixed->getName()
+                                                        : fixed->getData();
+                        if (!isScript(encoded)) {
+                            SourceLocation loc = getNodeLocation(node);
+                            const std::string message =
+                                "cannot materialize fixed value '" + name +
+                                "' for SetAlt";
+                            SEMANTIC_ERROR(
+                                message,
+                                loc,
+                                "Move a concrete scalar value to altstack"
+                            );
+                            throw std::runtime_error(message);
+                        }
+                        m_generator.emit(encoded);
+                        m_scopePtr->removeFixed(name);
+                        m_scopePtr->push(name, fixed->getType(), encoded);
+                    }
+                }
+            }
+        }
+
         int expectedArgCount = builtFunPtr->getExpectedArgCount();
-        auto processedArgs =
-            processArguments(args, expectedArgCount, functionName);
+        std::vector<tbc::StackElement> processedArgs;
+        if (isDelete) {
+            processedArgs.reserve(deleteTargetNames.size());
+            for (const auto& target : deleteTargetNames) {
+                processedArgs.emplace_back(target);
+            }
+        } else {
+            processedArgs =
+                processArguments(args, expectedArgCount, functionName);
+        }
+
+        if (functionName == "Slice") {
+            processSliceBuiltin(objectElement.value(), processedArgs, node);
+            return;
+        }
 
         if ("Keep" == functionName) {
             keep(processedArgs);
@@ -6196,6 +8345,9 @@ void ASTToBytecodeVisitor::processGenericFunctionCall(
             processedArgs,
             m_scopePtr
         );
+        if (functionName == "Push") {
+            opcodeHex = appendSelfPlaceholderLengths(opcodeHex, node);
+        }
         auto& currentSymtab = m_scopePtr->getCurrentSymtab();
         if ("SetMain" == functionName) {
             // 仅将指定变量从副栈移回主栈, 其余元素保持原序.
@@ -6256,7 +8408,41 @@ void ASTToBytecodeVisitor::processGenericFunctionCall(
                                  ph.toString()); // TODO
             }
         }
+
+        // Delete consumes the current values, but an array declaration remains
+        // a valid l-value container. Re-register only the root metadata after
+        // the builtin has removed its physical elements, so a later
+        // `Delete(values); values[0] = source` can materialize that slot again.
+        for (const auto& preserved : preservedDeleteArrays) {
+            if (m_scopePtr->getArrayInfo(preserved.info.name).has_value()) {
+                continue;
+            }
+            bool restored = false;
+            if (preserved.externalView) {
+                restored = currentSymtab.importExternalArrayView(
+                    preserved.info.name,
+                    preserved.info.elementType,
+                    preserved.info.size,
+                    preserved.info.isFixedSize
+                );
+            } else {
+                restored = m_scopePtr->defineArray(
+                    preserved.info.name,
+                    preserved.info.elementType,
+                    preserved.info.size,
+                    preserved.info.isFixedSize
+                );
+            }
+            if (!restored) {
+                throw std::runtime_error(
+                    "failed to restore array declaration after Delete(): " +
+                    preserved.info.name
+                );
+            }
+        }
+
         m_generator.emit(opcodeHex);
+        deleteStateGuard.commit();
         return;
     }
 
@@ -6292,6 +8478,287 @@ void ASTToBytecodeVisitor::processGenericFunctionCall(
     );
     LOG_ERROR(errorStream.str());
     throw std::runtime_error(errorStream.str());
+}
+
+void ASTToBytecodeVisitor::processSliceBuiltin(
+    const StackElement& objectElement,
+    const std::vector<StackElement>& processedArgs,
+    const ExprNode& node
+)
+{
+    if (processedArgs.size() != 2) {
+        SourceLocation loc = getNodeLocation(node);
+        SEMANTIC_ERROR(
+            "Slice expects exactly two arguments",
+            loc,
+            "Use value.Slice(start, length)"
+        );
+        throw std::runtime_error("Slice expects exactly two arguments");
+    }
+
+    enum class SliceOperandKind { Immediate, InlineScript, StackValue };
+
+    struct SliceOperand
+    {
+        StackElement element;
+        SliceOperandKind kind;
+        std::optional<int64_t> immediateValue;
+    };
+
+    auto isAnglePlaceholder = [](const std::string& name) {
+        return name.size() >= 2 && name.front() == '<' && name.back() == '>';
+    };
+
+    auto classify = [&](const StackElement& element) -> SliceOperand {
+        const std::string& name = element.getName();
+
+        // Builtin members may use a 0x-prefixed opcode string as their name,
+        // but they are runtime scripts rather than numeric immediates.
+        if (element.getType() == "builtin_member" ||
+            isAnglePlaceholder(name)) {
+            return {element, SliceOperandKind::InlineScript, std::nullopt};
+        }
+
+        if (name.size() >= 2 &&
+            (name.starts_with("0x") || name.starts_with("0X"))) {
+            if (!isStrictScriptNumberHex(name)) {
+                SourceLocation loc = getNodeLocation(node);
+                SEMANTIC_ERROR(
+                    "Slice bound is not a valid Script number",
+                    loc,
+                    "Use an integer offset or length"
+                );
+                throw std::runtime_error(
+                    "Slice bound is not a valid Script number"
+                );
+            }
+            return {
+                element,
+                SliceOperandKind::Immediate,
+                scriptHexToNumber(name)
+            };
+        }
+
+        return {element, SliceOperandKind::StackValue, std::nullopt};
+    };
+
+    SliceOperand start = classify(processedArgs[0]);
+    SliceOperand length = classify(processedArgs[1]);
+
+    const bool startIsBeginning =
+        start.immediateValue.has_value() &&
+        (start.immediateValue.value() == -1 ||
+         start.immediateValue.value() == 0);
+    const bool lengthIsToEnd =
+        length.immediateValue.has_value() &&
+        length.immediateValue.value() == -1;
+
+    if (startIsBeginning && lengthIsToEnd) {
+        SourceLocation loc = getNodeLocation(node);
+        SEMANTIC_ERROR(
+            "Slice does not support two boundary sentinel arguments",
+            loc,
+            "Use an explicit length or a non-boundary start offset"
+        );
+        throw std::runtime_error(
+            "Slice does not support two boundary sentinel arguments"
+        );
+    }
+
+    // Validate every existing runtime slot before emitting or mutating either
+    // stack. This keeps a failed Slice call atomic from the compiler's view.
+    std::unordered_set<int64_t> runtimePositions;
+    auto requireUniqueStackValue = [&](const StackElement& element,
+                                       const std::string& role) {
+        auto pos = m_scopePtr->getPos(element.getName());
+        if (!pos.has_value()) {
+            SourceLocation loc = getNodeLocation(node);
+            std::ostringstream oss;
+            oss << "Slice cannot find " << role << " '" << element.getName()
+                << "' on the main stack";
+            SEMANTIC_ERROR(
+                oss.str(), loc, "Ensure the value has not already been consumed"
+            );
+            throw std::runtime_error(oss.str());
+        }
+
+        if (!runtimePositions.insert(pos.value()).second) {
+            SourceLocation loc = getNodeLocation(node);
+            std::ostringstream oss;
+            oss << "Slice " << role << " '" << element.getName()
+                << "' reuses the same runtime stack slot as another input";
+            SEMANTIC_ERROR(
+                oss.str(),
+                loc,
+                "Clone the value before using it for multiple Slice inputs"
+            );
+            throw std::runtime_error(oss.str());
+        }
+    };
+
+    requireUniqueStackValue(objectElement, "object");
+    if (start.kind == SliceOperandKind::StackValue) {
+        requireUniqueStackValue(start.element, "start argument");
+    }
+    if (length.kind == SliceOperandKind::StackValue) {
+        requireUniqueStackValue(length.element, "length argument");
+    }
+
+    // Materialize one operand at the VM top and mirror that exact slot in the
+    // symbolic stack. Immediates/inline scripts were popped by processArguments
+    // and therefore need a fresh, unique compiler-only name after emission.
+    auto materialize = [&](const SliceOperand& operand) {
+        if (operand.kind == SliceOperandKind::StackValue) {
+            auto pos = m_scopePtr->getPos(operand.element.getName());
+            if (!pos.has_value()) {
+                throw std::runtime_error(
+                    "Slice operand disappeared during stack preparation: " +
+                    operand.element.getName()
+                );
+            }
+            if (pos.value() != STACK_TOP_POS) {
+                emitRoll(pos.value());
+                m_scopePtr->roll(pos.value());
+            }
+            return;
+        }
+
+        std::string script = operand.element.getName();
+        if (operand.element.getType() == "builtin_member" &&
+            !operand.element.getData().empty()) {
+            script = operand.element.getData();
+        }
+        m_generator.emit(script);
+
+        CompilerPlaceholder emitted;
+        m_scopePtr->push(
+            emitted.toString(), operand.element.getType(), emitted.toString()
+        );
+    };
+
+    auto materializeObject = [&]() {
+        auto pos = m_scopePtr->getPos(objectElement.getName());
+        if (!pos.has_value()) {
+            throw std::runtime_error(
+                "Slice object disappeared during stack preparation: " +
+                objectElement.getName()
+            );
+        }
+        if (pos.value() != STACK_TOP_POS) {
+            emitRoll(pos.value());
+            m_scopePtr->roll(pos.value());
+        }
+    };
+
+    // Avoid emitting a sequence of rolls which only permutes an operand block
+    // away from, and then back into, the order OP_SPLIT already requires.
+    // The vector is expressed from the bottom of the block to its VM top.
+    auto stackBlockIsReady =
+        [&](const std::vector<const StackElement*>& operands) {
+            for (size_t i = 0; i < operands.size(); ++i) {
+                auto pos = m_scopePtr->getPos(operands[i]->getName());
+                const long expectedPos =
+                    static_cast<long>(operands.size() - i - 1);
+                if (!pos.has_value() || pos.value() != expectedPos) {
+                    return false;
+                }
+            }
+            return true;
+        };
+
+    auto prepareObjectAnd = [&](const SliceOperand& operand) {
+        if (operand.kind == SliceOperandKind::StackValue &&
+            stackBlockIsReady({&objectElement, &operand.element})) {
+            return;
+        }
+        materializeObject();
+        materialize(operand);
+    };
+
+    // Both supported OP_SPLIT tails have the same net stack effect: two input
+    // slots become one result slot. keepRight selects suffix vs prefix.
+    auto splitToResult = [&](bool keepRight) {
+        if (m_scopePtr->size() < 2) {
+            SourceLocation loc = getNodeLocation(node);
+            SEMANTIC_ERROR(
+                "Slice symbolic stack underflow",
+                loc,
+                "Internal compiler error while applying OP_SPLIT"
+            );
+            throw std::runtime_error("Slice symbolic stack underflow");
+        }
+
+        m_generator.emit(tbc::BytOpcode::OP_SPLIT);
+        m_generator.emit(
+            keepRight ? tbc::BytOpcode::OP_NIP : tbc::BytOpcode::OP_DROP
+        );
+
+        auto top = m_scopePtr->pop();
+        auto below = m_scopePtr->pop();
+        if (!top.has_value() || !below.has_value()) {
+            SourceLocation loc = getNodeLocation(node);
+            SEMANTIC_ERROR(
+                "Slice symbolic stack underflow",
+                loc,
+                "Internal compiler error while applying OP_SPLIT"
+            );
+            throw std::runtime_error("Slice symbolic stack underflow");
+        }
+
+        CompilerPlaceholder result;
+        m_scopePtr->push(result.toString(), "bytes", result.toString());
+    };
+
+    if (startIsBeginning) {
+        // [..., object, length] -> [..., prefix]
+        prepareObjectAnd(length);
+        splitToResult(false);
+        return;
+    }
+
+    if (lengthIsToEnd) {
+        // [..., object, start] -> [..., suffix]
+        prepareObjectAnd(start);
+        splitToResult(true);
+        return;
+    }
+
+    if (length.kind == SliceOperandKind::StackValue) {
+        // Preserve an already-materialized length below the first split:
+        // [..., length, object, start] -> [..., length, suffix].
+        if (!stackBlockIsReady(
+                {&length.element, &objectElement, &start.element}
+            )) {
+            materialize(length);
+            materializeObject();
+            materialize(start);
+        }
+        splitToResult(true);
+
+        auto lengthPos = m_scopePtr->getPos(length.element.getName());
+        if (!lengthPos.has_value() || lengthPos.value() != 1) {
+            SourceLocation loc = getNodeLocation(node);
+            SEMANTIC_ERROR(
+                "Slice length was not preserved below the suffix",
+                loc,
+                "Internal compiler error while preparing the second OP_SPLIT"
+            );
+            throw std::runtime_error(
+                "Slice length was not preserved below the suffix"
+            );
+        }
+        emitRoll(lengthPos.value());
+        m_scopePtr->roll(lengthPos.value());
+    } else {
+        // Immediate/inline length does not occupy a slot yet, so emit it only
+        // after the first split has produced the suffix.
+        prepareObjectAnd(start);
+        splitToResult(true);
+        materialize(length);
+    }
+
+    // [..., suffix, length] -> [..., requested window]
+    splitToResult(false);
 }
 
 std::vector<tbc::StackElement> ASTToBytecodeVisitor::processArguments(
@@ -6380,6 +8847,27 @@ void ASTToBytecodeVisitor::adjustStackToMatch(
     }
 
     int n = static_cast<int>(elementsVec.size());
+
+    // The planner is deliberately limited to already-materialized, distinct
+    // main-stack slots.  Script arguments, aliases and oversized windows retain
+    // the legacy path below, including its existing diagnostics.
+    const auto layout = analyzeArgumentLayout(*m_scopePtr, elementsVec);
+    if (layout.has_value() && layout->strictMovePlan.has_value()) {
+        emitAndApplyMoveOnlyPlan(
+            m_generator, *m_scopePtr, *layout->strictMovePlan
+        );
+        for (int consumed = 0; consumed < n; ++consumed) {
+            m_scopePtr->pop();
+        }
+        LOG_DEBUG(
+            "Shortest argument-layout plan selected: ",
+            layout->legacyBytes,
+            " -> ",
+            layout->strictMovePlan->serializedBytes,
+            " bytes"
+        );
+        return;
+    }
 
     // 期望位置: 参数 i 应在 pos=n-1-i.
     bool allInCorrectPosition = true;
@@ -6492,12 +8980,24 @@ void ASTToBytecodeVisitor::adjustStackToMatch(
 }
 
 void ASTToBytecodeVisitor::processArgsToTop(
-    const std::vector<tbc::StackElement>& elementsVec,
+    std::vector<tbc::StackElement>& elementsVec,
     const std::vector<ParameterInfo>& paramInfos
 )
 {
     if (elementsVec.empty()) {
         return;
+    }
+
+    if (elementsVec.size() != paramInfos.size()) {
+        std::ostringstream oss;
+        oss << "Private function argument metadata mismatch: received "
+            << elementsVec.size() << " values for " << paramInfos.size()
+            << " parameters";
+        SourceLocation loc("", 0, 0);
+        SEMANTIC_ERROR(
+            oss.str(), loc, "Check the private function call argument count"
+        );
+        throw std::runtime_error(oss.str());
     }
 
     LOG_DEBUG(
@@ -6522,6 +9022,13 @@ void ASTToBytecodeVisitor::processArgsToTop(
                                             static_cast<int>(paramInfos.size()))
                                                ? paramInfos[i].type
                                                : "";
+
+            // Fixed arrays are represented by element slots (and struct
+            // arrays by flattened leaves), never by the root descriptor.
+            if (apc::util::parseFixedArrayType(paramType).has_value()) {
+                canCheckAll = false;
+                break;
+            }
 
             // 占位符无法按名字查位置, 跳过优化.
             if (CompilerPlaceholder::isPlaceholder(elem.getName())) {
@@ -6570,6 +9077,7 @@ void ASTToBytecodeVisitor::processArgsToTop(
         const auto& paramInfo = (i < paramInfos.size()) ? paramInfos[i]
                                                         : ParameterInfo("", "");
         const std::string& paramType = paramInfo.type;
+        const auto arrayType = apc::util::parseFixedArrayType(paramType);
 
         LOG_DEBUG(
             "processArgsToTop: processing argument " + std::to_string(i) +
@@ -6580,7 +9088,144 @@ void ASTToBytecodeVisitor::processArgsToTop(
                             m_structDefinitions.find(paramType) !=
                                 m_structDefinitions.end();
 
-        if (isStructType) {
+        if (arrayType.has_value()) {
+            SymbolTable& symbolTable = m_scopePtr->getCurrentSymtab();
+            std::string argumentRoot =
+                symbolTable.resolveBindSymbol(element.getName());
+
+            if (isWholeArrayElement(argumentRoot)) {
+                splitWholeArrayElement(argumentRoot);
+            }
+
+            auto arrayInfo = m_scopePtr->getArrayInfo(argumentRoot);
+            if (!arrayInfo.has_value()) {
+                std::ostringstream oss;
+                oss << "Unable to materialize fixed-array argument '"
+                    << argumentRoot << "' for parameter '" << paramInfo.name
+                    << "'";
+                SourceLocation loc("", 0, 0);
+                SEMANTIC_ERROR(
+                    oss.str(), loc,
+                    "Pass a declared fixed array with matching element type"
+                );
+                throw std::runtime_error(oss.str());
+            }
+            if (arrayInfo->size != arrayType->size ||
+                arrayInfo->elementType != arrayType->elementType) {
+                std::ostringstream oss;
+                oss << "Fixed-array argument '" << argumentRoot
+                    << "' has type '" << arrayInfo->elementType << "["
+                    << arrayInfo->size << "]', expected '" << paramType
+                    << "'";
+                SourceLocation loc("", 0, 0);
+                SEMANTIC_ERROR(
+                    oss.str(), loc,
+                    "Pass an array with the parameter's exact shape"
+                );
+                throw std::runtime_error(oss.str());
+            }
+
+            elementsVec[i] = StackElement(
+                argumentRoot, paramType, argumentRoot
+            );
+            std::vector<StackElement> arrayAtoms;
+            const bool isStructArray =
+                m_structDefinitions.find(arrayInfo->elementType) !=
+                m_structDefinitions.end();
+            for (const auto& arrayElement : arrayInfo->elements) {
+                if (!isStructArray) {
+                    arrayAtoms.emplace_back(
+                        arrayElement.qualifiedName,
+                        arrayInfo->elementType,
+                        arrayElement.qualifiedName
+                    );
+                    continue;
+                }
+
+                const auto fields = getStructFieldsExpanded(
+                    arrayInfo->elementType,
+                    arrayElement.qualifiedName,
+                    m_structDefinitions
+                );
+                if (fields.empty()) {
+                    std::ostringstream oss;
+                    oss << "Struct-array argument element '"
+                        << arrayElement.qualifiedName << "' of type '"
+                        << arrayInfo->elementType
+                        << "' has no runtime fields";
+                    SourceLocation loc("", 0, 0);
+                    SEMANTIC_ERROR(
+                        oss.str(), loc, "Check the struct definition"
+                    );
+                    throw std::runtime_error(oss.str());
+                }
+                for (const auto& [fieldPath, fieldType] : fields) {
+                    arrayAtoms.emplace_back(
+                        fieldPath, fieldType, fieldPath
+                    );
+                }
+            }
+
+            // Preflight the complete array before mutating stack order.
+            for (const auto& atom : arrayAtoms) {
+                const std::string& atomName = atom.getName();
+                if (m_scopePtr->getPos(atomName).has_value() ||
+                    m_scopePtr->getPos(atomName, true).has_value()) {
+                    continue;
+                }
+                std::string fixedName = atomName;
+                if (!m_scopePtr->getFixed(fixedName).has_value()) {
+                    std::ostringstream oss;
+                    oss << "Unable to find argument slot '" << atomName
+                        << "' on the main or alternate stack";
+                    SourceLocation loc("", 0, 0);
+                    SEMANTIC_ERROR(
+                        oss.str(), loc,
+                        "Ensure the value has not already been consumed"
+                    );
+                    throw std::runtime_error(oss.str());
+                }
+            }
+
+            for (const auto& atom : arrayAtoms) {
+                const std::string& atomName = atom.getName();
+                auto mainPos = m_scopePtr->getPos(atomName);
+                if (!mainPos.has_value()) {
+                    if (!moveAltElementToMain(atomName)) {
+                        std::string fixedName = atomName;
+                        auto fixed = m_scopePtr->getFixed(fixedName);
+                        if (!fixed.has_value()) {
+                            throw std::runtime_error(
+                                "Failed to materialize private array "
+                                "argument: " + atomName
+                            );
+                        }
+                        const std::string& encoded =
+                            fixed->getData().empty() ? fixed->getName()
+                                                     : fixed->getData();
+                        m_generator.emit(encoded);
+                        m_scopePtr->removeFixed(fixedName);
+                        m_scopePtr->push(
+                            atomName,
+                            fixed->getType().empty() ? atom.getType()
+                                                     : fixed->getType(),
+                            fixed->getData()
+                        );
+                    }
+                    mainPos = m_scopePtr->getPos(atomName);
+                }
+                if (!mainPos.has_value()) {
+                    throw std::runtime_error(
+                        "Private array argument disappeared during stack "
+                        "preparation: " + atomName
+                    );
+                }
+                if (mainPos.value() != STACK_TOP_POS) {
+                    emitRoll(mainPos.value());
+                    m_scopePtr->roll(mainPos.value());
+                }
+            }
+        } else if (isStructType) {
             LOG_DEBUG("Argument is a struct type: " + paramType);
             auto fieldPathsAndTypes = getStructFieldsExpanded(
                 paramType, elementStr, m_structDefinitions
@@ -6641,6 +9286,24 @@ void ASTToBytecodeVisitor::processArgsToTop(
                     "Builtin member arg '" + elementStr +
                     "' deferred to per-access emit"
                 );
+                continue;
+            }
+
+            // Literal/immediate arguments and raw builtin members are returned
+            // by processArguments() as inline script atoms after their virtual
+            // stack entry has been consumed. Materialize one real call slot
+            // and publish its compiler identity to privateFunctionResolution.
+            if (element.getType() == "builtin_member" ||
+                isScript(elementStr)) {
+                m_generator.emit(elementStr);
+                CompilerPlaceholder materialized;
+                StackElement runtimeElement(
+                    materialized.toString(),
+                    element.getType(),
+                    materialized.toString()
+                );
+                m_scopePtr->push(runtimeElement);
+                elementsVec[i] = runtimeElement;
                 continue;
             }
 
@@ -7391,23 +10054,24 @@ void ASTToBytecodeVisitor::applyLeafFieldAssignment(
             int64_t posB = fieldPosOpt.value();
             if (posB == posA) {
                 LOG_DEBUG("Field '" + fieldPath + "' self-assignment (no-op).");
-            } else if (posB < posA) {
-                for (int64_t k = 0; k < posB; ++k)
-                    m_generator.emit(tbc::BytOpcode::OP_TOALTSTACK);
-                m_generator.emit(tbc::BytOpcode::OP_DROP);
-                emitPick(posA - posB - 1);
-                for (int64_t k = 0; k < posB; ++k)
-                    m_generator.emit(tbc::BytOpcode::OP_FROMALTSTACK);
             } else {
-                emitPick(posA);
-                for (int64_t k = 0; k < posB; ++k) {
-                    emitRoll(1);
-                    m_generator.emit(tbc::BytOpcode::OP_TOALTSTACK);
+#ifdef ENABLE_DEBUGGER
+                setCurrentLocationForGenerator(locNode);
+#endif
+                const auto copyEmission = emitCopyAssignment(
+                    m_generator,
+                    static_cast<size_t>(posA),
+                    static_cast<size_t>(posB)
+                );
+                if (copyEmission.usedPlanner) {
+                    LOG_DEBUG(
+                        "Shortest shallow field-copy plan selected: ",
+                        copyEmission.legacyBytes,
+                        " -> ",
+                        copyEmission.emittedBytes,
+                        " bytes"
+                    );
                 }
-                m_generator.emit(tbc::BytOpcode::OP_TOALTSTACK);
-                m_generator.emit(tbc::BytOpcode::OP_DROP);
-                for (int64_t k = 0; k <= posB; ++k)
-                    m_generator.emit(tbc::BytOpcode::OP_FROMALTSTACK);
             }
             LOG_DEBUG(
                 "Field '" + fieldPath + "' stack-to-stack copy from '" +
@@ -7869,6 +10533,7 @@ void ASTToBytecodeVisitor::executeStatements(
 )
 {
     FlowResult sequenceFlow = FlowResult::FallsThrough;
+    bool immutableSuffixEligible = false;
     std::string codeLevel{};
     for (auto it : m_codeBlockLevel) {
         codeLevel = codeLevel + std::to_string(it) + "-";
@@ -7876,18 +10541,38 @@ void ASTToBytecodeVisitor::executeStatements(
     m_codeBlockLevel.push_back(0);
     DEFER_BLOCK(m_codeBlockLevel.pop_back(););
 
+    // Only a Push following a Return in the public function's own statement
+    // sequence is deployment suffix data. A Push after a nested/branch-local
+    // Return is unreachable code and must not leak into the executable
+    // template (or demand a fixed self-placeholder length).
+    const bool allowImmutableSuffix =
+        m_immutableSuffixBlock &&
+        &statements == &m_immutableSuffixBlock->statements &&
+        m_activePrivateFunctions.empty();
+
     for (size_t statementIndex = startIndex;
          statementIndex < statements.size();
          ++statementIndex) {
         const auto& stmt = statements[statementIndex];
 
+        const bool isImmutableSuffix =
+            immutableSuffixEligible &&
+            isImmutableSuffixStatement(stmt.get());
+
         // Uppercase Return makes ordinary following statements unreachable.
         // A trailing Push is the contract's explicit immutable SuffixData and
         // must still be emitted behind the finalizer's padding boundary.
         if (sequenceFlow == FlowResult::ScriptTerminate &&
-            !isImmutableSuffixStatement(stmt.get())) {
+            !isImmutableSuffix) {
             continue;
         }
+
+        const bool previousImmutableSuffixState =
+            m_isEmittingImmutableSuffix;
+        m_isEmittingImmutableSuffix = isImmutableSuffix;
+        DEFER_BLOCK(
+            m_isEmittingImmutableSuffix = previousImmutableSuffixState;
+        );
 
         m_codeBlockLevel.back()++;
         std::string stmtStr = codeLevel +
@@ -7953,6 +10638,12 @@ void ASTToBytecodeVisitor::executeStatements(
             throw;
         }
 
+        if (m_lastFlowResult == FlowResult::FallsThrough &&
+            !compiler_flow::statementAlwaysTerminates(stmt.get()) &&
+            !isImmutableSuffix) {
+            emitLifetimeCleanupAfter(*stmt);
+        }
+
         auto subStr = m_generator.subStr();
         newSymbol.clear();
         stackStatus.clear();
@@ -7976,10 +10667,155 @@ void ASTToBytecodeVisitor::executeStatements(
             sequenceFlow == FlowResult::FallsThrough) {
             // 普通后续语句会跳过；显式 Push suffix 仍允许在 padding 后生成。
             sequenceFlow = FlowResult::ScriptTerminate;
+            immutableSuffixEligible =
+                allowImmutableSuffix && isDirectScriptReturn(stmt.get());
         }
     }
 
     m_lastFlowResult = sequenceFlow;
+}
+
+const apc::compiler::AstLifetimePlan*
+ASTToBytecodeVisitor::lifetimePlanFor(const FunctionNode& function) const
+{
+    if (!m_lifetimePlans) {
+        return nullptr;
+    }
+    const auto found = m_lifetimePlans->find(&function);
+    if (found == m_lifetimePlans->end() || !found->second.valid()) {
+        return nullptr;
+    }
+    return &found->second;
+}
+
+void ASTToBytecodeVisitor::emitLifetimeCleanupAfter(
+    const StmtNode& statement
+)
+{
+    if (!m_currentLifetimePlan || m_isEmittingImmutableSuffix ||
+        m_lifetimeControlFlowDepth != 0) {
+        return;
+    }
+
+    SymbolTable& symbolTable = m_scopePtr->getCurrentSymtab();
+    for (const auto& suggestion :
+         m_currentLifetimePlan->suggestionsAfter(&statement)) {
+        if (suggestion.bindings.empty()) {
+            continue;
+        }
+
+        std::optional<std::string> physicalName;
+        std::optional<int64_t> physicalPosition;
+        std::vector<std::string> logicalNames;
+        bool safe = true;
+        for (const auto& binding : suggestion.bindings) {
+            // The symbol table currently tracks names and physical slots,
+            // not the planner's ValueId. If a binding has been redefined, a
+            // kill for an older version cannot be resolved safely by name.
+            size_t bindingVersionCount = 0;
+            bool exactVersionPresent = false;
+            for (const auto& record :
+                 m_currentLifetimePlan->valueRecords) {
+                if (record.binding != binding.binding) {
+                    continue;
+                }
+                ++bindingVersionCount;
+                exactVersionPresent = exactVersionPresent ||
+                                      record.value == binding.value;
+            }
+            if (bindingVersionCount != 1 || !exactVersionPresent) {
+                safe = false;
+                break;
+            }
+
+            const std::string& logicalName = binding.name;
+            if (logicalName.empty() ||
+                logicalName.find('.') != std::string::npos ||
+                logicalName.find('[') != std::string::npos ||
+                isWholeArrayElement(logicalName) ||
+                symbolTable.isArraySymbol(logicalName) ||
+                symbolTable.isCompoundTypeSymbol(logicalName)) {
+                safe = false;
+                break;
+            }
+
+            const std::string resolved =
+                symbolTable.resolveBindSymbol(logicalName);
+            if (resolved.empty() ||
+                tbc::CompilerPlaceholder::isPlaceholder(resolved) ||
+                isWholeArrayElement(resolved) ||
+                symbolTable.isArraySymbol(resolved) ||
+                symbolTable.isCompoundTypeSymbol(resolved) ||
+                std::find(
+                    symbolTable.m_keepSymbol.begin(),
+                    symbolTable.m_keepSymbol.end(),
+                    logicalName
+                ) != symbolTable.m_keepSymbol.end() ||
+                std::find(
+                    symbolTable.m_keepSymbol.begin(),
+                    symbolTable.m_keepSymbol.end(),
+                    resolved
+                ) != symbolTable.m_keepSymbol.end()) {
+                safe = false;
+                break;
+            }
+
+            const auto mainPosition =
+                symbolTable.getPhysicalPos(resolved, false);
+            const auto altPosition =
+                symbolTable.getPhysicalPos(resolved, true);
+            if (!mainPosition.has_value() || altPosition.has_value() ||
+                *mainPosition < 0 ||
+                *mainPosition > std::numeric_limits<int>::max()) {
+                safe = false;
+                break;
+            }
+            if (physicalName.has_value() &&
+                (*physicalName != resolved ||
+                 *physicalPosition != *mainPosition)) {
+                // An atom may describe aliases, but one cleanup may retire
+                // only one proven physical slot.
+                safe = false;
+                break;
+            }
+            physicalName = resolved;
+            physicalPosition = *mainPosition;
+            if (std::find(
+                    logicalNames.begin(), logicalNames.end(), logicalName
+                ) == logicalNames.end()) {
+                logicalNames.push_back(logicalName);
+            }
+        }
+
+        if (!safe || !physicalName.has_value() ||
+            !physicalPosition.has_value()) {
+            continue;
+        }
+
+        const int position = static_cast<int>(*physicalPosition);
+        if (position == 0) {
+            m_generator.emit(tbc::BytOpcode::OP_DROP);
+            m_scopePtr->pop();
+        } else if (position == 1) {
+            m_generator.emit(tbc::BytOpcode::OP_NIP);
+            m_scopePtr->dropAt(1);
+        } else {
+            emitRoll(position);
+            m_scopePtr->roll(position);
+            m_generator.emit(tbc::BytOpcode::OP_DROP);
+            m_scopePtr->pop();
+        }
+        ++m_lifetimeCleanupCount;
+
+#ifdef ENABLE_DEBUGGER
+        if (m_debugInfoGen) {
+            const size_t endPC = m_generator.getCurrentPC();
+            for (const auto& logicalName : logicalNames) {
+                m_debugInfoGen->onVariableEnd(logicalName, endPC);
+            }
+        }
+#endif
+    }
 }
 
 void ASTToBytecodeVisitor::registerWholeArrayElement(

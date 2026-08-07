@@ -8,6 +8,7 @@
 #include <functional>
 
 #include "byt_defs.h"
+#include "bytecode_ir.h"
 #include "bytecode_opcodes.h"
 
 #ifdef ENABLE_DEBUGGER
@@ -33,6 +34,11 @@ public:
               std::unordered_map<std::string, std::string>>
     instructions() const;
 
+    // Typed artifact is the generator's authoritative representation.  The
+    // legacy pair returned by instructions() is now an explicit compatibility
+    // serialization boundary for existing passes and external consumers.
+    BytecodeArtifact artifact() const;
+
     void mergeSubOverall();
     void mergeSubUnoverall();
 
@@ -40,15 +46,17 @@ public:
     std::string subStr() const;
     std::string str() const;
 
+    // Total instruction atoms emitted into the committed and current
+    // function buffers. Available in all builds so expansion budgets do not
+    // depend on debugger support.
+    size_t getCurrentPC() const {
+        return m_instruct.size() + m_subInstruct.size();
+    }
+
 #ifdef ENABLE_DEBUGGER
     using DebugInfoCallback = std::function<void(size_t pc, const std::string& opcode, const std::string& operand, const apc_debug::SourceLocation& loc)>;
     void setDebugInfoCallback(DebugInfoCallback callback) {
         m_debugInfoCallback = callback;
-    }
-
-    // 当前 PC (指令计数)
-    size_t getCurrentPC() const {
-        return m_instruct.size() + m_subInstruct.size();
     }
 
     void setCurrentLocation(const apc_debug::SourceLocation& loc) {
@@ -57,8 +65,12 @@ public:
 #endif
 
 private:
-    std::vector<std::string> m_subInstruct;
-    std::vector<std::string> m_instruct;
+    void appendInstruction(BytecodeInstruction instruction);
+    std::string serialize(const BytecodeInstruction& instruction) const;
+
+    std::vector<BytecodeInstruction> m_subInstruct;
+    std::vector<BytecodeInstruction> m_instruct;
+    InstructionId m_nextInstructionId{0};
     std::pair<std::string, std::string> m_subUninstruct;
     std::unordered_map<std::string, std::string> m_uninstruct;
 

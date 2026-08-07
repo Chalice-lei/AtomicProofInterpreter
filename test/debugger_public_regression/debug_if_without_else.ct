@@ -1,0 +1,5 @@
+Contract DebugIfWithoutElse:
+    def main(flag: bool):
+        if flag:
+            Verify(1)
+        Return 1

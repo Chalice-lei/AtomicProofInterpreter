@@ -1,0 +1,11 @@
+Contract GlobalLiteralTypesContract:
+    global NumberValue = 9
+    global StringValue = "TBC20TAPE"
+    global HexValue = 0x0102
+    global AddressValue = "1BoatSLRHtKNngkdXEeobR76b53LETtpyT"
+
+    def main():
+        EqualVerify(StringValue, "TBC20TAPE")
+        EqualVerify(HexValue, 0x0102)
+        EqualVerify(AddressValue, "1BoatSLRHtKNngkdXEeobR76b53LETtpyT")
+        Return NumberValue

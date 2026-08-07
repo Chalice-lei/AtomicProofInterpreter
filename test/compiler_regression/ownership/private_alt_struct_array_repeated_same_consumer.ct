@@ -1,0 +1,17 @@
+Contract PrivateAltStructArrayRepeatedSameConsumer:
+    Struct Pair:
+        left: number
+        right: number
+    def _stash(values: Pair[1]):
+        SetAlt(values[0])
+    def _restoreBoth():
+        SetMain(values[0])
+        secondResult = values[0].left - values[0].right
+        SetMain(values[0])
+        firstResult = values[0].left - values[0].right
+        return secondResult - firstResult
+    def main(first: Pair[1], second: Pair[1]):
+        _stash(first)
+        _stash(second)
+        result = _restoreBoth()
+        Return(result)

@@ -6,10 +6,33 @@ void PrintVisitor::visit(ContractNode& node)
     Logger::GetInstance()
         .Log(LogLevel::DEBUG, "", 0, 1, 1, "ContractNode:", node.name);
     indentLevel++;
+    for (auto& global : node.globalConstants) {
+        global->accept(*this);
+    }
     for (auto& member : node.members) {
         member->accept(*this);
     }
     indentLevel--;
+}
+
+void PrintVisitor::visit(GlobalConstNode& node)
+{
+    printIndent();
+    Logger::GetInstance().Log(
+        LogLevel::DEBUG,
+        "",
+        0,
+        1,
+        0,
+        "GlobalConstNode: ",
+        node.name,
+        " = "
+    );
+    if (node.initializer) {
+        node.initializer->accept(*this);
+    } else {
+        Logger::GetInstance().Log(LogLevel::DEBUG, "", 0, 1, 1, "<missing>");
+    }
 }
 
 void PrintVisitor::visit(FunctionNode& node)

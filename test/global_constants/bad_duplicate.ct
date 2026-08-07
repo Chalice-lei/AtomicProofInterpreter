@@ -1,0 +1,6 @@
+Contract GlobalDuplicateContract:
+    global TapeFlag = "TBC20TAPE"
+    global TapeFlag = "DUPLICATE"
+
+    def main():
+        Return 1

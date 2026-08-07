@@ -1,0 +1,4 @@
+Contract GlobalInFunctionContract:
+    def main():
+        global TapeFlagSize = 9
+        Return 1

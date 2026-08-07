@@ -63,6 +63,11 @@ void LiteralNode::accept(ASTVisitor& visitor)
     visitor.visit(*this);
 }
 
+void GlobalConstNode::accept(ASTVisitor& visitor)
+{
+    visitor.visit(*this);
+}
+
 void IdentifierNode::accept(ASTVisitor& visitor)
 {
     visitor.visit(*this);

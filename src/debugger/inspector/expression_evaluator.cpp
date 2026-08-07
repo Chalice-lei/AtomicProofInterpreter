@@ -1,4 +1,7 @@
 #include "expression_evaluator.h"
+
+#include "../../util/string_utils.h"
+
 #include <algorithm>
 #include <cctype>
 
@@ -14,7 +17,18 @@ EvaluationResult ExpressionEvaluator::evaluate(
     const std::string& expression,
     const StackState& stack,
     size_t currentPC
-) {
+)
+{
+    return evaluate(expression, stack, currentPC, BranchTrace{});
+}
+
+EvaluationResult ExpressionEvaluator::evaluate(
+    const std::string& expression,
+    const StackState& stack,
+    size_t currentPC,
+    const BranchTrace& branchTrace
+)
+{
     std::string expr = trim(expression);
     
     if (expr.empty()) {
@@ -25,7 +39,7 @@ EvaluationResult ExpressionEvaluator::evaluate(
     
     switch (exprType) {
         case ExprType::Variable:
-            return evaluateVariable(expr, stack, currentPC);
+            return evaluateVariable(expr, stack, currentPC, branchTrace);
             
         case ExprType::Literal:
             return evaluateLiteral(expr);
@@ -38,11 +52,15 @@ EvaluationResult ExpressionEvaluator::evaluate(
             if (!parts) {
                 return EvaluationResult::error("无法解析二元运算");
             }
-            auto leftResult = evaluate(parts->left, stack, currentPC);
+            auto leftResult = evaluate(
+                parts->left, stack, currentPC, branchTrace
+            );
             if (!leftResult.success) {
                 return leftResult;
             }
-            auto rightResult = evaluate(parts->right, stack, currentPC);
+            auto rightResult = evaluate(
+                parts->right, stack, currentPC, branchTrace
+            );
             if (!rightResult.success) {
                 return rightResult;
             }
@@ -58,8 +76,21 @@ EvaluationResult ExpressionEvaluator::evaluateVariable(
     const std::string& varName,
     const StackState& stack,
     size_t currentPC
-) {
-    auto varValue = m_varInspector->readVariable(varName, stack, currentPC);
+)
+{
+    return evaluateVariable(varName, stack, currentPC, BranchTrace{});
+}
+
+EvaluationResult ExpressionEvaluator::evaluateVariable(
+    const std::string& varName,
+    const StackState& stack,
+    size_t currentPC,
+    const BranchTrace& branchTrace
+)
+{
+    auto varValue = m_varInspector->readVariable(
+        varName, stack, currentPC, branchTrace
+    );
     
     if (!varValue) {
         return EvaluationResult::error("变量 '" + varName + "' 未找到");
@@ -195,18 +226,7 @@ std::optional<ExpressionEvaluator::BinaryOpParts> ExpressionEvaluator::parseBina
 }
 
 std::string ExpressionEvaluator::trim(const std::string& str) {
-    size_t start = 0;
-    size_t end = str.length();
-    
-    while (start < end && std::isspace(static_cast<unsigned char>(str[start]))) {
-        ++start;
-    }
-    
-    while (end > start && std::isspace(static_cast<unsigned char>(str[end - 1]))) {
-        --end;
-    }
-    
-    return str.substr(start, end - start);
+    return apc::util::trim(str);
 }
 
 bool ExpressionEvaluator::isLiteral(const std::string& expr) {
@@ -312,6 +332,3 @@ std::optional<int64_t> ExpressionEvaluator::toInt(const std::string& str) {
 }
 
 } // namespace apc_debug
-
-
-

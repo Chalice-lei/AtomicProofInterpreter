@@ -11,6 +11,8 @@
 
 #include "../ast/ast_visitor.h"
 #include "../error/error_manager.h"
+#include "for_loop_policy.h"
+#include "range_plan.h"
 
 // 变量数据来源.
 enum class DataSource {
@@ -208,6 +210,17 @@ struct VariableInfo
     }
 };
 
+// Compile-time contract for a fixed-array element intentionally left on the
+// shared altstack by an inline private function. This is type information
+// only: physical presence and ordering remain the bytecode visitor's job.
+struct AltstackArrayExportSchema
+{
+    std::string elementType;
+    size_t arraySize = 0;
+    size_t elementStackSize = 1;
+    SourceLocation firstExportLocation;
+};
+
 // 前置分析访问器.
 class PreAnalysisVisitor : public ASTVisitor
 {
@@ -251,7 +264,7 @@ public:
     void visit(IndexAccessNode& node) override;
     void visit(ArrayDeclNode& node) override;
     void visit(ArrayDefNode& node) override;
-    void visit(BraceExprNode& /*node*/) override {};
+    void visit(BraceExprNode& node) override;
     void visit(DestructureAssignNode& node) override;
 
 private:
@@ -322,6 +335,30 @@ private:
     std::optional<std::pair<std::string, size_t>>
     parseFixedArrayType(const std::string& type) const;
 
+    void collectAltstackArrayExportSchemas(ContractNode& contract);
+    void collectAltstackArrayExportSchemas(FunctionNode& function);
+    void collectAltstackArrayExportSchemas(
+        BlockNode& block,
+        std::map<std::string, AltstackArrayExportSchema>& arrayBindings
+    );
+    void collectAltstackArrayExportSchemas(
+        StmtNode& statement,
+        std::map<std::string, AltstackArrayExportSchema>& arrayBindings
+    );
+    void collectAltstackArrayExportSchemas(
+        ExprNode& expression,
+        const std::map<std::string, AltstackArrayExportSchema>& arrayBindings
+    );
+    void registerAltstackArrayExportSchema(
+        const std::string& channelName,
+        const AltstackArrayExportSchema& schema,
+        const SourceLocation& exportLocation
+    );
+    bool restoreAltstackArrayElement(IndexAccessNode& node);
+    std::string formatAltstackArraySchema(
+        const AltstackArrayExportSchema& schema
+    ) const;
+
     VariableInfo* findVariable(const std::string& name);
 
     void
@@ -330,6 +367,7 @@ private:
     reportWarning(const std::string& message, const SourceLocation& location);
 
     void analyzeExpression(ExprNode& expr);
+    void validateValueProducingExpression(ExprNode& expr);
     void analyzeBorrowedExpression(ExprNode& expr);
     void analyzeExpressionForValueReturn(ExprNode& expr); // 小写 return: 只使用不消耗.
     void analyzeConditionalExpression(ExprNode& expr);
@@ -344,7 +382,11 @@ private:
     std::string getVariableFromExpr(ExprNode& expr);
     // 例: ctx.FTbyChange.Tape.LockingScript -> {"ctx", "FTbyChange.Tape.LockingScript"}
     std::pair<std::string, std::string> getFieldPathFromExpr(ExprNode& expr);
-    std::optional<int64_t> evaluateIntegerConstant(ExprNode& expr);
+    std::optional<int64_t> evaluateIntegerConstant(ExprNode& expr) const;
+    std::optional<int64_t> evaluateIntegerConstant(
+        ExprNode& expr,
+        const std::map<std::string, int64_t>& staticIntegerBindings
+    ) const;
 
     bool isConsumingOperation(const std::string& operation);
     bool hasReturnValue(const std::string& functionName, size_t argCount);
@@ -393,9 +435,18 @@ private:
 
     std::map<std::string, std::vector<std::pair<std::string, std::string>>>
         m_structDefinitions;
+    std::map<std::string, FunctionNode*> m_functionDefinitions;
+
+    // Interprocedural type protocols for arrays whose individual elements are
+    // exported with SetAlt in an inline private/library function. Ordinary
+    // lexical bindings are deliberately not retained here.
+    std::map<std::string, AltstackArrayExportSchema>
+        m_altstackArrayExportSchemas;
+    std::set<std::string> m_conflictingAltstackArrayExportSchemas;
 
     std::vector<std::string> m_errors;
     std::vector<std::string> m_warnings;
+    std::set<const ExprNode*> m_validatedValueExpressions;
 
     std::set<std::string> m_consumingOperations;
 
@@ -406,7 +457,13 @@ private:
     bool m_inPrivateFunction{false};
     bool m_inLibraryFunction{false};
     std::string m_currentFunctionName;
-    std::map<std::string, int64_t> m_staticLoopValues;
+    // Compile-time integer bindings mirrored by fixed storage in lowering.
+    std::map<std::string, int64_t> m_staticIntegerValues;
+
+    // Nested static loops share one budget so their Cartesian product cannot
+    // expand without bound.
+    apc::compiler::RangeExpansionBudget m_loopExpansionBudget{
+        apc::compiler::kMaxExpandedLoopBodies};
 
     // 上下文敏感函数 (私有 / 库) 的形参名集合. 这些形参在调用点可能绑定到
     // 合约成员 <self.X> (允许多读) 或栈值 (受 move 约束). 由于 PreAnalysis
@@ -416,6 +473,11 @@ private:
 
     // 小写 return 走只读: 访问表达式但不消耗所有权.
     bool m_readOnlyMode{false};
+
+    // Actual-path termination from the most recently analyzed statement.
+    // Static specialization can terminate even when the original AST still
+    // has a context-free fallthrough path.
+    bool m_lastStatementTerminates{false};
 };
 
 #endif // PRE_ANALYSIS_VISITOR_H

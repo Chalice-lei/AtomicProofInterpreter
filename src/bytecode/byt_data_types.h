@@ -136,9 +136,9 @@ struct CompoundFieldInfo
 {
     std::string name;
     std::string type; // 例如 "hex20" 或 "uint64[3]"
-    size_t byteSize;
-    bool isArray;
-    size_t arraySize;
+    size_t byteSize{0};
+    bool isArray{false};
+    size_t arraySize{0};
 
     CompoundFieldInfo() = default;
     CompoundFieldInfo(

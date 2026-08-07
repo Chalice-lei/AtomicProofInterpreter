@@ -49,11 +49,23 @@ public:
         const StackState& stack,
         size_t currentPC
     );
+    EvaluationResult evaluate(
+        const std::string& expression,
+        const StackState& stack,
+        size_t currentPC,
+        const BranchTrace& branchTrace
+    );
 
     EvaluationResult evaluateVariable(
         const std::string& varName,
         const StackState& stack,
         size_t currentPC
+    );
+    EvaluationResult evaluateVariable(
+        const std::string& varName,
+        const StackState& stack,
+        size_t currentPC,
+        const BranchTrace& branchTrace
     );
 
     // 形如 "stack[0]"、"stack.top"
@@ -117,6 +129,4 @@ private:
 } // namespace apc_debug
 
 #endif // EXPRESSION_EVALUATOR_H
-
-
 

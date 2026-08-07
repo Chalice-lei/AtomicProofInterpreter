@@ -8,6 +8,8 @@ class ASTVisitor
 public:
     virtual ~ASTVisitor() = default;
     virtual void visit(ContractNode& node) = 0;
+    virtual void visit(GlobalConstNode& /*node*/)
+    {}
     virtual void visit(LibraryNode& /*node*/)
     {}
     virtual void visit(FunctionNode& node) = 0;

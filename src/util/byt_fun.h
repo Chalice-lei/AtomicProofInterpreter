@@ -1,55 +1,61 @@
 #ifndef BYT_LIB_H
 #define BYT_LIB_H
+#include <cstdint>
 #include <iomanip>
+#include <limits>
 #include <sstream>
 #include <string>
 
+#include "../bytecode/script_codec.h"
 #include "util_defs.h"
 
 SPACE_TBC_START
 
+inline std::string byteToHex(uint8_t byte)
+{
+    static const char hexDigits[] = "0123456789abcdef";
+    return std::string{hexDigits[byte >> 4], hexDigits[byte & 0x0f]};
+}
+
+inline std::string encodeLittleEndianUnsigned(size_t value, size_t byteCount)
+{
+    std::string result;
+    result.reserve(byteCount * 2);
+    for (size_t i = 0; i < byteCount; ++i) {
+        result += byteToHex(static_cast<uint8_t>((value >> (8 * i)) & 0xff));
+    }
+    return result;
+}
+
 // 小端序长度编码
 inline std::string encodeLE16(int length)
 {
-    std::ostringstream oss;
-    oss << std::hex << std::setfill('0') << std::setw(2) << (length & 0xff);
-    oss << std::hex << std::setfill('0') << std::setw(2)
-        << ((length >> 8) & 0xff);
-    return oss.str();
+    return encodeLittleEndianUnsigned(
+        static_cast<uint16_t>(length),
+        2
+    );
 }
 
 inline std::string encodeLE32(int length)
 {
-    std::ostringstream oss;
-    oss << std::hex << std::setfill('0') << std::setw(2) << (length & 0xff);
-    oss << std::hex << std::setfill('0') << std::setw(2)
-        << ((length >> 8) & 0xff);
-    oss << std::hex << std::setfill('0') << std::setw(2)
-        << ((length >> 16) & 0xff);
-    oss << std::hex << std::setfill('0') << std::setw(2)
-        << ((length >> 24) & 0xff);
-    return oss.str();
+    return encodeLittleEndianUnsigned(
+        static_cast<uint32_t>(length),
+        4
+    );
+}
+
+inline std::string encodePushDataPrefix(size_t length)
+{
+    return ScriptCodec::legacyPushPrefixHex(length).value_or(std::string{});
 }
 
 // 选择 push 操作码并编码长度
 inline std::string bytEncodeLengthOpcode(int length)
 {
-    std::ostringstream oss;
-
-    if (length < 76) {
-        // 0-75 字节：长度值即操作码
-        oss << std::hex << std::setfill('0') << std::setw(2) << length;
-        return oss.str();
-    } else if (length <= 255) {
-        oss << "4c" << std::hex << std::setfill('0') << std::setw(2) << length;
-        return oss.str();
-    } else if (length <= 65535) {
-        oss << "4d" << encodeLE16(length);
-        return oss.str();
-    } else {
-        oss << "4e" << encodeLE32(length);
-        return oss.str();
+    if (length < 0) {
+        return "";
     }
+    return encodePushDataPrefix(static_cast<size_t>(length));
 }
 
 inline void escapeString(std::string& str)

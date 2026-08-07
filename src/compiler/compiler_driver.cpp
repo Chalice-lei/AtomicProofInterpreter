@@ -48,6 +48,10 @@ CompilerResult CompilerDriver::compileSource(
         pipelineOptions.debugOutputFile = options.debugOutputFile;
         pipelineOptions.suppressDebugFile =
             options.enableDebug && options.debugOutputFile.empty();
+        // CompilerDriver feeds the debugger, REPL and in-process VM, all of
+        // which require concrete legacy instruction atoms today. The CLI
+        // export pipeline may opt into CanonicalV2 independently.
+        pipelineOptions.artifactFormat = "legacy_v1";
 
         PassContext pipelineData = apc_compiler::runBytecodePipeline(
             sourceFile, sourceCode, pipelineOptions

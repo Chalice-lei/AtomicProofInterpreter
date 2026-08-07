@@ -222,6 +222,10 @@ public:
     bool m_isInitialized{false};
     bool m_isCompoundType{false};
     CompoundTypeInfo m_compoundInfo;
+    // Compiler-only ownership marker. An external array view describes
+    // values restored from the shared altstack; it is not a lexical array
+    // declaration owned by the current scope.
+    bool m_isExternalArrayView{false};
 };
 
 class SymbolTable
@@ -240,6 +244,8 @@ public:
           m_declaredSymbols(other.m_declaredSymbols),
           m_keepSymbol(other.m_keepSymbol),
           m_bindSymbol(other.m_bindSymbol), m_currentScope(other.m_currentScope),
+          m_activeBindSymbolStart(other.m_activeBindSymbolStart),
+          m_activeScopeEntryStart(other.m_activeScopeEntryStart),
           m_savedSharedAltStackElements(other.m_savedSharedAltStackElements),
           m_savedAltStackCombinedStackSize(
               other.m_savedAltStackCombinedStackSize
@@ -280,6 +286,8 @@ public:
         m_keepSymbol = other.m_keepSymbol;
         m_bindSymbol = other.m_bindSymbol;
         m_currentScope = other.m_currentScope;
+        m_activeBindSymbolStart = other.m_activeBindSymbolStart;
+        m_activeScopeEntryStart = other.m_activeScopeEntryStart;
         m_altStackPtr = other.m_altStackPtr;
         m_savedSharedAltStackElements =
             other.m_savedSharedAltStackElements;
@@ -347,6 +355,10 @@ public:
     getPos(const std::string& name, bool isAltFlag = false) const;
     std::optional<int64_t> getPos(StackElement& name, bool isAltFlag = false)
         const;
+    // Look up an already-resolved physical slot name without applying the
+    // current logical parameter/channel bindings again.
+    std::optional<int64_t>
+    getPhysicalPos(const std::string& name, bool isAltFlag = false) const;
     void stackStatus(std::string& statusStr);
 
     void setFixed(StackElement varValueStr);
@@ -369,6 +381,8 @@ public:
     );
     bool symbolExists(std::string& name) const;
     bool isDeclaredInCurrentScope(const std::string& name) const;
+    bool hasScopeEntry(const std::string& name) const;
+    bool isExternalArrayView(const std::string& name) const;
 
     void removeSymbol(const std::string& name);
 
@@ -376,6 +390,18 @@ public:
 
     // 数组
     bool defineArray(
+        const std::string& name,
+        const std::string& elementType,
+        size_t size,
+        bool isFixedSize = true
+    );
+
+    // Import compiler-only metadata for a value restored from the shared
+    // altstack. Unlike defineArray(), this does not make the view owned by
+    // the current lexical scope, so normal block cleanup will not consume the
+    // restored runtime slots. The enclosing private-call snapshot removes
+    // the view when the inline call returns.
+    bool importExternalArrayView(
         const std::string& name,
         const std::string& elementType,
         size_t size,
@@ -438,6 +464,49 @@ public:
     void addBindSymbol(std::pair<std::string, std::string>& bindPair)
     {
         m_bindSymbol.push_back(bindPair);
+    }
+
+    // Private calls append aliases and semantic entries to shared vectors.
+    // These frame boundaries keep prefix-based operations such as
+    // Delete(root) inside the innermost active call.
+    size_t beginBindSymbolFrame() noexcept
+    {
+        const size_t previous = activeBindSymbolStart();
+        m_activeBindSymbolStart = m_bindSymbol.size();
+        return previous;
+    }
+
+    void restoreBindSymbolFrame(size_t start) noexcept
+    {
+        m_activeBindSymbolStart =
+            start <= m_bindSymbol.size() ? start : m_bindSymbol.size();
+    }
+
+    size_t activeBindSymbolStart() const noexcept
+    {
+        return m_activeBindSymbolStart <= m_bindSymbol.size()
+                   ? m_activeBindSymbolStart
+                   : m_bindSymbol.size();
+    }
+
+    size_t beginScopeEntryFrame() noexcept
+    {
+        const size_t previous = activeScopeEntryStart();
+        m_activeScopeEntryStart = m_currentScope.size();
+        return previous;
+    }
+
+    void restoreScopeEntryFrame(size_t start) noexcept
+    {
+        m_activeScopeEntryStart =
+            start <= m_currentScope.size() ? start : m_currentScope.size();
+    }
+
+    size_t activeScopeEntryStart() const noexcept
+    {
+        return m_activeScopeEntryStart <= m_currentScope.size()
+                   ? m_activeScopeEntryStart
+                   : m_currentScope.size();
     }
 
     // Resolve a parameter binding to the caller-visible symbol. Bindings can
@@ -558,6 +627,9 @@ public:
     std::vector<std::pair<std::string, SymbolInfo>> m_currentScope;
 
 private:
+    size_t m_activeBindSymbolStart{0};
+    size_t m_activeScopeEntryStart{0};
+
     // 保存/恢复用的共享副栈快照
     std::stack<std::vector<StackElement>> m_savedSharedAltStackElements;
     std::stack<size_t> m_savedAltStackCombinedStackSize;

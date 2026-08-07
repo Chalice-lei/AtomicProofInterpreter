@@ -1,0 +1,6 @@
+Contract GlobalLoopShadowContract:
+    global TapeFlagSize = 9
+
+    def main():
+        for TapeFlagSize in Range(1):
+            Return TapeFlagSize

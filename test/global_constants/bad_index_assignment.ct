@@ -1,0 +1,6 @@
+Contract GlobalIndexAssignmentContract:
+    global TapeFlag = 0x01
+
+    def main():
+        TapeFlag[0] = 1
+        Return 1

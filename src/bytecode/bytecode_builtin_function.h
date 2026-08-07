@@ -5,8 +5,8 @@
 #include <climits>
 #include <functional>
 #include <iomanip>
+#include <iterator>
 #include <memory>
-#include <regex>
 #include <set>
 #include <sstream>
 #include <string>
@@ -676,6 +676,14 @@ static const std::unordered_map<
                                               "failed: stack pointer is null");
                  }
 
+                 // Delete 会同步修改主栈、共享副栈和语义元数据。
+                 // 任何预检或执行异常都恢复入口快照，避免调用方尚未
+                 // emit 字节码时编译期栈已被部分修改。
+                 const auto deleteEntryState =
+                     stackPtr->captureControlFlowState();
+
+                 try {
+
                  // 去掉所有 0x 前缀
                  auto cleanHexString = [](const std::string& hexStr
                                        ) -> std::string {
@@ -698,6 +706,23 @@ static const std::unordered_map<
                      auto& currentSymtab = scopePtr->getCurrentSymtab();
                      auto& altStackPtr = currentSymtab.m_altStackPtr;
 
+                     auto removeOriginalTracking = [&currentSymtab](
+                                                       const std::string& name
+                                                   ) {
+                         auto tracked = std::find_if(
+                             currentSymtab.m_newSymbol.rbegin(),
+                             currentSymtab.m_newSymbol.rend(),
+                             [&name](const std::string& candidate) {
+                                 return candidate == name;
+                             }
+                         );
+                         if (tracked != currentSymtab.m_newSymbol.rend()) {
+                             currentSymtab.m_newSymbol.erase(
+                                 std::next(tracked).base()
+                             );
+                         }
+                     };
+
                      // 副栈栈顶: FROMALTSTACK + DROP
                      if (altPosition == 0) {
                          deleteResult += opcodeToHex(
@@ -707,9 +732,11 @@ static const std::unordered_map<
 
                          if (!altStackPtr->empty()) {
                              auto element = altStackPtr->top();
+                             const std::string physicalName = element.getName();
                              altStackPtr->pop();
                              scopePtr->push(element);
                              scopePtr->pop();
+                             removeOriginalTracking(physicalName);
                              LOG_DEBUG(
                                  "Actually moved and deleted variable '" +
                                  varName + "' from alt stack top"
@@ -757,9 +784,12 @@ static const std::unordered_map<
 
                      if (!altStackPtr->empty()) {
                          auto targetElement = altStackPtr->top();
+                         const std::string physicalName =
+                             targetElement.getName();
                          altStackPtr->pop();
                          scopePtr->push(targetElement);
                          scopePtr->pop();
+                         removeOriginalTracking(physicalName);
                          LOG_DEBUG(
                              "Actually moved and deleted target variable '" +
                              varName + "' from alt stack"
@@ -798,132 +828,169 @@ static const std::unordered_map<
                      return cleanHexString(deleteResult);
                  };
 
-                 // 估算变量在栈上占用的槽数
-                 auto getVariableStackSize =
-                     [&stackPtr](const std::string& varName) -> int64_t {
-                     auto pos = stackPtr->getPos(varName);
-                     if (!pos.has_value()) {
-                         return 1;
-                     }
+                 std::string result;
 
-                     try {
-                         const auto& element = stackPtr->at(
-                             static_cast<uint64_t>(pos.value())
-                         );
-                         std::string varType = element.getType();
-
-                         if (varType.empty()) {
-                             return 1;
-                         }
-
-                         // 结构体类型
-                         if (varType.find("Struct") != std::string::npos ||
-                             varType.find("struct") != std::string::npos) {
-                             std::regex fieldCountRegex(
-                                 R"((?:Struct|struct).*?(?:fieldCount|fields?)[:=](\d+))"
-                             );
-                             std::smatch match;
-
-                             if (std::regex_search(
-                                     varType, match, fieldCountRegex
-                                 ) &&
-                                 match.size() > 1) {
-                                 try {
-                                     int64_t fieldCount = std::stoll(
-                                         match[1].str()
-                                     );
-                                     return std::max(
-                                         fieldCount, static_cast<int64_t>(1)
-                                     );
-                                 } catch (const std::exception&) {
-                                     // 解析失败, 走启发式
-                                 }
-                             }
-
-                             // 启发式: 据类型串中冒号/逗号数估算
-                             size_t colonCount = std::count(
-                                 varType.begin(), varType.end(), ':'
-                             );
-                             size_t commaCount = std::count(
-                                 varType.begin(), varType.end(), ','
-                             );
-
-                             if (colonCount > 2 || commaCount > 1) {
-                                 return std::min(
-                                     static_cast<int64_t>(
-                                         colonCount + commaCount
-                                     ),
-                                     static_cast<int64_t>(8)
-                                 );
-                             }
-
-                             return 2; // 默认复杂结构占 2 槽
-                         }
-
-                         if (varType.find("Array") != std::string::npos ||
-                             varType.find("array") != std::string::npos ||
-                             varType.find("[]") != std::string::npos) {
-                             std::regex arraySizeRegex(
-                                 R"((?:Array|array).*?(?:size|length)[:=](\d+))"
-                             );
-                             std::smatch match;
-
-                             if (std::regex_search(
-                                     varType, match, arraySizeRegex
-                                 ) &&
-                                 match.size() > 1) {
-                                 try {
-                                     int64_t arraySize = std::stoll(
-                                         match[1].str()
-                                     );
-                                     return std::max(
-                                         arraySize, static_cast<int64_t>(1)
-                                     );
-                                 } catch (const std::exception&) {
-                                 }
-                             }
-
-                             return 2; // 默认数组占 2 槽
-                         }
-
-                         return 1; // 简单类型
-
-                     } catch (const std::exception& e) {
-                         LOG_WARNING(
-                             "Failed to get type info for variable '" +
-                             varName + "': " + e.what() +
-                             ", assuming 1 stack position"
-                         );
-                         return 1;
+                 // OP_NIP 的字节码只占 1 byte，但编译期模拟仍用
+                 // ROLL(1)+pop，以便 pop 只移除目标的 m_newSymbol 记录，
+                 // 不会把幸存的原栈顶从跟踪集合中丢失。
+                 auto simulateNip = [&stackPtr]() {
+                     if (stackPtr->size() >= 2) {
+                         stackPtr->roll(1);
+                         stackPtr->pop();
                      }
                  };
 
-                 std::string result;
+                 // 先收集名称再统一 erase，避免 vector::erase 后继续
+                 // 使用已失效的 iterator。同一位置的重复目标也一次清理。
+                 auto removeDeleteItemsAtPositions = [&stackPtr](
+                                                            auto& items,
+                                                            const std::set<int64_t>&
+                                                                positions) {
+                     std::unordered_set<std::string> removedNames;
+                     auto& currentSymtab = stackPtr->getCurrentSymtab();
+                     for (const auto& item : items) {
+                         if (positions.count(std::get<1>(item)) == 0) {
+                             continue;
+                         }
+                         const std::string& name = std::get<0>(item);
+                         if (removedNames.insert(name).second) {
+                             currentSymtab.removeSymbol(name);
+                         }
+                     }
+                     items.erase(
+                         std::remove_if(
+                             items.begin(),
+                             items.end(),
+                             [&positions](const auto& item) {
+                                 return positions.count(std::get<1>(item)) != 0;
+                             }
+                         ),
+                         items.end()
+                     );
+                 };
+
+                 auto collectVisibleDeleteNames = [&stackPtr](
+                                                      const std::string& rootName
+                                                  ) {
+                     std::vector<std::string> names;
+                     std::unordered_set<std::string> visibleDescendants;
+                     // Private compound parameters bind flattened leaves
+                     // directly (param.field -> caller.field) without adding
+                     // a root binding or visible param-field metadata. Only
+                     // inspect the innermost private-call frame: an outer call
+                     // may reuse the same parameter root with a different
+                     // struct shape.
+                     const auto& symbolTable =
+                         stackPtr->getCurrentSymtab();
+                     const auto& bindings = symbolTable.m_bindSymbol;
+                     const auto activeBegin = bindings.begin() +
+                         static_cast<std::ptrdiff_t>(
+                             symbolTable.activeBindSymbolStart()
+                         );
+                     for (auto it = bindings.end(); it != activeBegin;) {
+                         --it;
+                         const std::string& logicalName = it->first;
+                         const bool isRoot = logicalName == rootName;
+                         const bool isField =
+                             logicalName.find(rootName + ".") == 0;
+                         const bool isArrayElement =
+                             logicalName.find(rootName + "[") == 0;
+                         if ((isRoot || isField || isArrayElement) &&
+                             visibleDescendants.insert(logicalName).second) {
+                             names.push_back(logicalName);
+                         }
+                     }
+                     if (!names.empty()) {
+                         return names;
+                     }
+
+                     const auto activeScopeBegin =
+                         symbolTable.m_currentScope.begin() +
+                         static_cast<std::ptrdiff_t>(
+                             symbolTable.activeScopeEntryStart()
+                         );
+                     for (auto it = symbolTable.m_currentScope.end();
+                          it != activeScopeBegin;) {
+                         --it;
+                         std::string symbolName =
+                             it->second.getSymbolName();
+                         const bool isField =
+                             symbolName.find(rootName + ".") == 0;
+                         const bool isArrayElement =
+                             symbolName.find(rootName + "[") == 0;
+                         if ((isField || isArrayElement) &&
+                             visibleDescendants.insert(symbolName).second) {
+                             names.push_back(symbolName);
+                         }
+                     }
+                     if (names.empty()) {
+                         names.push_back(rootName);
+                     }
+                     return names;
+                 };
+
+                 // 重复参数、root/leaf 重叠和两个绑定名指向同一
+                 // 物理槽都在任何栈修改前拒绝。
+                 auto isSameOrDescendant = [](
+                                               const std::string& candidate,
+                                               const std::string& root
+                                           ) {
+                     return candidate == root ||
+                            candidate.find(root + ".") == 0 ||
+                            candidate.find(root + "[") == 0;
+                 };
+                 std::vector<std::string> preflightLogicalTargets;
+                 std::unordered_set<std::string> preflightPhysicalTargets;
+                 for (const auto& arg : stackArgs) {
+                     const std::string& logicalTarget = arg.getName();
+                     for (const auto& claimed : preflightLogicalTargets) {
+                         if (isSameOrDescendant(logicalTarget, claimed) ||
+                             isSameOrDescendant(claimed, logicalTarget)) {
+                             throw std::invalid_argument(
+                                 "Delete() contains duplicate or overlapping target '" +
+                                 logicalTarget + "'"
+                             );
+                         }
+                     }
+                     preflightLogicalTargets.push_back(logicalTarget);
+
+                     for (const auto& name :
+                          collectVisibleDeleteNames(logicalTarget)) {
+                         std::string physicalKey;
+                         auto mainPos = stackPtr->getPos(name, false);
+                         if (mainPos.has_value()) {
+                             physicalKey =
+                                 "main:" + stackPtr->at(mainPos.value()).getName();
+                         } else {
+                             auto altPos = stackPtr->getPos(name, true);
+                             if (altPos.has_value()) {
+                                 physicalKey =
+                                     "alt:" +
+                                     stackPtr->getCurrentSymtab()
+                                         .m_altStackPtr->at(altPos.value())
+                                         .getName();
+                             }
+                         }
+
+                         if (!physicalKey.empty() &&
+                             !preflightPhysicalTargets.insert(physicalKey).second) {
+                             throw std::invalid_argument(
+                                 "Delete() contains duplicate or aliased target '" +
+                                 name + "'"
+                             );
+                         }
+                     }
+                 }
 
                  if (size == 1) {
                      // Delete(x): 支持结构体递归删除
                      const std::string& varName = stackArgs[0].getName();
 
-                     // 收集要删除的变量名（含展开的结构体字段）
-                     std::vector<std::string> varsToDelete;
-
-                     // 查找以 varName. 开头的所有字段
-                     bool foundAnyField = false;
-                     auto allSymbols =
-                         stackPtr->getCurrentSymtab().getCurrentScopeSymbols();
-
-                     for (const auto& symbol : allSymbols) {
-                         std::string symbolName = symbol.getSymbolName();
-                         if (symbolName.find(varName + ".") == 0) {
-                             varsToDelete.push_back(symbolName);
-                             foundAnyField = true;
-                         }
-                     }
-
-                     // 没有字段则按普通变量处理
-                     if (!foundAnyField) {
-                         varsToDelete.push_back(varName);
-                     }
+                     // 收集要删除的当前可见变量名。
+                     std::vector<std::string> varsToDelete =
+                         collectVisibleDeleteNames(varName);
+                     const bool foundAnyField =
+                         varsToDelete.size() != 1 || varsToDelete[0] != varName;
 
                      LOG_DEBUG(
                          "Delete single parameter '" + varName +
@@ -940,8 +1007,8 @@ static const std::unordered_map<
                          }()
                      );
 
-                     // 多字段结构体: 走优化的多变量删除
-                     if (varsToDelete.size() > 1) {
+                     // 结构体（包括只有一个字段）走统一字段删除。
+                     if (foundAnyField) {
                          LOG_DEBUG(
                              "Processing struct deletion with " +
                              std::to_string(varsToDelete.size()) + " fields"
@@ -950,16 +1017,21 @@ static const std::unordered_map<
                          // {name, position, stackSize}
                          std::vector<std::tuple<std::string, int64_t, int64_t>>
                              structToDelete;
+                         std::unordered_set<std::string> scheduledPhysicalTargets;
 
                          for (const auto& fieldName : varsToDelete) {
                              // 主栈优先
                              auto pos = stackPtr->getPos(fieldName, false);
                              if (pos.has_value()) {
-                                 int64_t stackSize = getVariableStackSize(
-                                     fieldName
-                                 );
+                                 const std::string physicalName =
+                                     stackPtr->at(pos.value()).getName();
+                                 if (!scheduledPhysicalTargets
+                                          .insert("main:" + physicalName)
+                                          .second) {
+                                     continue;
+                                 }
                                  structToDelete.push_back(
-                                     {fieldName, pos.value(), stackSize}
+                                     {fieldName, pos.value(), 1}
                                  );
                                  continue;
                              }
@@ -967,6 +1039,15 @@ static const std::unordered_map<
                              // 主栈未找到再查副栈
                              auto altPos = stackPtr->getPos(fieldName, true);
                              if (altPos.has_value()) {
+                                 const std::string physicalName =
+                                     stackPtr->getCurrentSymtab()
+                                         .m_altStackPtr->at(altPos.value())
+                                         .getName();
+                                 if (!scheduledPhysicalTargets
+                                          .insert("alt:" + physicalName)
+                                          .second) {
+                                     continue;
+                                 }
                                  LOG_INFO(
                                      "Delete() function: struct field '" +
                                      fieldName +
@@ -1017,38 +1098,9 @@ static const std::unordered_map<
                                      if (!stackPtr->empty())
                                          stackPtr->pop();
 
-                                     // 从删除列表移除位置 0/1 的字段
-                                     auto it0 = std::find_if(
-                                         structToDelete.begin(),
-                                         structToDelete.end(),
-                                         [](const auto& item) {
-                                             return std::get<1>(item) == 0;
-                                         }
+                                     removeDeleteItemsAtPositions(
+                                         structToDelete, std::set<int64_t>{0, 1}
                                      );
-                                     auto it1 = std::find_if(
-                                         structToDelete.begin(),
-                                         structToDelete.end(),
-                                         [](const auto& item) {
-                                             return std::get<1>(item) == 1;
-                                         }
-                                     );
-
-                                     if (it0 != structToDelete.end()) {
-                                         auto& currentSymtab =
-                                             stackPtr->getCurrentSymtab();
-                                         currentSymtab.removeSymbol(
-                                             std::get<0>(*it0)
-                                         );
-                                         structToDelete.erase(it0);
-                                     }
-                                     if (it1 != structToDelete.end()) {
-                                         auto& currentSymtab =
-                                             stackPtr->getCurrentSymtab();
-                                         currentSymtab.removeSymbol(
-                                             std::get<0>(*it1)
-                                         );
-                                         structToDelete.erase(it1);
-                                     }
 
                                      deletePositions.erase(0);
                                      deletePositions.erase(1);
@@ -1081,14 +1133,7 @@ static const std::unordered_map<
                                          tbc::BytOpcode::OP_NIP
                                      );
 
-                                     if (stackPtr->size() >= 2) {
-                                         auto top = stackPtr->top();
-                                         stackPtr->pop();
-                                         if (!stackPtr->empty())
-                                             stackPtr->pop();
-                                         stackPtr->getCurrentSymtab()
-                                             .m_stackPtr->push(top);
-                                     }
+                                     simulateNip();
 
                                      auto it = std::find_if(
                                          structToDelete.begin(),
@@ -1142,14 +1187,7 @@ static const std::unordered_map<
                                          result += opcodeToHex(
                                              tbc::BytOpcode::OP_NIP
                                          );
-                                         if (stackPtr->size() >= 2) {
-                                             auto top = stackPtr->top();
-                                             stackPtr->pop();
-                                             if (!stackPtr->empty())
-                                                 stackPtr->pop();
-                                             stackPtr->getCurrentSymtab()
-                                                 .m_stackPtr->push(top);
-                                         }
+                                         simulateNip();
                                      } else {
                                          if (position == 0) {
                                              result += opcodeToHex(
@@ -1198,6 +1236,11 @@ static const std::unordered_map<
                              }
                          }
 
+                         auto& currentSymtab = stackPtr->getCurrentSymtab();
+                         for (const auto& fieldName : varsToDelete) {
+                             currentSymtab.removeSymbol(fieldName);
+                         }
+                         currentSymtab.removeSymbol(varName);
                          return cleanHexString(result);
                      }
 
@@ -1209,123 +1252,44 @@ static const std::unordered_map<
                          auto pos = stackPtr->getPos(actualVarName, false);
                          if (pos.has_value()) {
                              auto position = pos.value();
-                             int64_t stackSize = getVariableStackSize(varName);
-
-                             if (stackSize == 1) {
-                                 // 简单类型: 同时生成字节码和同步内部栈
-                                 if (position == 0) {
-                                     result += opcodeToHex(
-                                         tbc::BytOpcode::OP_DROP
-                                     );
-
-                                     if (!stackPtr->empty()) {
-                                         stackPtr->pop();
-                                         LOG_DEBUG(
-                                             "Actually removed variable '" +
-                                             varName + "' from main stack top"
-                                         );
-                                     }
-                                 } else if (position == 1) {
-                                     result += opcodeToHex(
-                                         tbc::BytOpcode::OP_NIP
-                                     );
-
-                                     stackPtr->roll(position);
-                                     if (!stackPtr->empty()) {
-                                         stackPtr->pop();
-                                         LOG_DEBUG(
-                                             "Actually removed variable '" +
-                                             varName +
-                                             "' from main stack position 1 "
-                                         );
-                                     }
-                                } else if (position > 1) {
-                                    // pos==2: OP_ROT OP_DROP; pos>=3: N OP_ROLL OP_DROP
-                                    result += rollDropHex(position);
-
-                                    stackPtr->roll(position);
-                                    if (!stackPtr->empty()) {
-                                        stackPtr->pop();
-                                        LOG_DEBUG(
-                                            "Actually rolled and removed "
-                                            "variable "
-                                            "'" +
-                                            varName +
-                                             "' from main stack position " +
-                                             std::to_string(position)
-                                         );
-                                     }
+                             // 一个 StackElement 就是一个物理槽。复合值必须
+                             // 通过上面的显式字段展开删除，不再从类型串
+                             // 猜测并误删相邻的无关槽。
+                             if (position == 0) {
+                                 result += opcodeToHex(tbc::BytOpcode::OP_DROP);
+                                 if (!stackPtr->empty()) {
+                                     stackPtr->pop();
                                  }
+                             } else if (position == 1) {
+                                 result += opcodeToHex(tbc::BytOpcode::OP_NIP);
+                                 simulateNip();
                              } else {
-                                 // 复杂结构: 删除多个连续栈元素
-                                 for (int64_t i = 0; i < stackSize; i++) {
-                                     if (position == 0) {
-                                         result += opcodeToHex(
-                                             tbc::BytOpcode::OP_DROP
-                                         );
-
-                                         if (!stackPtr->empty()) {
-                                             stackPtr->pop();
-                                             LOG_DEBUG(
-                                                 "Actually removed element " +
-                                                 std::to_string(i) +
-                                                 " of variable '" + varName +
-                                                 "' from main stack top"
-                                             );
-                                         }
-                                     } else {
-                                         // 每删一个, 后续元素位置前移
-                                         int64_t currentPos = position - i;
-                                        if (currentPos > 0) {
-                                            // pos==1: OP_SWAP; pos==2: OP_ROT
-                                            result += rollToTopHex(currentPos);
-
-                                            stackPtr->roll(currentPos);
-                                             LOG_DEBUG(
-                                                 "Actually rolled element " +
-                                                 std::to_string(i) +
-                                                 " of variable '" + varName +
-                                                 "' from position " +
-                                                 std::to_string(currentPos) +
-                                                 " to stack top"
-                                             );
-                                         }
-                                         result += opcodeToHex(
-                                             tbc::BytOpcode::OP_DROP
-                                         );
-
-                                         if (!stackPtr->empty()) {
-                                             stackPtr->pop();
-                                             LOG_DEBUG(
-                                                 "Actually removed element " +
-                                                 std::to_string(i) +
-                                                 " of variable '" + varName +
-                                                 "' from main stack"
-                                             );
-                                         }
-                                     }
+                                 result += rollDropHex(position);
+                                 stackPtr->roll(position);
+                                 if (!stackPtr->empty()) {
+                                     stackPtr->pop();
                                  }
                              }
 
                              auto& currentSymtab = stackPtr->getCurrentSymtab();
-                             currentSymtab.removeSymbol(varName);
+                             currentSymtab.removeSymbol(actualVarName);
                              LOG_DEBUG(
-                                 "Removed variable '" + varName +
+                                 "Removed variable '" + actualVarName +
                                  "' from symbol table"
                              );
                              return result;
                          }
 
                          // 主栈未找到再查副栈
-                         auto altPos = stackPtr->getPos(varName, true);
+                         auto altPos = stackPtr->getPos(actualVarName, true);
                          if (altPos.has_value()) {
                              LOG_INFO(
-                                 "Delete() function: variable '" + varName +
+                                 "Delete() function: variable '" + actualVarName +
                                  "' found in alt stack at position " +
                                  std::to_string(altPos.value())
                              );
                              result += processAltStackDeletion(
-                                 varName, altPos.value(), stackPtr
+                                 actualVarName, altPos.value(), stackPtr
                              );
                              return cleanHexString(result);
                          }
@@ -1334,7 +1298,13 @@ static const std::unordered_map<
                              "Delete() function: variable '" + actualVarName +
                              "' not found in main or alt stack, skipping"
                          );
-                         return "";
+                         // fixed-only targets have already been removed by the
+                         // visitor.  Their semantic entry must still be
+                         // consumed so later lookups cannot resurrect them.
+                         stackPtr->getCurrentSymtab().removeSymbol(
+                             actualVarName
+                         );
+                         return cleanHexString(result);
                      }
                  } else {
                      // 多参数 Delete(x,y,a,b,c...): 走代价感知的局部优化策略
@@ -1343,63 +1313,26 @@ static const std::unordered_map<
                      std::vector<std::tuple<std::string, int64_t, int64_t>>
                          toDelete;
 
-                     [[maybe_unused]] auto calculateOpcodeCost =
-                         [](const std::string& operation) -> int {
-                         if (operation == "OP_DROP")
-                             return 1;
-                         if (operation == "OP_2DROP")
-                             return 1;
-                         if (operation == "OP_NIP")
-                             return 1;
-                         if (operation.find("ROLL") != std::string::npos) {
-                             // ROLL 还要推入位置参数, 估算字节码长度
-                             return operation.length() / 2;
-                         }
-                         return operation.length() / 2;
-                     };
+                     std::unordered_set<std::string> metadataNamesToRemove;
 
-                     [[maybe_unused]] auto isInDeleteList =
-                         [&toDelete](int64_t position) -> bool {
-                         for (const auto& item : toDelete) {
-                             if (std::get<1>(item) == position) {
-                                 return true;
-                             }
-                         }
-                         return false;
-                     };
-
-                     // 收集每个变量的位置和占用大小, 支持主栈和副栈
+                     // 收集每个明确物理槽的位置，支持主栈和副栈。
                      for (const auto& arg : stackArgs) {
                          const std::string& varName = arg.getName();
-
-                         // 含展开的结构体字段
-                         std::vector<std::string> varsToDelete;
-
-                         // 查找以 varName. 开头的字段
-                         bool foundAnyField = false;
-                         auto allSymbols = stackPtr->getCurrentSymtab()
-                                               .getCurrentScopeSymbols();
-
-                         for (const auto& symbol : allSymbols) {
-                             std::string symbolName = symbol.getSymbolName();
-                             if (symbolName.find(varName + ".") == 0) {
-                                 varsToDelete.push_back(symbolName);
-                                 foundAnyField = true;
-                             }
-                         }
-
-                         if (!foundAnyField) {
-                             varsToDelete.push_back(varName);
+                         std::vector<std::string> varsToDelete =
+                             collectVisibleDeleteNames(varName);
+                         const bool foundAnyField =
+                             varsToDelete.size() != 1 ||
+                             varsToDelete[0] != varName;
+                         if (foundAnyField) {
+                             metadataNamesToRemove.insert(varName);
                          }
 
                          for (const auto& actualVarName : varsToDelete) {
+                             metadataNamesToRemove.insert(actualVarName);
                              auto pos = stackPtr->getPos(actualVarName, false);
                              if (pos.has_value()) {
-                                 int64_t stackSize = getVariableStackSize(
-                                     actualVarName
-                                 );
                                  toDelete.push_back(
-                                     {actualVarName, pos.value(), stackSize}
+                                     {actualVarName, pos.value(), 1}
                                  );
                                  continue;
                              }
@@ -1428,10 +1361,18 @@ static const std::unordered_map<
                          }
                      }
 
+                     auto cleanupDeleteMetadata = [&]() {
+                         auto& currentSymtab = stackPtr->getCurrentSymtab();
+                         for (const auto& name : metadataNamesToRemove) {
+                             currentSymtab.removeSymbol(name);
+                         }
+                     };
+
                      if (toDelete.empty()) {
                          LOG_INFO("Delete() function: no variables found in "
                                   "stack, no operation performed");
-                         return "";
+                         cleanupDeleteMetadata();
+                         return cleanHexString(result);
                      }
 
                      // 待删除位置的集合, 便于快速查找
@@ -1453,33 +1394,9 @@ static const std::unordered_map<
                              if (!stackPtr->empty())
                                  stackPtr->pop();
 
-                             auto it0 = std::find_if(
-                                 toDelete.begin(),
-                                 toDelete.end(),
-                                 [](const auto& item) {
-                                     return std::get<1>(item) == 0;
-                                 }
+                             removeDeleteItemsAtPositions(
+                                 toDelete, std::set<int64_t>{0, 1}
                              );
-                             auto it1 = std::find_if(
-                                 toDelete.begin(),
-                                 toDelete.end(),
-                                 [](const auto& item) {
-                                     return std::get<1>(item) == 1;
-                                 }
-                             );
-
-                             if (it0 != toDelete.end()) {
-                                 auto& currentSymtab =
-                                     stackPtr->getCurrentSymtab();
-                                 currentSymtab.removeSymbol(std::get<0>(*it0));
-                                 toDelete.erase(it0);
-                             }
-                             if (it1 != toDelete.end()) {
-                                 auto& currentSymtab =
-                                     stackPtr->getCurrentSymtab();
-                                 currentSymtab.removeSymbol(std::get<0>(*it1));
-                                 toDelete.erase(it1);
-                             }
 
                              deletePositions.erase(0);
                              deletePositions.erase(1);
@@ -1510,16 +1427,7 @@ static const std::unordered_map<
                                   !deletePositions.count(0)) {
                              result += opcodeToHex(tbc::BytOpcode::OP_NIP);
 
-                             if (stackPtr->size() >= 2) {
-                                 auto top = stackPtr->top();
-                                 stackPtr->pop();
-                                 if (!stackPtr->empty()) {
-                                     stackPtr->pop();
-                                 }
-                                 stackPtr->getCurrentSymtab().m_stackPtr->push(
-                                     top
-                                 );
-                             }
+                             simulateNip();
 
                              auto it = std::find_if(
                                  toDelete.begin(),
@@ -1583,49 +1491,22 @@ static const std::unordered_map<
                                  }
                              }
 
-                            if (bestPartner != -1) {
-                                // 把搭档移到次栈顶, 再 OP_2DROP
-                                result += rollToTopHex(bestPartner - 1);
+                             if (bestPartner != -1) {
+                                 // 搭档移到栈顶后，原栈顶自然成为次栈顶。
+                                 result += rollToTopHex(bestPartner);
                                 result += opcodeToHex(tbc::BytOpcode::OP_2DROP
-                                );
+                                 );
 
-                                 stackPtr->roll(bestPartner - 1);
+                                 stackPtr->roll(bestPartner);
                                  if (!stackPtr->empty())
                                      stackPtr->pop();
                                  if (!stackPtr->empty())
                                      stackPtr->pop();
 
-                                 auto it0 = std::find_if(
-                                     toDelete.begin(),
-                                     toDelete.end(),
-                                     [](const auto& item) {
-                                         return std::get<1>(item) == 0;
-                                     }
+                                 removeDeleteItemsAtPositions(
+                                     toDelete,
+                                     std::set<int64_t>{0, bestPartner}
                                  );
-                                 auto itPartner = std::find_if(
-                                     toDelete.begin(),
-                                     toDelete.end(),
-                                     [bestPartner](const auto& item) {
-                                         return std::get<1>(item) ==
-                                                bestPartner;
-                                     }
-                                 );
-
-                                 if (it0 != toDelete.end()) {
-                                     auto& currentSymtab =
-                                         stackPtr->getCurrentSymtab();
-                                     currentSymtab.removeSymbol(std::get<0>(*it0
-                                     ));
-                                     toDelete.erase(it0);
-                                 }
-                                 if (itPartner != toDelete.end()) {
-                                     auto& currentSymtab =
-                                         stackPtr->getCurrentSymtab();
-                                     currentSymtab.removeSymbol(
-                                         std::get<0>(*itPartner)
-                                     );
-                                     toDelete.erase(itPartner);
-                                 }
 
                                  deletePositions.erase(0);
                                  deletePositions.erase(bestPartner);
@@ -1634,8 +1515,8 @@ static const std::unordered_map<
                                  for (auto pos : deletePositions) {
                                      if (pos > bestPartner)
                                          newPositions.insert(pos - 2);
-                                     else if (pos >= 2)
-                                         newPositions.insert(pos - 2);
+                                     else if (pos > 0)
+                                         newPositions.insert(pos - 1);
                                  }
                                  deletePositions = newPositions;
 
@@ -1643,8 +1524,8 @@ static const std::unordered_map<
                                      int64_t& itemPos = std::get<1>(item);
                                      if (itemPos > bestPartner)
                                          itemPos -= 2;
-                                     else if (itemPos >= 2)
-                                         itemPos -= 2;
+                                     else if (itemPos > 0)
+                                         itemPos -= 1;
                                  }
 
                                  LOG_DEBUG(
@@ -1661,21 +1542,11 @@ static const std::unordered_map<
                              auto current = toDelete[0];
                              std::string varName = std::get<0>(current);
                              int64_t position = std::get<1>(current);
-                             int64_t stackSize = std::get<2>(current);
 
-                             // 次栈顶且单槽: OP_NIP
-                             if (position == 1 && stackSize == 1) {
+                             // 次栈顶: OP_NIP
+                             if (position == 1) {
                                  result += opcodeToHex(tbc::BytOpcode::OP_NIP);
-
-                                 if (stackPtr->size() >= 2) {
-                                     auto top = stackPtr->top();
-                                     stackPtr->pop();
-                                     if (!stackPtr->empty()) {
-                                         stackPtr->pop();
-                                     }
-                                     stackPtr->getCurrentSymtab()
-                                         .m_stackPtr->push(top);
-                                 }
+                                 simulateNip();
                              } else {
                                  if (position == 0) {
                                      result += opcodeToHex(
@@ -1720,9 +1591,14 @@ static const std::unordered_map<
                              );
                          }
                      }
+                     cleanupDeleteMetadata();
                  }
 
                  return cleanHexString(result);
+                 } catch (...) {
+                     stackPtr->restoreControlFlowState(deleteEntryState);
+                     throw;
+                 }
              };
 
              return std::make_shared<

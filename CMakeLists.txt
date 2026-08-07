@@ -398,6 +398,8 @@ set(CORE_SOURCES
         src/bytecode/bytecode_opcodes.cpp
         src/bytecode/bytecode_generator.cpp
         src/bytecode/bytecode_materializer.cpp
+        src/bytecode/stack_permutation_planner.cpp
+        src/bytecode/structured_if_tail_optimizer.cpp
         src/bytecode/symtab.cpp
         src/bytecode/type_validator.cpp
         src/bytecode/scope.cpp
@@ -408,8 +410,11 @@ set(CORE_SOURCES
         src/compiler/collect_symbols_visitor.cpp
         src/compiler/pre_analysis_visitor.cpp
         src/compiler/constant_folder.cpp
+        src/compiler/global_constant_resolver.cpp
         src/compiler/range_plan.cpp
         src/compiler/static_integer_evaluator.cpp
+        src/compiler/ast_lifetime_planner.cpp
+        src/compiler/value_lifetime_analysis.cpp
         src/compiler/library_merger.cpp
         src/compiler/bytecode_pipeline.cpp
         src/compiler/compiler_driver.cpp
@@ -504,6 +509,36 @@ if(BUILD_TESTING)
     )
 
     add_executable(
+        typed_bytecode_pipeline_test
+        test/compiler_regression/typed_bytecode_pipeline_test.cpp
+    )
+    target_link_libraries(typed_bytecode_pipeline_test PRIVATE apc_core)
+    add_test(
+        NAME typed-bytecode-pipeline
+        COMMAND $<TARGET_FILE:typed_bytecode_pipeline_test>
+    )
+
+    add_executable(
+        export_results_pass_test
+        test/compiler_regression/export_results_pass_test.cpp
+    )
+    target_link_libraries(export_results_pass_test PRIVATE apc_core)
+    add_test(
+        NAME export-results-pass
+        COMMAND $<TARGET_FILE:export_results_pass_test>
+    )
+
+    add_executable(
+        bytecode_peephole_pass_test
+        test/compiler_regression/bytecode_peephole_pass_test.cpp
+    )
+    target_link_libraries(bytecode_peephole_pass_test PRIVATE apc_core)
+    add_test(
+        NAME bytecode-peephole-pass
+        COMMAND $<TARGET_FILE:bytecode_peephole_pass_test>
+    )
+
+    add_executable(
         range_plan_test
         test/compiler_regression/range_plan_test.cpp
     )
@@ -524,6 +559,56 @@ if(BUILD_TESTING)
     )
 
     add_executable(
+        value_lifetime_analysis_test
+        test/compiler_regression/value_lifetime_analysis_test.cpp
+    )
+    target_link_libraries(value_lifetime_analysis_test PRIVATE apc_core)
+    add_test(
+        NAME value-lifetime-analysis
+        COMMAND $<TARGET_FILE:value_lifetime_analysis_test>
+    )
+
+    add_executable(
+        ast_lifetime_planner_test
+        test/compiler_regression/ast_lifetime_planner_test.cpp
+    )
+    target_link_libraries(ast_lifetime_planner_test PRIVATE apc_core)
+    add_test(
+        NAME ast-lifetime-planner
+        COMMAND $<TARGET_FILE:ast_lifetime_planner_test>
+    )
+
+    add_executable(
+        stack_permutation_planner_test
+        test/bytecode/stack_permutation_planner_test.cpp
+    )
+    target_link_libraries(stack_permutation_planner_test PRIVATE apc_core)
+    add_test(
+        NAME stack-permutation-planner
+        COMMAND $<TARGET_FILE:stack_permutation_planner_test>
+    )
+
+    add_executable(
+        structured_if_tail_optimizer_test
+        test/bytecode/structured_if_tail_optimizer_test.cpp
+    )
+    target_link_libraries(structured_if_tail_optimizer_test PRIVATE apc_core)
+    add_test(
+        NAME structured-if-tail-optimizer
+        COMMAND $<TARGET_FILE:structured_if_tail_optimizer_test>
+    )
+
+    add_executable(
+        delete_builtin_function_test
+        test/bytecode/delete_builtin_function_test.cpp
+    )
+    target_link_libraries(delete_builtin_function_test PRIVATE apc_core)
+    add_test(
+        NAME delete-builtin-function
+        COMMAND $<TARGET_FILE:delete_builtin_function_test>
+    )
+
+    add_executable(
         symbol_table_state_test
         test/compiler_regression/symbol_table_state_test.cpp
     )
@@ -533,7 +618,27 @@ if(BUILD_TESTING)
         COMMAND $<TARGET_FILE:symbol_table_state_test>
     )
 
+    add_executable(
+        if_lowering_state_test
+        test/compiler_regression/if_lowering_state_test.cpp
+    )
+    target_link_libraries(if_lowering_state_test PRIVATE apc_core)
+    add_test(
+        NAME if-lowering-state
+        COMMAND $<TARGET_FILE:if_lowering_state_test>
+    )
+
     if(BUILD_DEBUGGER)
+        add_executable(
+            bytecode_finalize_pass_test
+            test/compiler_regression/bytecode_finalize_pass_test.cpp
+        )
+        target_link_libraries(bytecode_finalize_pass_test PRIVATE apc_core)
+        add_test(
+            NAME bytecode-finalize-pass
+            COMMAND $<TARGET_FILE:bytecode_finalize_pass_test>
+        )
+
         add_executable(
             debug_info_validation_test
             test/debugger_regression/debug_info_validation_test.cpp
@@ -542,6 +647,24 @@ if(BUILD_TESTING)
         add_test(
             NAME debug-info-validation
             COMMAND $<TARGET_FILE:debug_info_validation_test>
+        )
+        add_executable(
+            debug_info_v2_test
+            test/debugger_public_regression/debug_info_v2_test.cpp
+        )
+        target_link_libraries(debug_info_v2_test PRIVATE apc_core)
+        add_test(
+            NAME debug-info-v2
+            COMMAND $<TARGET_FILE:debug_info_v2_test>
+        )
+        add_executable(
+            debugger_branch_provenance_test
+            test/debugger_public_regression/debugger_branch_provenance_test.cpp
+        )
+        target_link_libraries(debugger_branch_provenance_test PRIVATE apc_core)
+        add_test(
+            NAME debugger-branch-provenance
+            COMMAND $<TARGET_FILE:debugger_branch_provenance_test>
         )
         add_test(
             NAME debugger-regression
@@ -562,36 +685,78 @@ if(BUILD_TESTING)
         NAME ast-regression
         COMMAND bash ${CMAKE_SOURCE_DIR}/test/interpreter/run_ast_regression.sh
     )
+    if(BUILD_DEBUGGER)
+        add_test(
+            NAME compiler-regression
+            COMMAND ${CMAKE_COMMAND} -E env
+                APC_COMPILER=$<TARGET_FILE:${EXECUTABLE_NAME}>
+                bash ${CMAKE_SOURCE_DIR}/test/compiler_regression/run_compiler_regression.sh
+        )
+    endif()
     add_test(
-        NAME compiler-regression
+        NAME compiler-sync-regression
         COMMAND ${CMAKE_COMMAND} -E env
-            APC_COMPILER=$<TARGET_FILE:${EXECUTABLE_NAME}>
-            bash ${CMAKE_SOURCE_DIR}/test/compiler_regression/run_compiler_regression.sh
+            APC_INTERPRETER=$<TARGET_FILE:${EXECUTABLE_NAME}>
+            APC_COMPILER=${CMAKE_SOURCE_DIR}/test/compiler_regression/compiler_cli_compat.sh
+            APC_BUILD_DEBUGGER=$<BOOL:${BUILD_DEBUGGER}>
+            bash ${CMAKE_SOURCE_DIR}/test/compiler_regression/run_compiler_sync_regression.sh
     )
     add_test(
-        NAME ownership-regression
-        COMMAND ${CMAKE_COMMAND} -E env
-            APC_COMPILER=$<TARGET_FILE:${EXECUTABLE_NAME}>
-            bash ${CMAKE_SOURCE_DIR}/test/compiler_regression/run_ownership_regression.sh
+        NAME verify-builtin-regression
+        COMMAND bash
+            ${CMAKE_SOURCE_DIR}/test/compiler_regression/run_verify_regression.sh
+            $<TARGET_FILE:${EXECUTABLE_NAME}>
     )
     add_test(
-        NAME for-scope-regression
-        COMMAND ${CMAKE_COMMAND} -E env
-            APC_COMPILER=$<TARGET_FILE:${EXECUTABLE_NAME}>
-            bash ${CMAKE_SOURCE_DIR}/test/compiler_regression/run_for_scope_regression.sh
+        NAME global-constant-regression
+        COMMAND bash
+            ${CMAKE_SOURCE_DIR}/test/global_constants/run_global_constant_regression.sh
+            $<TARGET_FILE:${EXECUTABLE_NAME}>
     )
+    if(BUILD_DEBUGGER)
+        add_test(
+            NAME ownership-regression
+            COMMAND ${CMAKE_COMMAND} -E env
+                APC_COMPILER=$<TARGET_FILE:${EXECUTABLE_NAME}>
+                bash ${CMAKE_SOURCE_DIR}/test/compiler_regression/run_ownership_regression.sh
+        )
+    endif()
     add_test(
-        NAME stack-safety-regression
+        NAME ownership-sync-regression
         COMMAND ${CMAKE_COMMAND} -E env
-            APC_COMPILER=$<TARGET_FILE:${EXECUTABLE_NAME}>
-            bash ${CMAKE_SOURCE_DIR}/test/compiler_regression/run_stack_safety_regression.sh
+            APC_INTERPRETER=$<TARGET_FILE:${EXECUTABLE_NAME}>
+            bash ${CMAKE_SOURCE_DIR}/test/compiler_regression/run_ownership_sync_regression.sh
+                ${CMAKE_SOURCE_DIR}/test/compiler_regression/compiler_cli_compat.sh
     )
+    if(BUILD_DEBUGGER)
+        add_test(
+            NAME for-scope-regression
+            COMMAND ${CMAKE_COMMAND} -E env
+                APC_COMPILER=$<TARGET_FILE:${EXECUTABLE_NAME}>
+                bash ${CMAKE_SOURCE_DIR}/test/compiler_regression/run_for_scope_regression.sh
+        )
+    endif()
     add_test(
-        NAME ast-bytecode-differential
+        NAME range-noelse-regression
         COMMAND ${CMAKE_COMMAND} -E env
             APC_COMPILER=$<TARGET_FILE:${EXECUTABLE_NAME}>
-            python3 ${CMAKE_SOURCE_DIR}/test/differential/run_ast_bytecode_differential.py
+            APC_BUILD_DEBUGGER=$<BOOL:${BUILD_DEBUGGER}>
+            bash ${CMAKE_SOURCE_DIR}/test/compiler_regression/run_range_noelse_regression.sh
     )
+    if(BUILD_DEBUGGER)
+        add_test(
+            NAME stack-safety-regression
+            COMMAND ${CMAKE_COMMAND} -E env
+                APC_COMPILER=$<TARGET_FILE:${EXECUTABLE_NAME}>
+                bash ${CMAKE_SOURCE_DIR}/test/compiler_regression/run_stack_safety_regression.sh
+        )
+        add_test(
+            NAME ast-bytecode-differential
+            COMMAND ${CMAKE_COMMAND} -E env
+                APC_COMPILER=$<TARGET_FILE:${EXECUTABLE_NAME}>
+                python3 ${CMAKE_SOURCE_DIR}/test/differential/run_ast_bytecode_differential.py
+        )
+    endif()
 endif()
 
 # =============================================================================

@@ -180,11 +180,31 @@ std::shared_ptr<ContractNode> Parser::parseContract()
     while (match(TOKEN_NEWLINE)) {
     }
     consume(TOKEN_INDENT, "Expected 'indent'!");
+    bool sawMemberDeclaration = false;
     while (!check(TOKEN_DEDENT) && !isAtEnd()) {
         if (match(TOKEN_NEWLINE)) {
             continue;
         }
-        if (check(TOKEN_DEF)) {
+        if (check(TOKEN_GLOBAL)) {
+            if (sawMemberDeclaration) {
+                SourceLocation loc(
+                    "", current().position.line, current().position.column
+                );
+                const std::string message =
+                    "global declarations must appear before any Struct or def "
+                    "declaration in a Contract";
+                SYNTAX_ERROR(
+                    message,
+                    loc,
+                    "Move this global declaration to the beginning of the "
+                    "Contract body"
+                );
+                LOG_ERROR(message);
+                throw std::runtime_error(message);
+            }
+            contractPtr->globalConstants.push_back(parseGlobalConst());
+        } else if (check(TOKEN_DEF)) {
+            sawMemberDeclaration = true;
             // 构造函数判定
             if ((TOKEN_IDENTIFIER == peekNext().type &&
                  "__init__" == peekNext().value) ||
@@ -194,6 +214,7 @@ std::shared_ptr<ContractNode> Parser::parseContract()
                 contractPtr->members.push_back(parseFunction());
             }
         } else if (check(TOKEN_STRUCT)) {
+            sawMemberDeclaration = true;
             contractPtr->members.push_back(parseStruct());
         } else {
             SourceLocation loc(
@@ -251,6 +272,72 @@ std::shared_ptr<ContractNode> Parser::parseContract()
     return contractPtr;
 }
 
+std::unique_ptr<GlobalConstNode> Parser::parseGlobalConst()
+{
+    consume(TOKEN_GLOBAL, "Expected 'global'!");
+    const Token globalToken = previous();
+
+    consume(TOKEN_IDENTIFIER, "Expected identifier after 'global'");
+    const Token nameToken = previous();
+    consume(TOKEN_ASSIGN, "Expected '=' after global constant name");
+
+    std::unique_ptr<LiteralNode> initializer;
+    if (match(TOKEN_NUMBER)) {
+        const Token literal = previous();
+        initializer = std::make_unique<LiteralNode>(
+            LiteralNode::Type::Number,
+            literal.value,
+            literal.position.line,
+            literal.position.column
+        );
+    } else if (match(TOKEN_STRING)) {
+        const Token literal = previous();
+        initializer = std::make_unique<LiteralNode>(
+            LiteralNode::Type::String,
+            literal.value,
+            literal.position.line,
+            literal.position.column
+        );
+    } else if (match(TOKEN_HEX)) {
+        const Token literal = previous();
+        initializer = std::make_unique<LiteralNode>(
+            LiteralNode::Type::Hex,
+            literal.value,
+            literal.position.line,
+            literal.position.column
+        );
+    } else if (match(TOKEN_ADDRESS)) {
+        const Token literal = previous();
+        initializer = std::make_unique<LiteralNode>(
+            LiteralNode::Type::Addr,
+            literal.value,
+            literal.position.line,
+            literal.position.column
+        );
+    } else {
+        SourceLocation loc(
+            "", current().position.line, current().position.column
+        );
+        const std::string message =
+            "global constant initializer must be a scalar literal";
+        SYNTAX_ERROR(
+            message,
+            loc,
+            "Use a number, string, hexadecimal, or address literal"
+        );
+        LOG_ERROR(message);
+        throw std::runtime_error(message);
+    }
+
+    consume(TOKEN_NEWLINE, "Expected newline after global declaration");
+    return std::make_unique<GlobalConstNode>(
+        nameToken.value,
+        std::move(initializer),
+        globalToken.position.line,
+        globalToken.position.column
+    );
+}
+
 // Library <Name>: INDENT (def | Struct)+ DEDENT
 // 禁止 __init__ / init 构造及 main def
 std::unique_ptr<LibraryNode> Parser::parseLibrary()
@@ -280,7 +367,21 @@ std::unique_ptr<LibraryNode> Parser::parseLibrary()
         }
         if (check(TOKEN_DEDENT) || check(TOKEN_EOF))
             break;
-        if (check(TOKEN_DEF)) {
+        if (check(TOKEN_GLOBAL)) {
+            SourceLocation loc(
+                "", current().position.line, current().position.column
+            );
+            const std::string message =
+                "global declarations are only allowed at the beginning of a "
+                "Contract body, not inside a Library";
+            SYNTAX_ERROR(
+                message,
+                loc,
+                "Declare the global in the importing Contract"
+            );
+            LOG_ERROR(message);
+            throw std::runtime_error(message);
+        } else if (check(TOKEN_DEF)) {
             // 库内禁止 __init__ 与 main
             if ((TOKEN_IDENTIFIER == peekNext().type &&
                  ("__init__" == peekNext().value ||
@@ -546,6 +647,23 @@ std::unique_ptr<BlockNode> Parser::parseBlock()
 std::unique_ptr<StmtNode> Parser::parseStatement()
 {
     switch (current().type) {
+        case TOKEN_GLOBAL: {
+            const Token globalToken = current();
+            SourceLocation loc(
+                "", globalToken.position.line, globalToken.position.column
+            );
+            const std::string message =
+                "global declarations are only allowed at the beginning of a "
+                "Contract body, not inside a function";
+            SYNTAX_ERROR(
+                message,
+                loc,
+                "Move this declaration before every Struct and def in the "
+                "Contract body"
+            );
+            LOG_ERROR(message);
+            throw std::runtime_error(message);
+        }
         case TOKEN_IF:
             advance();
             return parseIf();
@@ -1037,10 +1155,13 @@ std::unique_ptr<ConstructorNode> Parser::parseConstructor()
 {
     consume(TOKEN_DEF, "Expected 'def'!");
     consume(TOKEN_IDENTIFIER, "Expected '__init__'!");
+    const Token constructorToken = previous();
 
-    if (previous().value != "__init__") {
+    if (constructorToken.value != "__init__") {
         SourceLocation loc(
-            "", previous().position.line, previous().position.column
+            "",
+            constructorToken.position.line,
+            constructorToken.position.column
         );
         LOG_ERROR(
             "Semantic error at line ",
@@ -1065,7 +1186,12 @@ std::unique_ptr<ConstructorNode> Parser::parseConstructor()
     consume(TOKEN_COLON, "Expected ':' after constructor definition!");
 
     auto body = parseBlock();
-    return std::make_unique<ConstructorNode>(params, std::move(body));
+    return std::make_unique<ConstructorNode>(
+        constructorToken.position.line,
+        constructorToken.position.column,
+        params,
+        std::move(body)
+    );
 }
 
 std::unique_ptr<ExprNode> Parser::parseBinaryExpression(int minPrecedence)

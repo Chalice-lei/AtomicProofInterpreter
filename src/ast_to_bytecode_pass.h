@@ -1,14 +1,21 @@
 #ifndef AST_TO_BYTECODE_PASS_H
 #define AST_TO_BYTECODE_PASS_H
 
-#include <memory>
+#include <algorithm>
+#include <cctype>
+#include <limits>
 #include <map>
+#include <memory>
+#include <optional>
 #include <string>
 #include <typeinfo>
+#include <unordered_map>
+#include <utility>
 #include <vector>
 
 #include "compiler/ast_to_bytecode_converter.h"
 #include "compiler/library_merger.h"
+#include "config/config_manager.h"
 #include "error/error_manager.h"
 #include "include/pass_type.h"
 #include "log/logger.h"
@@ -16,6 +23,7 @@
 #include "pass/pass_context.h"
 #include "pass/pass_context_keys.h"
 #include "pass/pass_macros.h"
+#include "util/type_utils.h"
 
 #ifdef ENABLE_DEBUGGER
 #include "debugger/info/debug_info_generator.h"
@@ -97,6 +105,9 @@ public:
                 enableDebug = *enableDebugPtr;
             }
         }
+#ifndef ENABLE_DEBUGGER
+        (void)enableDebug;
+#endif
 
         try {
             ASTToBytecodeConverter converter(sourceFile);
@@ -131,11 +142,82 @@ public:
             auto constructorParamsJson = converter.getConstructorParamsJson();
             auto structJson = converter.getStructJson();
             auto allFunctionsJson = converter.getAllFunctionsJson();
+            auto selfPlaceholderLengths =
+                converter.getSelfPlaceholderLengths();
+            auto bytecodeArtifact = converter.getBytecodeArtifact();
+
+            if (constructorParamsJson.is_array()) {
+                for (const auto& parameter : constructorParamsJson) {
+                    if (!parameter.is_object() ||
+                        !parameter.contains("name") ||
+                        !parameter["name"].is_string() ||
+                        !parameter.contains("type") ||
+                        !parameter["type"].is_string()) {
+                        continue;
+                    }
+                    tbc::ConstructorFieldSchema field;
+                    field.name = parameter["name"].get<std::string>();
+                    field.type = parameter["type"].get<std::string>();
+                    field.fixedPayloadSize =
+                        fixedPayloadSizeFromType(field.type);
+                    if (!field.fixedPayloadSize.has_value()) {
+                        const auto fixedLength =
+                            selfPlaceholderLengths.find(
+                                "self." + field.name
+                            );
+                        if (fixedLength != selfPlaceholderLengths.end()) {
+                            field.fixedPayloadSize = fixedLength->second;
+                        }
+                    }
+                    bytecodeArtifact.constructorSchema.fields.push_back(
+                        std::move(field)
+                    );
+                }
+            }
+
+            std::string artifactFormat = "legacy_v1";
+            if (auto requested = data.tryGet<std::string>(
+                    apc_pipeline::key::kArtifactFormat
+                )) {
+                artifactFormat = *requested;
+            } else if (auto configured = ConfigManager::getInstance()
+                                             .getConfigValue<std::string>(
+                                                 "output.bytecode_format"
+                                             )) {
+                artifactFormat = *configured;
+            }
+            std::transform(
+                artifactFormat.begin(), artifactFormat.end(),
+                artifactFormat.begin(), [](unsigned char ch) {
+                    return static_cast<char>(std::tolower(ch));
+                }
+            );
+            if (artifactFormat == "canonical_v2" ||
+                artifactFormat == "canonical") {
+                bytecodeArtifact.format = tbc::ArtifactFormat::CanonicalV2;
+            } else if (artifactFormat != "legacy_v1" &&
+                       artifactFormat != "legacy") {
+                SEMANTIC_ERROR(
+                    "unknown bytecode artifact format '" + artifactFormat +
+                        "'",
+                    SourceLocation("", 0, 0),
+                    "Use legacy_v1 or canonical_v2"
+                );
+                throw std::runtime_error(
+                    "unknown bytecode artifact format"
+                );
+            }
 
             data.set(
                 apc_pipeline::key::kBytecode,
                 std::make_shared<apc_pipeline::BytecodeOutput>(
                     bytecodeInstructions
+                )
+            );
+            data.set(
+                apc_pipeline::key::kBytecodeArtifact,
+                std::make_shared<tbc::BytecodeArtifact>(
+                    std::move(bytecodeArtifact)
                 )
             );
             data.set(
@@ -157,6 +239,24 @@ public:
             data.set(
                 apc_pipeline::key::kAllFunctions,
                 std::make_shared<nlohmann::ordered_json>(allFunctionsJson)
+            );
+            data.set(
+                apc_pipeline::key::kSelfPlaceholderLengths,
+                std::make_shared<std::unordered_map<std::string, size_t>>(
+                    std::move(selfPlaceholderLengths)
+                )
+            );
+            data.set(
+                apc_pipeline::key::kLifetimeCleanupApplied,
+                std::make_shared<bool>(
+                    converter.lifetimeOptimizationApplied()
+                )
+            );
+            data.set(
+                apc_pipeline::key::kLifetimeCleanupCount,
+                std::make_shared<size_t>(
+                    converter.appliedLifetimeCleanupCount()
+                )
             );
 
             LOG_DEBUG(
@@ -216,6 +316,65 @@ public:
     std::vector<std::string> getDependencies() const override
     {
         return {DependTypeToString(DependType::ParserPass)};
+    }
+
+private:
+    static std::optional<size_t> fixedPayloadSizeFromType(
+        const std::string& type
+    )
+    {
+        auto parseHexLength = [](const std::string& value)
+            -> std::optional<size_t> {
+            if (value.rfind("hex", 0) != 0 || value.size() <= 3) {
+                return std::nullopt;
+            }
+            const std::string digits = value.substr(3);
+            if (!std::all_of(
+                    digits.begin(), digits.end(), [](unsigned char ch) {
+                        return std::isdigit(ch) != 0;
+                    }
+                )) {
+                return std::nullopt;
+            }
+            try {
+                const size_t parsed = std::stoull(digits);
+                return parsed == 0 ? std::nullopt
+                                   : std::optional<size_t>(parsed);
+            } catch (...) {
+                return std::nullopt;
+            }
+        };
+
+        if (const auto arrayType = apc::util::parseFixedArrayType(type)) {
+            const auto elementLength =
+                arrayType->elementType == "uint64"
+                    ? std::optional<size_t>(8)
+                    : parseHexLength(arrayType->elementType);
+            if (!elementLength.has_value() || arrayType->size == 0 ||
+                arrayType->size >
+                    std::numeric_limits<size_t>::max() /
+                        *elementLength) {
+                return std::nullopt;
+            }
+            return arrayType->size * *elementLength;
+        }
+        if (const auto hexLength = parseHexLength(type)) {
+            return hexLength;
+        }
+        if (type == "uint64") {
+            return 8;
+        }
+        if (type == "bool" || type == "boolean") {
+            return 1;
+        }
+        if (type == "ripemd160" || type == "pubkeyhash" ||
+            type == "sha1" || type == "address") {
+            return 20;
+        }
+        if (type == "sha256" || type == "privkey") {
+            return 32;
+        }
+        return std::nullopt;
     }
 };
 

@@ -4,6 +4,7 @@
 #include <map>
 #include <optional>
 #include <string>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
@@ -13,6 +14,10 @@
 #include "../bytecode/scope.h"
 #include "../error/error_manager.h"
 #include "../log/logger.h"
+#include "ast_lifetime_planner.h"
+#include "for_loop_policy.h"
+#include "range_plan.h"
+#include "static_integer_evaluator.h"
 
 #ifdef ENABLE_DEBUGGER
 #include "../debugger/info/debug_info_generator.h"
@@ -35,6 +40,9 @@ public:
         : m_generator(generator)
     {
         m_scopePtr = std::make_shared<tbc::Scope>();
+#ifndef ENABLE_DEBUGGER
+        (void)sourceFile;
+#endif
 #ifdef ENABLE_DEBUGGER
         if (!sourceFile.empty()) {
             m_sourceFile = sourceFile;
@@ -79,6 +87,27 @@ public:
     )
     {
         m_structDefinitions = structDefinitions;
+    }
+
+    const std::unordered_map<std::string, size_t>& getSelfPlaceholderLengths()
+        const
+    {
+        return m_selfPlaceholderLengths;
+    }
+
+    // Lifetime plans are advisory. Lowering accepts only simple, uniquely
+    // resolved main-stack slots, and the converter keeps the resulting
+    // candidate only when its complete comparable script is strictly smaller.
+    void setLifetimePlans(
+        const apc::compiler::ContractLifetimePlans* lifetimePlans
+    )
+    {
+        m_lifetimePlans = lifetimePlans;
+    }
+
+    size_t lifetimeCleanupCount() const noexcept
+    {
+        return m_lifetimeCleanupCount;
     }
 
     void visit(ContractNode& node) override;
@@ -173,6 +202,11 @@ private:
         const std::string& paramType
     );
 
+    void cleanupArrayParameter(
+        const std::string& paramName,
+        const std::string& paramType
+    );
+
     void cleanupBasicParameter(const std::string& paramName);
 
     // Preserve a lowercase-returned struct as all of its flattened leaves.
@@ -187,13 +221,66 @@ private:
 
     // Move one exact altstack element to the main stack while restoring all
     // elements that were above it to their original altstack order.
-    bool moveAltElementToMain(const std::string& name);
+    bool moveAltElementToMain(
+        const std::string& name,
+        bool resolveBinding = true
+    );
+
+    struct ResolvedCompositeArrayElement
+    {
+        std::string arrayName;
+        std::string elementLabel;
+        tbc::ArrayInfo arrayInfo;
+        std::vector<tbc::StackElement> slots;
+        bool usesEscapedView = false;
+    };
+
+    // Struct-array elements are compiler-level descriptors backed either by
+    // one whole-element slot or by recursively flattened field slots. Handle
+    // their ownership builtins before the scalar builtin path visits the
+    // virtual descriptor.
+    bool tryProcessCompositeArrayBuiltin(
+        const std::string& functionName,
+        const std::vector<std::unique_ptr<ExprNode>>& args,
+        const ExprNode& node
+    );
+    std::optional<ResolvedCompositeArrayElement>
+    resolveCompositeArrayElement(
+        ExprNode& expression,
+        const std::string& functionName,
+        const SourceLocation& loc
+    );
+    void moveCompositeArrayElementToAlt(
+        const ResolvedCompositeArrayElement& group,
+        const SourceLocation& loc
+    );
+    void moveCompositeArrayElementToMain(
+        const ResolvedCompositeArrayElement& group,
+        const SourceLocation& loc
+    );
+    void deleteCompositeArrayElement(
+        const ResolvedCompositeArrayElement& group,
+        const SourceLocation& loc
+    );
 
     // pos==1 -> OP_SWAP, pos==2 -> OP_ROT, 其余 -> N OP_ROLL (省 1 字节).
     void emitRoll(int64_t pos);
 
     // pos==0 -> OP_DUP, pos==1 -> OP_OVER, 其余 -> N OP_PICK (非破坏性).
     void emitPick(int64_t pos);
+
+    std::optional<int64_t> resolveCompileTimeIndex(const ExprNode& expr) const;
+    std::optional<int64_t>
+    resolveCompileTimeCondition(const ExprNode& expr) const;
+    std::optional<int64_t> resolveCompileTimeInteger(
+        const ExprNode& expr,
+        bool requireNumericFixedValue
+    ) const;
+    compiler::StaticIntegerResult evaluateCompileTimeInteger(
+        const ExprNode& expr,
+        bool requireNumericFixedValue
+    ) const;
+    void bindStaticLoopTarget(ForNode& loop, int64_t value);
     tbc::BytecodeType inferLiteralType(const LiteralNode& node);
     void reportTypeError(
         const std::string& context,
@@ -212,6 +299,15 @@ private:
         std::optional<tbc::StackElement> objectElement = std::nullopt
     );
 
+    // Slice has a staged stack effect: dynamic bounds already exist on the VM
+    // stack and the window form performs two OP_SPLIT operations. Keep its
+    // bytecode emission and symbolic-stack updates in one place.
+    void processSliceBuiltin(
+        const tbc::StackElement& objectElement,
+        const std::vector<tbc::StackElement>& processedArgs,
+        const ExprNode& node
+    );
+
     // 访问每个参数表达式, 从栈顶 pop 收集; 数量不匹配发警告,
     // pop 失败抛 std::runtime_error.
     std::vector<tbc::StackElement> processArguments(
@@ -224,7 +320,7 @@ private:
 
     // 把参数依次搬到栈顶; 结构体参数递归处理所有子字段.
     void processArgsToTop(
-        const std::vector<tbc::StackElement>& elementsVec,
+        std::vector<tbc::StackElement>& elementsVec,
         const std::vector<ParameterInfo>& paramInfos
     );
 
@@ -335,6 +431,10 @@ private:
         size_t startIndex = 0
     );
 
+    void emitLifetimeCleanupAfter(const StmtNode& statement);
+    const apc::compiler::AstLifetimePlan*
+    lifetimePlanFor(const FunctionNode& function) const;
+
     void registerWholeArrayElement(
         const std::string& name,
         size_t arraySize,
@@ -425,6 +525,23 @@ private:
         std::vector<ReturnNode*>& returns
     ) const;
 
+    void collectSelfPlaceholderLengths(const ContractNode& node);
+    void collectSelfPlaceholderLengthsFromStmt(
+        const StmtNode* stmt,
+        const std::unordered_map<std::string, std::string>& paramTypes
+    );
+    static std::optional<std::string> extractSelfPath(const ExprNode* expr);
+    static std::optional<std::string> extractIdentifierName(
+        const ExprNode* expr
+    );
+    static std::optional<size_t> fixedByteLengthFromType(
+        const std::string& type
+    );
+    std::string appendSelfPlaceholderLengths(
+        const std::string& script,
+        const ASTNode& node
+    ) const;
+
 private:
     tbc::BytecodeGenerator& m_generator;
     std::shared_ptr<tbc::Scope> m_scopePtr;
@@ -442,7 +559,9 @@ private:
     struct StructReturnFrame
     {
         std::unordered_set<std::string> returnedFields;
+        std::vector<std::string> returnedValues;
         std::optional<tbc::StackElement> descriptor;
+        bool returnedBoundComposite = false;
         size_t valueReturnCount = 0;
     };
 
@@ -451,18 +570,51 @@ private:
     // return from a nested/sibling call.
     std::vector<StructReturnFrame> m_structReturnFrames;
 
+    struct EscapedAltArrayView
+    {
+        tbc::ArrayInfo arrayInfo;
+        // Exact physical layout captured by SetAlt. This is intentionally
+        // separate from lexical ArrayInfo so private-call scope restoration
+        // cannot erase it.
+        std::unordered_map<
+            std::string,
+            std::vector<std::vector<tbc::StackElement>>> elementLayouts;
+    };
+
+    std::unordered_map<std::string, EscapedAltArrayView>
+        m_escapedAltArrays;
+
+    // "self.field" -> fixed payload byte length declared by constructor data.
+    std::unordered_map<std::string, size_t> m_selfPlaceholderLengths;
+
     // 整体数组元素: 变量名 -> (arraySize, elementByteSize).
     std::map<std::string, std::pair<size_t, size_t>> m_wholeArrayElements;
 
     ReturnNode* m_lastReturnNode = nullptr;
     ReturnNode* m_currentReturnNode = nullptr;
     const BlockNode* m_publicFunctionBlock = nullptr;
+
+    // Only the top-level block of the final emitted public function can own
+    // bytes at the physical end of the locking script.
+    const BlockNode* m_immutableSuffixBlock = nullptr;
     const std::vector<std::unique_ptr<StmtNode>>*
         m_inlineContinuationStatements = nullptr;
     size_t m_inlineContinuationStart = 0;
     std::vector<std::vector<std::string>> m_privateFunctionBaseStorageNames;
     std::string m_currentFunctionReturnType;
     FlowResult m_lastFlowResult = FlowResult::FallsThrough;
+
+    // Push(self.x) in the post-Return immutable suffix may remain symbolic;
+    // executable placeholders must have a statically known payload length.
+    bool m_isEmittingImmutableSuffix = false;
+
+    const apc::compiler::ContractLifetimePlans* m_lifetimePlans = nullptr;
+    const apc::compiler::AstLifetimePlan* m_currentLifetimePlan = nullptr;
+    size_t m_lifetimeCleanupCount = 0;
+    size_t m_lifetimeControlFlowDepth = 0;
+
+    apc::compiler::RangeExpansionBudget m_loopExpansionBudget{
+        apc::compiler::kMaxExpandedLoopBodies};
 
 
 #ifdef ENABLE_DEBUGGER

@@ -118,7 +118,7 @@ with open(sys.argv[1], "r", encoding="utf-8") as f:
     tokens = json.load(f)["lock"]["asm"].split()
 
 last_return = max(i for i, token in enumerate(tokens) if token == "OP_RETURN")
-assert "<self.oracleKeyHash>" in tokens[last_return + 1:], tokens[-20:]
+assert "<self.oracleKeyHash20>" in tokens[last_return + 1:], tokens[-20:]
 PY
 
 cp "$SCRIPT_DIR/private_fixed_return_no_crash.ct" "$TMP_DIR/"

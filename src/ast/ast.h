@@ -83,6 +83,8 @@ public:
 
     std::string name;
     std::vector<std::unique_ptr<ASTNode>> members; // 函数与结构体定义
+    // 合约级全局常量独立于 members，避免被当作可执行成员。
+    std::vector<std::unique_ptr<class GlobalConstNode>> globalConstants;
 
     // 临时字段：解析阶段收到的 import 库块，由 MergeLibrariesPass 平铺到
     // members 后清空，visitor 流水线看不到 LibraryNode。
@@ -275,6 +277,34 @@ public:
     std::string value;
 };
 
+// 合约级只读常量：语法限制 initializer 为标量字面量。
+// Resolver 在前端将每个右值引用替换为独立 LiteralNode，不引入运行时存储。
+class GlobalConstNode final : public ASTNode
+{
+public:
+    GlobalConstNode(
+        std::string name,
+        std::unique_ptr<LiteralNode> initializer
+    )
+        : name(std::move(name)), initializer(std::move(initializer))
+    {}
+
+    GlobalConstNode(
+        std::string name,
+        std::unique_ptr<LiteralNode> initializer,
+        int32_t x,
+        int32_t y
+    )
+        : ASTNode(x, y), name(std::move(name)),
+          initializer(std::move(initializer))
+    {}
+
+    void accept(ASTVisitor& visitor) override;
+
+    std::string name;
+    std::unique_ptr<LiteralNode> initializer;
+};
+
 class IdentifierNode final : public ExprNode
 {
 public:
@@ -461,20 +491,6 @@ public:
     std::unique_ptr<ExprNode> iterable;
     std::unique_ptr<BlockNode> body;
 
-    void setStaticIterations(std::vector<int64_t> values)
-    {
-        iterationValues = std::move(values);
-        haveStaticIterations = !iterationValues.empty();
-    }
-    const std::vector<int64_t>& getStaticIterations() const
-    {
-        return iterationValues;
-    }
-    bool hasStaticIterations() const
-    {
-        return haveStaticIterations;
-    }
-
     void setInferredType(std::string type)
     {
         inferredType = std::move(type);
@@ -485,8 +501,6 @@ public:
     }
 
 private:
-    std::vector<int64_t> iterationValues;
-    bool haveStaticIterations{false};
     std::string inferredType{"int"};
 };
 

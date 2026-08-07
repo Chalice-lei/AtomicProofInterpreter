@@ -1,0 +1,13 @@
+Contract GlobalConstructorUsageContract:
+    global InitialValue = 9
+
+    def __init__():
+        EqualVerify(InitialValue, 9)
+
+    def _expectedValue():
+        return InitialValue
+
+    def main():
+        expected = _expectedValue()
+        EqualVerify(expected, InitialValue)
+        Return 1

@@ -1,8 +1,260 @@
 #include "scope.h"
 
+#include <algorithm>
+#include <map>
+#include <set>
+#include <sstream>
+#include <stdexcept>
+
 #include "../log/logger.h"
 
 using namespace tbc;
+
+namespace
+{
+
+bool sameRuntimeSlot(
+    const StackElement& lhs,
+    const StackElement& rhs,
+    bool compareType
+)
+{
+    return lhs.getName() == rhs.getName() &&
+           (!compareType || lhs.getType() == rhs.getType());
+}
+
+bool sameFixedBinding(const StackElement& lhs, const StackElement& rhs)
+{
+    return sameRuntimeSlot(lhs, rhs, true) && lhs.getData() == rhs.getData();
+}
+
+std::string describeStack(const std::vector<StackElement>& stack)
+{
+    std::ostringstream oss;
+    oss << '[';
+    for (size_t i = 0; i < stack.size(); ++i) {
+        if (i != 0) {
+            oss << ", ";
+        }
+        oss << stack[i].getName();
+        if (!stack[i].getType().empty()) {
+            oss << ':' << stack[i].getType();
+        }
+    }
+    oss << ']';
+    return oss.str();
+}
+
+ControlFlowJoinResult compareRuntimeStack(
+    const std::vector<StackElement>& entry,
+    const std::vector<StackElement>& branch,
+    ControlFlowMismatch depthMismatch,
+    ControlFlowMismatch layoutMismatch,
+    const char* stackName,
+    bool compareType
+)
+{
+    if (entry.size() != branch.size()) {
+        std::ostringstream oss;
+        oss << stackName << " depth differs: entry=" << entry.size()
+            << ", branch=" << branch.size();
+        return {depthMismatch, oss.str()};
+    }
+
+    for (size_t i = 0; i < entry.size(); ++i) {
+        if (!sameRuntimeSlot(entry[i], branch[i], compareType)) {
+            std::ostringstream oss;
+            oss << stackName << " layout differs: entry="
+                << describeStack(entry) << ", branch="
+                << describeStack(branch);
+            return {layoutMismatch, oss.str()};
+        }
+    }
+
+    return {};
+}
+
+bool sameArrayInfo(const ArrayInfo& lhs, const ArrayInfo& rhs)
+{
+    if (lhs.name != rhs.name || lhs.elementType != rhs.elementType ||
+        lhs.size != rhs.size || lhs.isFixedSize != rhs.isFixedSize ||
+        lhs.elements.size() != rhs.elements.size()) {
+        return false;
+    }
+
+    for (size_t i = 0; i < lhs.elements.size(); ++i) {
+        const auto& lhsElement = lhs.elements[i];
+        const auto& rhsElement = rhs.elements[i];
+        if (lhsElement.baseArrayName != rhsElement.baseArrayName ||
+            lhsElement.elementType != rhsElement.elementType ||
+            lhsElement.index != rhsElement.index ||
+            lhsElement.qualifiedName != rhsElement.qualifiedName ||
+            lhsElement.stackOffset != rhsElement.stackOffset) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool sameCompoundInfo(
+    const CompoundTypeInfo& lhs,
+    const CompoundTypeInfo& rhs
+)
+{
+    if (lhs.name != rhs.name || lhs.isStructField != rhs.isStructField ||
+        lhs.isSplitted != rhs.isSplitted ||
+        lhs.fields.size() != rhs.fields.size()) {
+        return false;
+    }
+
+    for (size_t i = 0; i < lhs.fields.size(); ++i) {
+        const auto& lhsField = lhs.fields[i];
+        const auto& rhsField = rhs.fields[i];
+        if (lhsField.name != rhsField.name || lhsField.type != rhsField.type ||
+            lhsField.byteSize != rhsField.byteSize ||
+            lhsField.isArray != rhsField.isArray ||
+            lhsField.arraySize != rhsField.arraySize) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool sameSymbolMetadata(const SymbolInfo& lhs, const SymbolInfo& rhs)
+{
+    if (lhs.m_isStackFlag != rhs.m_isStackFlag ||
+        lhs.m_stackElement.getName() != rhs.m_stackElement.getName() ||
+        lhs.m_stackElement.getType() != rhs.m_stackElement.getType() ||
+        lhs.m_stackElement.getData() != rhs.m_stackElement.getData() ||
+        lhs.m_isArray != rhs.m_isArray ||
+        lhs.m_isInitialized != rhs.m_isInitialized ||
+        lhs.m_isCompoundType != rhs.m_isCompoundType ||
+        lhs.m_isExternalArrayView != rhs.m_isExternalArrayView) {
+        return false;
+    }
+
+    if (lhs.m_isArray && !sameArrayInfo(lhs.m_arrayInfo, rhs.m_arrayInfo)) {
+        return false;
+    }
+    if (lhs.m_isCompoundType &&
+        !sameCompoundInfo(lhs.m_compoundInfo, rhs.m_compoundInfo)) {
+        return false;
+    }
+    return true;
+}
+
+std::map<std::string, SymbolInfo> visibleSymbols(const SymbolTable& table)
+{
+    std::map<std::string, SymbolInfo> visible;
+    for (auto it = table.m_currentScope.rbegin();
+         it != table.m_currentScope.rend(); ++it) {
+        visible.emplace(it->first, it->second);
+    }
+    return visible;
+}
+
+bool belongsToVisibleSymbol(
+    const std::string& storageName,
+    const std::set<std::string>& visibleNames
+)
+{
+    for (const auto& symbolName : visibleNames) {
+        if (storageName == symbolName) {
+            return true;
+        }
+        if (storageName.size() <= symbolName.size() ||
+            storageName.compare(0, symbolName.size(), symbolName) != 0) {
+            continue;
+        }
+        const char separator = storageName[symbolName.size()];
+        if (separator == '.' || separator == '[') {
+            return true;
+        }
+    }
+    return false;
+}
+
+std::map<std::string, StackElement> visibleFixedBindings(
+    const SymbolTable& table,
+    const std::set<std::string>& visibleNames
+)
+{
+    std::map<std::string, StackElement> bindings;
+    if (!table.m_fixedStackPtr) {
+        return bindings;
+    }
+
+    for (const auto& element : table.m_fixedStackPtr->getStackContent()) {
+        if (belongsToVisibleSymbol(element.getName(), visibleNames)) {
+            bindings.insert_or_assign(element.getName(), element);
+        }
+    }
+    return bindings;
+}
+
+ControlFlowJoinResult compareEntryVisibleCompilerState(
+    const SymbolTable& entry,
+    const SymbolTable& branch
+)
+{
+    const auto entrySymbols = visibleSymbols(entry);
+    const auto branchSymbols = visibleSymbols(branch);
+    std::set<std::string> visibleNames;
+
+    for (const auto& [name, entryInfo] : entrySymbols) {
+        visibleNames.insert(name);
+        const auto branchIt = branchSymbols.find(name);
+        if (branchIt == branchSymbols.end() ||
+            !sameSymbolMetadata(entryInfo, branchIt->second)) {
+            return {
+                ControlFlowMismatch::SYMBOL_METADATA,
+                "compiler metadata differs for entry-visible symbol '" +
+                    name + "'"
+            };
+        }
+    }
+
+    if (entry.m_bindSymbol != branch.m_bindSymbol ||
+        entry.activeBindSymbolStart() != branch.activeBindSymbolStart() ||
+        entry.activeScopeEntryStart() != branch.activeScopeEntryStart()) {
+        return {
+            ControlFlowMismatch::SYMBOL_METADATA,
+            "compiler symbol bindings differ at the join point"
+        };
+    }
+
+    if (entry.m_keepSymbol != branch.m_keepSymbol) {
+        return {
+            ControlFlowMismatch::SYMBOL_METADATA,
+            "compiler keep/return markers differ at the join point"
+        };
+    }
+
+    const auto entryFixed = visibleFixedBindings(entry, visibleNames);
+    const auto branchFixed = visibleFixedBindings(branch, visibleNames);
+    if (entryFixed.size() != branchFixed.size()) {
+        return {
+            ControlFlowMismatch::FIXED_STORAGE,
+            "fixed storage differs for entry-visible symbols"
+        };
+    }
+
+    for (const auto& [name, entryElement] : entryFixed) {
+        const auto branchIt = branchFixed.find(name);
+        if (branchIt == branchFixed.end() ||
+            !sameFixedBinding(entryElement, branchIt->second)) {
+            return {
+                ControlFlowMismatch::FIXED_STORAGE,
+                "fixed storage differs for entry-visible symbol '" + name +
+                    "'"
+            };
+        }
+    }
+
+    return {};
+}
+
+} // namespace
 
 void Scope::push(
     const std::string& nameStr,
@@ -227,6 +479,117 @@ bool Scope::popScopeStack()
     return false;
 }
 
+ControlFlowStateSnapshot Scope::captureControlFlowState() const
+{
+    ControlFlowStateSnapshot snapshot;
+    snapshot.symbolTable = m_currentSymtab;
+    if (m_currentSymtab.m_altStackPtr) {
+        snapshot.altStack =
+            m_currentSymtab.m_altStackPtr->getStackContent();
+        snapshot.altCombinedSize =
+            m_currentSymtab.m_altStackPtr->getCombinedStackSize();
+    }
+    if (m_currentSymtab.m_stackPtr) {
+        snapshot.mainCombinedSize =
+            m_currentSymtab.m_stackPtr->getCombinedStackSize();
+    }
+    snapshot.lexicalDepth = m_symtabScopes.size();
+    return snapshot;
+}
+
+ControlFlowStateSnapshot Scope::captureControlFlowStateAndExitScope()
+{
+    auto snapshot = captureControlFlowState();
+    snapshot.symbolTable = exitScope();
+    snapshot.lexicalDepth = m_symtabScopes.size();
+    return snapshot;
+}
+
+void Scope::restoreControlFlowState(
+    const ControlFlowStateSnapshot& snapshot
+)
+{
+    if (m_symtabScopes.size() != snapshot.lexicalDepth) {
+        std::ostringstream oss;
+        oss << "Cannot restore control-flow state at lexical depth "
+            << m_symtabScopes.size() << "; expected "
+            << snapshot.lexicalDepth;
+        throw std::runtime_error(oss.str());
+    }
+
+    m_currentSymtab = snapshot.symbolTable;
+    if (m_currentSymtab.m_stackPtr) {
+        m_currentSymtab.m_stackPtr->setCombinedStackSize(
+            snapshot.mainCombinedSize
+        );
+    }
+    if (m_currentSymtab.m_altStackPtr) {
+        m_currentSymtab.m_altStackPtr->replaceStackContent(snapshot.altStack);
+        m_currentSymtab.m_altStackPtr->setCombinedStackSize(
+            snapshot.altCombinedSize
+        );
+    }
+}
+
+ControlFlowJoinResult Scope::compareControlFlowStates(
+    const ControlFlowStateSnapshot& entry,
+    const ControlFlowStateSnapshot& branch,
+    ControlFlowJoinPolicy policy
+) const
+{
+    if (entry.lexicalDepth != branch.lexicalDepth) {
+        return {
+            ControlFlowMismatch::LEXICAL_SCOPE,
+            "lexical scope depth differs at the join point"
+        };
+    }
+
+    if (!entry.symbolTable.m_stackPtr ||
+        !branch.symbolTable.m_stackPtr) {
+        return {
+            ControlFlowMismatch::MAIN_STACK_LAYOUT,
+            "main stack is missing at the join point"
+        };
+    }
+
+    const auto& entryMain =
+        entry.symbolTable.m_stackPtr->getStackContent();
+    const auto& branchMain =
+        branch.symbolTable.m_stackPtr->getStackContent();
+    const bool compareTypes =
+        policy == ControlFlowJoinPolicy::IMPLICIT_EMPTY_BRANCH;
+    auto result = compareRuntimeStack(
+        entryMain,
+        branchMain,
+        ControlFlowMismatch::MAIN_STACK_DEPTH,
+        ControlFlowMismatch::MAIN_STACK_LAYOUT,
+        "main stack",
+        compareTypes
+    );
+    if (!result.compatible()) {
+        return result;
+    }
+
+    result = compareRuntimeStack(
+        entry.altStack,
+        branch.altStack,
+        ControlFlowMismatch::ALT_STACK_DEPTH,
+        ControlFlowMismatch::ALT_STACK_LAYOUT,
+        "alternative stack",
+        compareTypes
+    );
+    if (!result.compatible()) {
+        return result;
+    }
+
+    if (policy == ControlFlowJoinPolicy::IMPLICIT_EMPTY_BRANCH) {
+        return compareEntryVisibleCompilerState(
+            entry.symbolTable, branch.symbolTable
+        );
+    }
+    return {};
+}
+
 bool Scope::defineSymbol(
     std::string name,
     std::string type /*= ""*/,
@@ -266,6 +629,18 @@ bool Scope::defineArray(
     return m_currentSymtab.defineArray(name, elementType, size, isFixedSize);
 }
 
+bool Scope::importExternalArrayView(
+    const std::string& name,
+    const std::string& elementType,
+    size_t size,
+    bool isFixedSize
+)
+{
+    return m_currentSymtab.importExternalArrayView(
+        name, elementType, size, isFixedSize
+    );
+}
+
 bool Scope::isArraySymbol(const std::string& name) const
 {
     return m_currentSymtab.isArraySymbol(name);
@@ -291,7 +666,9 @@ Scope::getArrayElementPos(const std::string& arrayName, size_t index) const
 bool Scope::rename(const std::string& oldName, const std::string& newName)
 {
     if (m_currentSymtab.m_stackPtr) {
-        return m_currentSymtab.m_stackPtr->rename(oldName, newName);
+        return m_currentSymtab.m_stackPtr->renameTopToBottom(
+            oldName, newName
+        );
     }
     return false;
 }

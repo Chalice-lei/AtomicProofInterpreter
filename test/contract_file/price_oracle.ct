@@ -42,6 +42,9 @@ Contract PriceOracle:
     Struct CurrentTX:
         Outputs: Output[3]
 
+    def __init__(oracleKeyHash: hex20):
+        self.oracleKeyHash = oracleKeyHash
+
     # ----------------------------------------------------------------
     # 函数 1/2：验证操作员权限与父交易，准备副栈数据
     #

@@ -15,44 +15,11 @@ SPACE_TBC_START
 
 inline std::string encodePushData(const valtype& data)
 {
-    std::string result;
-
-    auto byteToHex = [](uint8_t byte) -> std::string {
-        static const char hex_digits[] = "0123456789abcdef";
-        return std::string{hex_digits[byte >> 4], hex_digits[byte & 0x0f]};
-    };
-
-    auto appendData = [&result, &byteToHex](const auto& data) {
-        for (uint8_t byte : data) {
-            result += byteToHex(byte);
-        }
-    };
-
-    if (data.size() <= 75) {
-        result += opcodeToHex(static_cast<BytOpcode>(data.size()));
-        appendData(data);
-    } else if (data.size() <= 255) {
-        result += opcodeToHex(BytOpcode::OP_PUSHDATA1);
-        result += byteToHex(static_cast<uint8_t>(data.size()));
-        appendData(data);
-    } else if (data.size() <= 65535) {
-        result += opcodeToHex(BytOpcode::OP_PUSHDATA2);
-        uint16_t size = static_cast<uint16_t>(data.size());
-        result += byteToHex(static_cast<uint8_t>(size & 0xff));
-        result += byteToHex(static_cast<uint8_t>((size >> 8) & 0xff));
-        appendData(data);
-    } else if (data.size() <= 4294967295UL) {
-        result += opcodeToHex(BytOpcode::OP_PUSHDATA4);
-        uint32_t size = static_cast<uint32_t>(data.size());
-        for (int i = 0; i < 4; ++i) {
-            result += byteToHex(static_cast<uint8_t>((size >> (8 * i)) & 0xff));
-        }
-        appendData(data);
-    } else {
-        result += opcodeToHex(BytOpcode::OP_INVALIDOPCODE);
+    auto result = ScriptCodec::encodePush(data, PushEncodingPolicy::Legacy);
+    if (!result.has_value()) {
+        return opcodeToHex(BytOpcode::OP_INVALIDOPCODE);
     }
-
-    return result;
+    return std::move(result.value());
 }
 
 // 数值 -> Bitcoin Script hex
@@ -131,29 +98,13 @@ inline std::string stringToScriptHex(const std::string& str)
         std::string processedStr = str;
         escapeString(processedStr);
 
-        std::ostringstream oss;
-        for (unsigned char c : processedStr) {
-            oss << std::hex << std::setfill('0') << std::setw(2)
-                << static_cast<unsigned int>(c);
-        }
-        std::string stringHex = oss.str();
-
-        if (stringHex.empty()) {
+        const valtype bytes(processedStr.begin(), processedStr.end());
+        auto encoded =
+            ScriptCodec::encodePush(bytes, PushEncodingPolicy::Legacy);
+        if (!encoded.has_value()) {
             return "0x00";
         }
-
-        int dataLength = stringHex.length() / 2;
-
-        if (dataLength <= 0) {
-            return "0x00";
-        }
-
-        std::string lengthOpcode = bytEncodeLengthOpcode(dataLength);
-        if (lengthOpcode.empty()) {
-            return "0x00";
-        }
-
-        return "0x" + lengthOpcode + stringHex;
+        return "0x" + encoded.value();
 
     } catch (const std::exception& e) {
         return "0x00";
@@ -185,6 +136,83 @@ inline std::string hexData(const std::string& hex)
     }
 
     return hexData;
+}
+
+// Accept only one complete Script-number push. scriptHexToNumber intentionally
+// retains a permissive compatibility mode, so callers which use sentinel
+// values or make control-flow decisions must validate first.
+inline bool isStrictScriptNumberHex(const std::string& hex)
+{
+    if (hex.size() < 2 ||
+        !(hex.starts_with("0x") || hex.starts_with("0X"))) {
+        return false;
+    }
+
+    const std::string cleanHex = hexData(hex);
+    if (cleanHex.empty() || cleanHex.size() % 2 != 0) {
+        return false;
+    }
+
+    std::vector<uint8_t> bytes;
+    bytes.reserve(cleanHex.size() / 2);
+    try {
+        for (size_t i = 0; i < cleanHex.size(); i += 2) {
+            bytes.push_back(static_cast<uint8_t>(
+                std::stoul(cleanHex.substr(i, 2), nullptr, 16)
+            ));
+        }
+    } catch (const std::exception&) {
+        return false;
+    }
+
+    if (bytes.size() == 1 &&
+        (bytes[0] == 0x00 || bytes[0] == 0x4f ||
+         (bytes[0] >= 0x51 && bytes[0] <= 0x60))) {
+        return true;
+    }
+
+    size_t headerSize = 0;
+    size_t dataSize = 0;
+    const uint8_t first = bytes[0];
+    if (first >= 1 && first <= 75) {
+        headerSize = 1;
+        dataSize = first;
+    } else if (first == 0x4c && bytes.size() >= 2) {
+        headerSize = 2;
+        dataSize = bytes[1];
+    } else if (first == 0x4d && bytes.size() >= 3) {
+        headerSize = 3;
+        dataSize = static_cast<size_t>(bytes[1]) |
+                   (static_cast<size_t>(bytes[2]) << 8);
+    } else if (first == 0x4e && bytes.size() >= 5) {
+        headerSize = 5;
+        dataSize = static_cast<size_t>(bytes[1]) |
+                   (static_cast<size_t>(bytes[2]) << 8) |
+                   (static_cast<size_t>(bytes[3]) << 16) |
+                   (static_cast<size_t>(bytes[4]) << 24);
+    } else {
+        return false;
+    }
+
+    if (dataSize < 1 || dataSize > sizeof(int64_t) + 1 ||
+        bytes.size() != headerSize + dataSize) {
+        return false;
+    }
+
+    // INT64_MIN is the only int64 value whose sign-magnitude ScriptNum
+    // representation needs nine bytes: 2^63 little-endian plus a separate
+    // negative sign byte. All other nine-byte payloads are out of range.
+    if (dataSize == sizeof(int64_t) + 1) {
+        static constexpr uint8_t minimumEncoding[] = {
+            0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x80, 0x80};
+        return std::equal(
+            minimumEncoding,
+            minimumEncoding + sizeof(minimumEncoding),
+            bytes.begin() + static_cast<std::ptrdiff_t>(headerSize)
+        );
+    }
+    return true;
 }
 
 // Bitcoin Script hex -> 数值 (含负数, 与 CScriptNum 一致)
@@ -279,18 +307,11 @@ inline int64_t scriptHexToNumber(const std::string& hex)
         bytes.begin() + static_cast<long>(dataStart + dataLen)
     );
 
-    int64_t value = 0;
-    for (size_t i = 0; i < numBytes.size(); ++i) {
-        value |= static_cast<int64_t>(numBytes[i]) << (8 * i);
+    try {
+        return CScriptNum(numBytes, false, sizeof(int64_t) + 1).getint();
+    } catch (const script_num_error&) {
+        return 0;
     }
-
-    // 最高位为符号位
-    if (!numBytes.empty() && (numBytes.back() & 0x80)) {
-        value &= ~(0x80ULL << (8 * (numBytes.size() - 1)));
-        value = -value;
-    }
-
-    return value;
 }
 
 // hex 串 -> Bitcoin Script hex
@@ -305,8 +326,19 @@ inline std::string hexToScriptHex(const std::string& hexStr)
         return "0x00";
     }
 
-    std::string lengthOpcode = bytEncodeLengthOpcode(hexDataStr.length() / 2);
-    return "0x" + lengthOpcode + hexDataStr;
+    auto bytes = ScriptCodec::hexToBytes(hexDataStr);
+    if (!bytes.has_value()) {
+        // Preserve the historical permissive odd-length behavior for callers
+        // still on LegacyV1. Canonical callers use ScriptCodec directly and
+        // reject this input.
+        std::string lengthOpcode =
+            bytEncodeLengthOpcode(static_cast<int>(hexDataStr.length() / 2));
+        return "0x" + lengthOpcode + hexDataStr;
+    }
+
+    auto encoded =
+        ScriptCodec::encodePush(bytes.value(), PushEncodingPolicy::Legacy);
+    return encoded.has_value() ? "0x" + encoded.value() : "0x00";
 }
 
 // Base58 解码

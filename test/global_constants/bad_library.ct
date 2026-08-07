@@ -1,0 +1,5 @@
+Library bad_global_library:
+    global TapeFlag = "TBC20TAPE"
+
+    def value():
+        return 1

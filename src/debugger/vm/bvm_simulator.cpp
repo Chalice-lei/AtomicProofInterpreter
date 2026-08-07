@@ -16,6 +16,20 @@
 namespace apc_debug
 {
 
+namespace
+{
+
+bool sameSourcePosition(
+    const SourceLocation& lhs,
+    const SourceLocation& rhs
+)
+{
+    return lhs.filename == rhs.filename && lhs.line == rhs.line &&
+           lhs.column == rhs.column;
+}
+
+} // namespace
+
 std::optional<int64_t> parseInteger(const std::string& str)
 {
     try {
@@ -131,6 +145,7 @@ void BVMSimulator::reset()
 
     m_callStack.clear();
     m_conditionStack.clear();
+    m_rootBranchTrace.clear();
 
     if (m_stackTraceEnabled) {
         m_stackTrace.clear();
@@ -256,7 +271,8 @@ void BVMSimulator::stepIn()
 {
     // 逐行单步，可进入函数
     m_stepMode = StepMode::STEP_IN;
-    m_stepStartLine = getCurrentLocation().line;
+    m_stepStartLocation = getCurrentLocation();
+    m_stepStartLine = m_stepStartLocation.line;
     m_stepStartCallDepth = m_callStack.size();
 
     if (m_state != VMState::RUNNING && m_state != VMState::PAUSED &&
@@ -289,7 +305,7 @@ void BVMSimulator::stepIn()
 
         // 同行断点忽略，仅新行断点才停止；避免同行多 PC 反复停下
         if (shouldBreakAtPC(m_pc)) {
-            if (currentLoc.line == m_stepStartLine) {
+            if (sameSourcePosition(currentLoc, m_stepStartLocation)) {
                 continue;
             }
 
@@ -299,7 +315,7 @@ void BVMSimulator::stepIn()
             break;
         }
 
-        if (currentLoc.line != m_stepStartLine) {
+        if (!sameSourcePosition(currentLoc, m_stepStartLocation)) {
             m_state = VMState::PAUSED;
             m_stepMode = StepMode::NONE;
             fireEvent(VMEvent::STEPPED, "单步进入（逐行）完成");
@@ -319,7 +335,8 @@ void BVMSimulator::stepOver()
 {
     // 单步跳过：进入函数则等其执行完
     m_stepMode = StepMode::STEP_OVER;
-    m_stepStartLine = getCurrentLocation().line;
+    m_stepStartLocation = getCurrentLocation();
+    m_stepStartLine = m_stepStartLocation.line;
     m_stepStartCallDepth = m_callStack.size();
 
     if (m_state != VMState::RUNNING && m_state != VMState::PAUSED) {
@@ -357,7 +374,7 @@ void BVMSimulator::stepOver()
 
         // 同 stepIn：忽略起始行上的断点，避免同行多 PC 反复停下
         if (shouldBreakAtPC(m_pc)) {
-            if (currentLoc.line == m_stepStartLine) {
+            if (sameSourcePosition(currentLoc, m_stepStartLocation)) {
                 continue;
             }
 
@@ -368,7 +385,7 @@ void BVMSimulator::stepOver()
         }
 
         // 停在：行变化 且 深度未加深
-        if (currentLoc.line != m_stepStartLine &&
+        if (!sameSourcePosition(currentLoc, m_stepStartLocation) &&
             currentDepth <= m_stepStartCallDepth) {
             m_state = VMState::PAUSED;
             m_stepMode = StepMode::NONE;
@@ -480,7 +497,9 @@ bool BVMSimulator::executeInstruction()
         mainStackBefore = m_mainStack.snapshot();
         altStackBefore = m_altStack.snapshot();
         if (m_debugInfo) {
-            traceLocation = m_debugInfo->getSourceLocation(tracePC);
+            traceLocation = m_debugInfo->getSourceLocation(
+                tracePC, getActiveBranchTrace()
+            );
             if (const auto* func = m_debugInfo->getFunctionAtPC(tracePC)) {
                 traceFunctionName = func->name;
             }
@@ -557,8 +576,9 @@ bool BVMSimulator::executeInstruction()
                     if (!m_callStack.empty()) {
                         auto& parent = m_callStack.back();
                         parent.suspendedPC = currentPC;
-                        parent.suspendedLocation =
-                            m_debugInfo->getSourceLocation(currentPC);
+                        parent.suspendedLocation = m_debugInfo->getSourceLocation(
+                            currentPC, getActiveBranchTrace()
+                        );
                         parent.suspendedMainStack =
                             callerStackBeforeFunctionEntry &&
                                     m_pc == tracePC + 1
@@ -1520,6 +1540,10 @@ void BVMSimulator::op_if()
         condTrue = (condVal && (*condVal != 0));
     }
 
+    if (parentExec) {
+        activeBranchTrace()[static_cast<ControlRegionId>(m_pc)] =
+            condTrue ? BranchArm::Then : BranchArm::Else;
+    }
     m_conditionStack.push_back(parentExec && condTrue);
 }
 
@@ -1535,6 +1559,10 @@ void BVMSimulator::op_notif()
         condTrue = (condVal && (*condVal != 0));
     }
 
+    if (parentExec) {
+        activeBranchTrace()[static_cast<ControlRegionId>(m_pc)] =
+            condTrue ? BranchArm::Else : BranchArm::Then;
+    }
     m_conditionStack.push_back(parentExec && !condTrue);
 }
 
@@ -1717,7 +1745,7 @@ void BVMSimulator::op_checkmultisig(bool verifyOnly)
 SourceLocation BVMSimulator::getCurrentLocation() const
 {
     if (m_debugInfo) {
-        return m_debugInfo->getSourceLocation(m_pc);
+        return m_debugInfo->getSourceLocation(m_pc, getActiveBranchTrace());
     }
     return SourceLocation();
 }
@@ -1736,6 +1764,32 @@ const CallFrame* BVMSimulator::getCurrentFrame() const
         return nullptr;
     }
     return &m_callStack.back();
+}
+
+const BranchTrace& BVMSimulator::getActiveBranchTrace() const
+{
+    if (!m_callStack.empty()) {
+        return m_callStack.back().branchTrace;
+    }
+    return m_rootBranchTrace;
+}
+
+BranchTrace& BVMSimulator::activeBranchTrace()
+{
+    if (!m_callStack.empty()) {
+        return m_callStack.back().branchTrace;
+    }
+    return m_rootBranchTrace;
+}
+
+bool BVMSimulator::isSourceOriginActive(
+    const std::string& filename,
+    size_t line
+) const
+{
+    return m_debugInfo && m_debugInfo->hasActiveSourceOrigin(
+        m_pc, filename, line, getActiveBranchTrace()
+    );
 }
 
 void BVMSimulator::addBreakpoint(size_t pc)
@@ -1852,17 +1906,16 @@ void BVMSimulator::popCallFrame()
 bool BVMSimulator::shouldStopForStep()
 {
     auto currentLoc = getCurrentLocation();
-    size_t currentLine = currentLoc.line;
     size_t currentDepth = m_callStack.size();
 
     switch (m_stepMode) {
         case StepMode::STEP_IN:
-            return currentLine != m_stepStartLine;
+            return !sameSourcePosition(currentLoc, m_stepStartLocation);
 
         case StepMode::STEP_OVER:
             // 行变 且 深度未加深
             return (currentDepth <= m_stepStartCallDepth) &&
-                   (currentLine != m_stepStartLine);
+                   !sameSourcePosition(currentLoc, m_stepStartLocation);
 
         case StepMode::STEP_OUT:
             return currentDepth < m_stepStartCallDepth;

@@ -9,6 +9,7 @@
 #include "../pass/pass_context_keys.h"
 #include "../pass/pass_macros.h"
 #include "../pass/pass_manager.h"
+#include "global_constant_resolver.h"
 #include "library_merger.h"
 
 namespace apc_frontend
@@ -62,6 +63,19 @@ FrontendResult compileFrontendToAst(
                 " library member(s)"
             );
         }
+
+        GlobalConstantResolver globalResolver;
+        auto globalResult = globalResolver.resolve(*ast);
+        if (!globalResult.success()) {
+            result.errorMessage = "global constant resolution failed";
+            result.context = pipelineData;
+            return result;
+        }
+        LOG_DEBUG(
+            "FrontendPipeline - resolved " +
+            std::to_string(globalResult.resolvedReferences) +
+            " global constant reference(s)"
+        );
 
         result.ast = ast;
         result.context = pipelineData;

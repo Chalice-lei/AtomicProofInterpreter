@@ -1,0 +1,12 @@
+Contract StructReturnNestedShadow:
+    Struct Pair:
+        left: number
+        right: number
+    def _make():
+        value: Pair = {7, 3}
+        return value
+    def _outer(value: Pair):
+        return _make()
+    def main(source: Pair):
+        result: Pair = _outer(source)
+        Return(result.left - result.right)

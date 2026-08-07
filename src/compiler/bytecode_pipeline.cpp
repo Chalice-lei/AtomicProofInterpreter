@@ -58,6 +58,23 @@ PassContext runBytecodePipeline(
             apc_pipeline::key::kDebugOutputFile,
             std::make_shared<std::string>(options.debugOutputFile)
         );
+    } else if (options.enableDebug && !options.suppressDebugFile) {
+        // Resolve the CLI default once and keep it in the shared context.
+        // AST emission, peephole remapping and final layout must overwrite
+        // the same file; otherwise the first (pre-optimization) snapshot is
+        // left on disk while only the in-memory DebugInfo is updated.
+        pipelineData.set(
+            apc_pipeline::key::kDebugOutputFile,
+            std::make_shared<std::string>(
+                filenameWithoutExt + ".debug"
+            )
+        );
+    }
+    if (!options.artifactFormat.empty()) {
+        pipelineData.set(
+            apc_pipeline::key::kArtifactFormat,
+            std::make_shared<std::string>(options.artifactFormat)
+        );
     }
 
     PassManager pm;

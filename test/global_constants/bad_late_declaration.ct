@@ -1,0 +1,5 @@
+Contract GlobalLateDeclarationContract:
+    def main():
+        Return 1
+
+    global TapeFlagSize = 9

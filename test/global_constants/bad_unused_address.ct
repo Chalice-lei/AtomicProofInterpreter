@@ -1,0 +1,5 @@
+Contract GlobalUnusedInvalidAddressContract:
+    global BadAddress = "1111111111111111111111111111111111"
+
+    def main():
+        Return 1

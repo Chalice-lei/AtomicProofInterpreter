@@ -1,0 +1,5 @@
+Contract GlobalRuntimeContract:
+    global Answer = 9
+
+    def main():
+        Return Answer

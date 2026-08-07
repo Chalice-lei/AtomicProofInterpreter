@@ -1,8 +1,8 @@
 #include "variable_inspector.h"
 
-#include <algorithm>
-
 #include "../../util/type_utils.h"
+
+#include <algorithm>
 
 namespace apc_debug
 {
@@ -32,20 +32,29 @@ VariableValue makeUnavailableValue(
     return result;
 }
 
-const VariableDebugInfo*
-findFunctionVariable(const FunctionDebugInfo& func, const std::string& varName)
+const VariableDebugInfo* findFunctionVariable(
+    const FunctionDebugInfo& function,
+    const std::string& variableName
+)
 {
-    for (const auto& local : func.localVars) {
-        if (local.name == varName) {
-            return &local;
+    auto local = std::find_if(
+        function.localVars.begin(),
+        function.localVars.end(),
+        [&](const VariableDebugInfo& variable) {
+            return variable.name == variableName;
         }
+    );
+    if (local != function.localVars.end()) {
+        return &*local;
     }
-    for (const auto& param : func.parameters) {
-        if (param.name == varName) {
-            return &param;
+    auto parameter = std::find_if(
+        function.parameters.begin(),
+        function.parameters.end(),
+        [&](const VariableDebugInfo& variable) {
+            return variable.name == variableName;
         }
-    }
-    return nullptr;
+    );
+    return parameter != function.parameters.end() ? &*parameter : nullptr;
 }
 
 std::vector<VariableDebugInfo> collectProjectedVariables(
@@ -61,7 +70,8 @@ std::vector<VariableDebugInfo> collectProjectedVariables(
         if (firstLocalLine == 0 || localVar.declLine < firstLocalLine) {
             firstLocalLine = localVar.declLine;
         }
-        if (currentLine == 0 || localVar.declLine < currentLine) {
+        if ((currentLine == 0 || localVar.declLine < currentLine) &&
+            localVar.isAvailableAtPC(currentPC)) {
             orderedVars.push_back(localVar);
         }
     }
@@ -69,7 +79,11 @@ std::vector<VariableDebugInfo> collectProjectedVariables(
     if (orderedVars.empty() && currentLine > 0 &&
         (firstLocalLine == 0 || currentLine <= firstLocalLine) &&
         currentPC == func.startPC) {
-        orderedVars = func.parameters;
+        for (const auto& parameter : func.parameters) {
+            if (parameter.isAvailableAtPC(currentPC)) {
+                orderedVars.push_back(parameter);
+            }
+        }
     }
 
     return orderedVars;
@@ -120,15 +134,66 @@ std::optional<VariableValue> VariableInspector::readVariable(
     size_t currentPC
 )
 {
+    return readVariable(varName, stack, currentPC, BranchTrace{});
+}
+
+std::optional<VariableValue> VariableInspector::readVariable(
+    const std::string& varName,
+    const StackState& stack,
+    size_t currentPC,
+    const BranchTrace& branchTrace
+)
+{
     if (!m_debugInfo) {
+        return std::nullopt;
+    }
+
+    const auto visibleVariables =
+        m_debugInfo->getVariablesInScope(currentPC, branchTrace);
+    const auto activeScope =
+        m_debugInfo->getScopeAtPC(currentPC, branchTrace);
+    const auto visibleIt = std::find_if(
+        visibleVariables.begin(),
+        visibleVariables.end(),
+        [&varName](const VariableDebugInfo& variable) {
+            return variable.name == varName;
+        }
+    );
+    if (activeScope && visibleIt == visibleVariables.end()) {
+        return std::nullopt;
+    }
+    if (!activeScope && !branchTrace.empty() &&
+        !m_debugInfo->getSourceLocation(currentPC, branchTrace).isValid()) {
         return std::nullopt;
     }
 
     const auto* func = m_debugInfo->getFunctionAtPC(currentPC);
     if (func) {
-        SourceLocation loc = m_debugInfo->getSourceLocation(currentPC);
+        SourceLocation loc =
+            m_debugInfo->getSourceLocation(currentPC, branchTrace);
         std::vector<VariableDebugInfo> orderedVars =
             collectProjectedVariables(*func, loc.line, currentPC);
+        if (activeScope) {
+            orderedVars.erase(
+                std::remove_if(
+                    orderedVars.begin(),
+                    orderedVars.end(),
+                    [&visibleVariables](const VariableDebugInfo& candidate) {
+                        return std::none_of(
+                            visibleVariables.begin(),
+                            visibleVariables.end(),
+                            [&candidate](const VariableDebugInfo& visible) {
+                                return visible.name == candidate.name &&
+                                       (visible.scopeId == candidate.scopeId ||
+                                        visible.scopeId == INVALID_SCOPE_ID ||
+                                        candidate.scopeId == INVALID_SCOPE_ID);
+                            }
+                        );
+                    }
+                ),
+                orderedVars.end()
+            );
+        }
 
         if (!orderedVars.empty() && orderedVars.size() <= stack.size()) {
             size_t firstStackIndex = stack.size() - orderedVars.size();
@@ -147,19 +212,25 @@ std::optional<VariableValue> VariableInspector::readVariable(
             }
         }
 
-        const auto* funcVar = findFunctionVariable(*func, varName);
-        if (funcVar) {
-            return makeUnavailableValue(varName, funcVar->type);
+        if (visibleIt != visibleVariables.end()) {
+            return makeUnavailableValue(varName, visibleIt->type);
+        }
+        if (const auto* functionVariable =
+                findFunctionVariable(*func, varName)) {
+            return makeUnavailableValue(varName, functionVariable->type);
         }
     }
 
-    const auto* varInfo = m_debugInfo->getVariableInfo(varName);
+    const auto* varInfo = m_debugInfo->getVariableInfo(
+        varName, currentPC, branchTrace
+    );
     if (!varInfo) {
         return std::nullopt;
     }
 
     if (func && varInfo->isParameter) {
-        SourceLocation loc = m_debugInfo->getSourceLocation(currentPC);
+        SourceLocation loc =
+            m_debugInfo->getSourceLocation(currentPC, branchTrace);
         size_t firstLocalLine = 0;
         for (const auto& localVar : func->localVars) {
             if (firstLocalLine == 0 || localVar.declLine < firstLocalLine) {
@@ -220,16 +291,28 @@ std::optional<VariableValue> VariableInspector::readStackValue(
 std::vector<VariableValue>
 VariableInspector::getAllVariables(const StackState& stack, size_t currentPC)
 {
+    return getAllVariables(stack, currentPC, BranchTrace{});
+}
+
+std::vector<VariableValue> VariableInspector::getAllVariables(
+    const StackState& stack,
+    size_t currentPC,
+    const BranchTrace& branchTrace
+)
+{
     std::vector<VariableValue> result;
 
     if (!m_debugInfo) {
         return result;
     }
 
-    auto scopedVars = m_debugInfo->getVariablesInScope(currentPC);
+    auto scopedVars =
+        m_debugInfo->getVariablesInScope(currentPC, branchTrace);
     if (!scopedVars.empty()) {
         for (const auto& varInfo : scopedVars) {
-            auto varValue = readVariable(varInfo.name, stack, currentPC);
+            auto varValue = readVariable(
+                varInfo.name, stack, currentPC, branchTrace
+            );
             if (varValue) {
                 result.push_back(*varValue);
             }
@@ -240,7 +323,7 @@ VariableInspector::getAllVariables(const StackState& stack, size_t currentPC)
     // 作用域查询失败：退化遍历全局变量表
     for (const auto& [name, varInfo] : m_debugInfo->variables) {
         (void)varInfo;
-        auto varValue = readVariable(name, stack, currentPC);
+        auto varValue = readVariable(name, stack, currentPC, branchTrace);
         if (varValue) {
             result.push_back(*varValue);
         }
@@ -252,52 +335,65 @@ VariableInspector::getAllVariables(const StackState& stack, size_t currentPC)
 std::vector<VariableValue>
 VariableInspector::getLocalVariables(const StackState& stack, size_t currentPC)
 {
+    return getLocalVariables(stack, currentPC, BranchTrace{});
+}
+
+std::vector<VariableValue> VariableInspector::getLocalVariables(
+    const StackState& stack,
+    size_t currentPC,
+    const BranchTrace& branchTrace
+)
+{
     std::vector<VariableValue> result;
 
     if (!m_debugInfo) {
         return result;
     }
 
-    const auto* func = m_debugInfo->getFunctionAtPC(currentPC);
-    if (func) {
-        SourceLocation loc = m_debugInfo->getSourceLocation(currentPC);
-        std::vector<VariableDebugInfo> orderedVars =
-            collectProjectedVariables(*func, loc.line, currentPC);
+    auto scope = m_debugInfo->getScopeAtPC(currentPC, branchTrace);
+    if (!scope) {
+        const auto* function = m_debugInfo->getFunctionAtPC(currentPC);
+        const auto location =
+            m_debugInfo->getSourceLocation(currentPC, branchTrace);
+        if (!function ||
+            (!branchTrace.empty() && !location.isValid())) {
+            return result;
+        }
 
-        if (!orderedVars.empty() && orderedVars.size() <= stack.size()) {
-            size_t firstStackIndex = stack.size() - orderedVars.size();
-            for (size_t i = 0; i < orderedVars.size(); ++i) {
-                const auto& varInfo = orderedVars[i];
-                size_t bottomIndex = firstStackIndex + i;
-                size_t depth = stack.size() - 1 - bottomIndex;
-                auto varValue = readStackValue(
+        const auto projected = collectProjectedVariables(
+            *function,
+            location.line,
+            currentPC
+        );
+        if (!projected.empty() && projected.size() <= stack.size()) {
+            const size_t firstStackIndex = stack.size() - projected.size();
+            for (size_t index = 0; index < projected.size(); ++index) {
+                const size_t bottomIndex = firstStackIndex + index;
+                const size_t depth = stack.size() - 1 - bottomIndex;
+                auto value = readStackValue(
                     static_cast<int>(depth),
-                    varInfo.name,
-                    varInfo.type,
+                    projected[index].name,
+                    projected[index].type,
                     stack
                 );
-                if (varValue) {
-                    result.push_back(*varValue);
+                if (value) {
+                    result.push_back(*value);
                 }
             }
-            return result;
+        } else {
+            for (const auto& variable : projected) {
+                result.push_back(
+                    makeUnavailableValue(variable.name, variable.type)
+                );
+            }
         }
-
-        for (const auto& varInfo : orderedVars) {
-            result.push_back(makeUnavailableValue(varInfo.name, varInfo.type));
-        }
-        if (!result.empty()) {
-            return result;
-        }
-    }
-
-    auto scope = m_debugInfo->getScopeAtPC(currentPC);
-    if (!scope) {
         return result;
     }
 
     for (const auto& varInfo : scope->variables) {
-        auto varValue = readVariable(varInfo.name, stack, currentPC);
+        auto varValue = readVariable(
+            varInfo.name, stack, currentPC, branchTrace
+        );
         if (varValue) {
             result.push_back(*varValue);
         }

@@ -71,29 +71,44 @@ void StaticInfoVisitor::generateStruct(StructDefNode& node)
     m_structJson.push_back(structDef);
 }
 
+nlohmann::ordered_json StaticInfoVisitor::makeParamsJson(
+    const std::vector<ParameterInfo>& parameters,
+    const std::string& logPrefix
+)
+{
+    nlohmann::ordered_json paramsArray = nlohmann::ordered_json::array();
+
+    for (const auto& param : parameters) {
+        nlohmann::ordered_json paramObj;
+        paramObj["name"] = param.name;
+        paramObj["type"] = param.type;
+        paramsArray.push_back(paramObj);
+
+        LOG_DEBUG(logPrefix, param.name, " (type: ", param.type, ")");
+    }
+
+    return paramsArray;
+}
+
+std::string StaticInfoVisitor::makeUnlockScriptTemplate(
+    const std::vector<ParameterInfo>& parameters
+)
+{
+    std::string unlockingScriptTemplate;
+    for (const auto& param : parameters) {
+        unlockingScriptTemplate += "<" + param.name + ">";
+    }
+    return unlockingScriptTemplate;
+}
+
 void StaticInfoVisitor::generateAllFunctionInfo(FunctionNode& node, bool isPrivate)
 {
     nlohmann::ordered_json funcInfo;
     funcInfo["name"] = node.name;
     funcInfo["type"] = isPrivate ? "private" : "public";
 
-    nlohmann::ordered_json paramsArray = nlohmann::ordered_json::array();
-
-    for (const auto& param : node.parameters) {
-        const std::string& paramName = param.name;
-        const std::string& paramType = param.type;
-
-        nlohmann::ordered_json paramObj;
-        paramObj["name"] = paramName;
-        paramObj["type"] = paramType;
-        paramsArray.push_back(paramObj);
-
-        LOG_DEBUG(
-            "Collecting function parameter: ", paramName, " (type: ", paramType, ")"
-        );
-    }
-
-    funcInfo["params"] = paramsArray;
+    funcInfo["params"] =
+        makeParamsJson(node.parameters, "Collecting function parameter: ");
     m_allFunctionsJson.push_back(funcInfo);
 }
 
@@ -104,46 +119,22 @@ void StaticInfoVisitor::generateFunction(FunctionNode& node)
     functionAbi["name"] = node.name;
     functionAbi["index"] = m_functionIndex++;
 
-    nlohmann::ordered_json paramsArray = nlohmann::ordered_json::array();
-
-    for (const auto& param : node.parameters) {
-        const std::string& paramName = param.name;
-        const std::string& paramType = param.type;
-
-        nlohmann::ordered_json paramObj;
-        paramObj["name"] = paramName;
-        paramObj["type"] = paramType;
-        paramsArray.push_back(paramObj);
-
-        LOG_DEBUG(
-            "Processing parameter: ", paramName, " (type: ", paramType, ")"
-        );
-    }
-
-    functionAbi["params"] = paramsArray;
+    functionAbi["params"] =
+        makeParamsJson(node.parameters, "Processing parameter: ");
     m_abiJson.push_back(functionAbi);
+
+    // unlock: 函数名 -> unlocking script.
+    m_unlockJson[node.name] = makeUnlockScriptTemplate(node.parameters);
 }
 
 void StaticInfoVisitor::generateConstructor(ConstructorNode& node)
 {
     LOG_INFO("Generating constructor ABI information");
 
-    for (const auto& param : node.parameters) {
-        const std::string& paramName = param.name;
-        const std::string& paramType = param.type;
-
-        nlohmann::ordered_json paramObj;
-        paramObj["name"] = paramName;
-        paramObj["type"] = paramType;
+    auto params =
+        makeParamsJson(node.parameters, "Processing constructor parameter: ");
+    for (const auto& paramObj : params) {
         m_constructorParamsJson.push_back(paramObj);
-
-        LOG_DEBUG(
-            "Processing constructor parameter: ",
-            paramName,
-            " (type: ",
-            paramType,
-            ")"
-        );
     }
 
     LOG_INFO("Constructor ABI generation completed");

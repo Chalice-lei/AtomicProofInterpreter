@@ -389,6 +389,7 @@ void Lexer::readAlphaNumeric(char c)
          {"Struct", TokenType::TOKEN_STRUCT},
          {"Contract", TokenType::TOKEN_CONTRACT},
          {"Library", TokenType::TOKEN_LIBRARY},
+         {"global", TokenType::TOKEN_GLOBAL},
          {"if", TokenType::TOKEN_IF},
          {"else", TokenType::TOKEN_ELSE},
          // Return：返回指定表达式；return：返回当前函数的返回值

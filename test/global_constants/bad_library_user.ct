@@ -1,0 +1,5 @@
+import "./bad_library.ct"
+
+Contract GlobalLibraryDeclarationContract:
+    def main():
+        Return 1

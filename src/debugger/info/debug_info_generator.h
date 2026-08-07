@@ -1,6 +1,7 @@
 #ifndef DEBUG_INFO_GENERATOR_H
 #define DEBUG_INFO_GENERATOR_H
 
+#include <limits>
 #include <memory>
 #include <stack>
 #include <string>
@@ -25,12 +26,18 @@ public:
         const SourceLocation& loc
     );
 
-    std::shared_ptr<DebugInfo> getDebugInfo() const
-    {
-        return m_debugInfo;
-    }
+    void onEmitInstruction(
+        size_t pc,
+        const std::string& opcode,
+        const std::string& operand,
+        const SourceLocation& loc,
+        const std::vector<BranchPredicate>& branchPath,
+        const std::vector<std::string>& affectedVars = {}
+    );
 
-    // AST 完整生成后执行最终平衡检查。
+    std::shared_ptr<DebugInfo> getDebugInfo() const;
+
+    // Compatibility hook used by the Interpreter visitor after generation.
     void finalizeScopes();
 
     void setContractName(const std::string& name);
@@ -50,6 +57,17 @@ public:
         size_t startPC
     );
 
+    ScopeId onEnterScope(
+        const std::string& scopeName,
+        ScopeType scopeType,
+        const SourceLocation& loc,
+        size_t startPC
+    );
+
+    void onExitScope(size_t endPC);
+
+    // Identity-aware legacy overload. It refuses an out-of-order exit and
+    // leaves the stack intact so validation can report the mismatch.
     void onExitScope(
         const std::shared_ptr<ScopeDebugInfo>& expectedScope,
         size_t endPC
@@ -61,8 +79,16 @@ public:
         const SourceLocation& loc,
         bool isStackVar,
         int stackOffset = -1,
-        bool isParameter = false
+        bool isParameter = false,
+        size_t startPC = UNKNOWN_ORIGINAL_PC
     );
+
+    // Ends the innermost active binding with this name. The range is
+    // half-open, so the variable is unavailable at endPC itself.
+    void onVariableEnd(const std::string& varName, size_t endPC);
+
+    ScopeId getCurrentScopeId() const;
+    void setCurrentBranchPath(const std::vector<BranchPredicate>& path);
 
 private:
     std::string m_sourceFilename;
@@ -71,10 +97,32 @@ private:
     std::string m_currentFunctionName;
     FunctionDebugInfo* m_currentFunction;
     std::stack<std::string> m_functionStack;
+    std::vector<BranchPredicate> m_currentBranchPath;
+
+    struct ActiveVariable
+    {
+        std::string name;
+        ScopeId scopeId = INVALID_SCOPE_ID;
+        std::string functionName;
+        size_t startPC = 0;
+    };
+    std::vector<ActiveVariable> m_activeVariables;
+
+    void synchronizeVariable(
+        const ActiveVariable& active,
+        size_t endPC
+    ) const;
+    void synchronizeOpenVariables(size_t endPC) const;
+    void closeVariablesForScope(ScopeId scopeId, size_t endPC);
+    void closeVariablesForFunction(
+        const std::string& functionName,
+        size_t endPC
+    );
 
     // 类似 Python co_lnotab：仅在源码行变化时记录
     size_t m_lastSourceLine;
     size_t m_lastPC;
+    size_t m_nextPC;
 };
 
 } // namespace apc_debug

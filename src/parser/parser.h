@@ -33,6 +33,7 @@ private:
     void consume(TokenType type, const std::string& message);
 
     std::unique_ptr<FunctionNode> parseFunction();
+    std::unique_ptr<GlobalConstNode> parseGlobalConst();
     std::unique_ptr<StructDefNode> parseStruct();
     std::unique_ptr<BlockNode> parseBlock();
     std::unique_ptr<StmtNode> parseStatement();

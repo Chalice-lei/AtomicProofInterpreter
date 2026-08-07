@@ -1,0 +1,7 @@
+Contract GlobalBasicContract:
+    global TapeFlag = "TBC20TAPE"
+    global TapeFlagSize = 9
+
+    def main(data: string):
+        EqualVerify(data, TapeFlag)
+        Return TapeFlagSize

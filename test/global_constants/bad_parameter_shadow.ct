@@ -1,0 +1,5 @@
+Contract GlobalParameterShadowContract:
+    global TapeFlag = "TBC20TAPE"
+
+    def main(TapeFlag: string):
+        Return TapeFlag

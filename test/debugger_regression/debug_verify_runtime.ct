@@ -1,0 +1,3 @@
+Contract DebugVerifyRuntime:
+    def main(condition: bool, a: int, b: int, c: int):
+        Verify(condition)

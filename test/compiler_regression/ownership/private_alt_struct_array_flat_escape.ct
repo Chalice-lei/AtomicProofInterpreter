@@ -1,0 +1,17 @@
+Contract PrivateAltStructArrayFlatEscape:
+    Struct Pair:
+        left: number
+        right: number
+    def _stash(values: Pair[2]):
+        SetAlt(values[1])
+        marker = Push(9)
+        SetAlt(marker)
+    def _restore():
+        SetMain(values[1])
+        SetMain(marker)
+        Delete(marker)
+        return values[1].left - values[1].right
+    def main(items: Pair[2]):
+        _stash(items)
+        result = _restore()
+        Return(result)

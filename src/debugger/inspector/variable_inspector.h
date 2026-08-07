@@ -49,6 +49,12 @@ public:
         const StackState& stack,
         size_t currentPC
     );
+    std::optional<VariableValue> readVariable(
+        const std::string& varName,
+        const StackState& stack,
+        size_t currentPC,
+        const BranchTrace& branchTrace
+    );
 
     std::optional<VariableValue> readStackValue(
         int stackOffset,
@@ -61,12 +67,24 @@ public:
         const StackState& stack,
         size_t currentPC
     );
+    std::vector<VariableValue> getAllVariables(
+        const StackState& stack,
+        size_t currentPC,
+        const BranchTrace& branchTrace
+    );
 
     std::vector<VariableValue> getLocalVariables(
         const StackState& stack,
         size_t currentPC
     );
+    std::vector<VariableValue> getLocalVariables(
+        const StackState& stack,
+        size_t currentPC,
+        const BranchTrace& branchTrace
+    );
 
+    // Interpreter live-debug protocol exposes globals separately from local
+    // variables; retain that API alongside the V2 path-aware overloads.
     std::vector<VariableValue> getGlobalVariables(
         const StackState& stack,
         size_t currentPC
@@ -112,5 +130,3 @@ private:
 } // namespace apc_debug
 
 #endif // VARIABLE_INSPECTOR_H
-
-

@@ -7,6 +7,7 @@
 #include "../log/logger.h"
 #include "../util/type_utils.h"
 #include "control_flow_analysis.h"
+#include "static_integer_evaluator.h"
 
 PreAnalysisVisitor::PreAnalysisVisitor()
     : m_hasErrors(false), m_allowSubscopeAltstack(false),
@@ -17,6 +18,7 @@ PreAnalysisVisitor::PreAnalysisVisitor()
     m_consumingOperations.insert("CheckSig");
     m_consumingOperations.insert("Sha256");
     m_consumingOperations.insert("Ripemd160");
+    m_consumingOperations.insert("Verify");
 }
 
 bool PreAnalysisVisitor::analyze(ASTNode& root)
@@ -25,6 +27,16 @@ bool PreAnalysisVisitor::analyze(ASTNode& root)
     m_errors.clear();
     m_warnings.clear();
     m_variables.clear();
+    m_validatedValueExpressions.clear();
+    m_functionDefinitions.clear();
+    m_structDefinitions.clear();
+    m_altstackArrayExportSchemas.clear();
+    m_conflictingAltstackArrayExportSchemas.clear();
+    m_staticIntegerValues.clear();
+    m_loopExpansionBudget = apc::compiler::RangeExpansionBudget(
+        apc::compiler::kMaxExpandedLoopBodies
+    );
+    m_lastStatementTerminates = false;
 
     try {
         root.accept(*this);
@@ -43,6 +55,35 @@ bool PreAnalysisVisitor::analyze(ASTNode& root)
 void PreAnalysisVisitor::visit(ContractNode& node)
 {
     LOG_INFO("Analyzing contract: " + node.name);
+
+    // Type-shape calculations used by the interprocedural altstack protocol
+    // must not depend on whether a struct is declared before a function.
+    for (auto& member : node.members) {
+        if (auto* structure = dynamic_cast<StructDefNode*>(member.get())) {
+            std::vector<std::pair<std::string, std::string>> fields;
+            fields.reserve(structure->fields.size());
+            for (const auto& field : structure->fields) {
+                fields.emplace_back(
+                    field.first, field.second.getTypeString()
+                );
+            }
+            m_structDefinitions[structure->name] = std::move(fields);
+        }
+    }
+
+    if (m_allowSubscopeAltstack) {
+        collectAltstackArrayExportSchemas(node);
+    }
+
+    // Register definitions before analyzing bodies so fixed-array arguments
+    // can be matched to their inline function parameters.
+    m_functionDefinitions.clear();
+    for (auto& member : node.members) {
+        if (auto* function = dynamic_cast<FunctionNode*>(member.get())) {
+            m_functionDefinitions[function->name] = function;
+        }
+    }
+
     for (auto& member : node.members) {
         member->accept(*this);
     }
@@ -57,11 +98,13 @@ void PreAnalysisVisitor::visit(FunctionNode& node)
     bool previousInLibraryFunction = m_inLibraryFunction;
     auto previousDeferredParams = m_deferredOwnershipParams;
     auto previousVariables = m_variables;
+    auto previousStaticIntegerValues = m_staticIntegerValues;
 
     m_currentFunctionName = node.name;
     m_inPrivateFunction = isPrivateFunction(node.name);
     m_inLibraryFunction = node.fromLibrary;
     m_deferredOwnershipParams.clear();
+    m_staticIntegerValues.clear();
 
     if (m_inPrivateFunction) {
         LOG_DEBUG("Private function detected: " + node.name);
@@ -136,6 +179,7 @@ void PreAnalysisVisitor::visit(FunctionNode& node)
     m_inPrivateFunction = previousInPrivateFunction;
     m_inLibraryFunction = previousInLibraryFunction;
     m_deferredOwnershipParams = previousDeferredParams;
+    m_staticIntegerValues = previousStaticIntegerValues;
 }
 
 void PreAnalysisVisitor::visit(StructDefNode& node)
@@ -157,17 +201,26 @@ void PreAnalysisVisitor::visit(StructDefNode& node)
 
 void PreAnalysisVisitor::visit(BlockNode& node)
 {
+    bool blockTerminates = false;
     for (auto& stmt : node.statements) {
+        m_lastStatementTerminates = false;
         stmt->accept(*this);
-        if (!compiler_flow::reachesContinuation(stmt.get())) {
+        if (m_lastStatementTerminates ||
+            !compiler_flow::reachesContinuation(stmt.get())) {
+            blockTerminates = true;
             break;
         }
     }
+    m_lastStatementTerminates = blockTerminates;
 }
 
 void PreAnalysisVisitor::visit(IfNode& node)
 {
     LOG_INFO("Analyzing if statement");
+
+    const auto compileTimeCondition =
+        node.condition ? evaluateIntegerConstant(*node.condition)
+                       : std::nullopt;
 
     // Analyze condition expression - if consumes the condition value
     if (node.condition) {
@@ -179,44 +232,111 @@ void PreAnalysisVisitor::visit(IfNode& node)
 
     // Save current variable state before analyzing branches
     auto savedState = saveVariableState();
+    const auto savedStaticIntegerValues = m_staticIntegerValues;
+
+    if (compileTimeCondition.has_value()) {
+        StmtNode* selectedBranch = compileTimeCondition.value() != 0
+                                       ? node.thenBranch.get()
+                                       : node.elseBranch.get();
+        m_lastStatementTerminates = false;
+        if (selectedBranch) {
+            selectedBranch->accept(*this);
+        }
+        const bool selectedTerminates =
+            m_lastStatementTerminates ||
+            !compiler_flow::reachesContinuation(selectedBranch);
+        const auto selectedState = saveVariableState();
+        const auto selectedStaticIntegerValues = m_staticIntegerValues;
+
+        // Commit changes to entry-visible bindings without leaking locals from
+        // the selected lexical block.
+        restoreVariableState(savedState);
+        for (auto& [name, variable] : m_variables) {
+            auto selected = selectedState.find(name);
+            if (selected != selectedState.end()) {
+                variable = selected->second;
+            }
+        }
+        m_staticIntegerValues = savedStaticIntegerValues;
+        for (const auto& [name, variable] : savedState) {
+            (void)variable;
+            auto selected = selectedStaticIntegerValues.find(name);
+            if (selected != selectedStaticIntegerValues.end()) {
+                m_staticIntegerValues[name] = selected->second;
+            } else {
+                m_staticIntegerValues.erase(name);
+            }
+        }
+
+        m_inIfElseScope = previousInIfElseScope;
+        m_lastStatementTerminates = selectedTerminates;
+        return;
+    }
 
     // Analyze then branch
     std::map<std::string, VariableInfo> thenState;
+    std::map<std::string, int64_t> thenStaticIntegerValues;
+    bool thenTerminates = false;
     if (node.thenBranch) {
+        m_lastStatementTerminates = false;
         node.thenBranch->accept(*this);
+        thenTerminates =
+            m_lastStatementTerminates ||
+            !compiler_flow::reachesContinuation(node.thenBranch.get());
         thenState = saveVariableState();
+        thenStaticIntegerValues = m_staticIntegerValues;
     } else {
         thenState = savedState;
+        thenStaticIntegerValues = savedStaticIntegerValues;
     }
 
     // Restore state and analyze else branch
     restoreVariableState(savedState);
+    m_staticIntegerValues = savedStaticIntegerValues;
     std::map<std::string, VariableInfo> elseState;
+    std::map<std::string, int64_t> elseStaticIntegerValues;
+    bool elseTerminates = false;
     if (node.elseBranch) {
+        m_lastStatementTerminates = false;
         node.elseBranch->accept(*this);
+        elseTerminates =
+            m_lastStatementTerminates ||
+            !compiler_flow::reachesContinuation(node.elseBranch.get());
         elseState = saveVariableState();
+        elseStaticIntegerValues = m_staticIntegerValues;
     } else {
         elseState = savedState;
+        elseStaticIntegerValues = savedStaticIntegerValues;
     }
 
     m_inIfElseScope = previousInIfElseScope;
 
-    const bool thenFallsThrough =
-        compiler_flow::reachesContinuation(node.thenBranch.get());
-    const bool elseFallsThrough = !node.elseBranch ||
-                                  compiler_flow::reachesContinuation(
-                                      node.elseBranch.get()
-                                  );
+    const bool thenFallsThrough = !thenTerminates;
+    const bool elseFallsThrough = !elseTerminates;
 
     // A terminated path has no ownership state at the join point.
     if (thenFallsThrough && elseFallsThrough) {
         mergeBranchStates(thenState, elseState, savedState);
+        m_staticIntegerValues.clear();
+        for (const auto& [name, variable] : m_variables) {
+            (void)variable;
+            const auto thenIt = thenStaticIntegerValues.find(name);
+            const auto elseIt = elseStaticIntegerValues.find(name);
+            if (thenIt != thenStaticIntegerValues.end() &&
+                elseIt != elseStaticIntegerValues.end() &&
+                thenIt->second == elseIt->second) {
+                m_staticIntegerValues.emplace(name, thenIt->second);
+            }
+        }
     } else if (thenFallsThrough) {
         restoreVariableState(thenState);
+        m_staticIntegerValues = thenStaticIntegerValues;
     } else if (elseFallsThrough) {
         restoreVariableState(elseState);
+        m_staticIntegerValues = elseStaticIntegerValues;
     } else {
         restoreVariableState(savedState);
+        m_staticIntegerValues = savedStaticIntegerValues;
     }
 
     // Ownership after the join only comes from reachable paths, but unused
@@ -231,10 +351,16 @@ void PreAnalysisVisitor::visit(IfNode& node)
                                (elseIt != elseState.end() &&
                                 elseIt->second.wasBorrowed);
     }
+    m_lastStatementTerminates = thenTerminates && elseTerminates;
 }
 
 void PreAnalysisVisitor::visit(AssignNode& node)
 {
+    auto* integerTarget =
+        node.name ? dynamic_cast<IdentifierNode*>(node.name.get()) : nullptr;
+    const std::optional<int64_t> assignedInteger =
+        node.value ? evaluateIntegerConstant(*node.value) : std::nullopt;
+
     // An existing main-stack destination makes a main-stack RHS a real copy
     // (OP_PICK in code generation). A first binding has no destination slot
     // and remains a zero-cost rename/move.
@@ -255,6 +381,12 @@ void PreAnalysisVisitor::visit(AssignNode& node)
         bindAssignmentTarget(
             *node.name, classifyStorage(node.value.get()), node.value.get()
         );
+    }
+
+    if (integerTarget && assignedInteger.has_value()) {
+        m_staticIntegerValues[integerTarget->name] = assignedInteger.value();
+    } else if (integerTarget) {
+        m_staticIntegerValues.erase(integerTarget->name);
     }
 }
 
@@ -290,15 +422,19 @@ void PreAnalysisVisitor::visit(ForNode& node)
     bounds.reserve(rangeCall->args.size());
 
     for (auto& arg : rangeCall->args) {
-        auto valOpt = evaluateIntegerConstant(*arg);
-        if (!valOpt.has_value()) {
-            reportError(
-                "range() arguments must be compile-time integer constants",
-                getNodeLocation(*arg)
-            );
+        const auto evaluated = compiler::StaticIntegerEvaluator::evaluate(
+            *arg, m_staticIntegerValues
+        );
+        if (!evaluated.isKnown()) {
+            std::string message =
+                "range() arguments must be compile-time integer constants";
+            if (evaluated.isError()) {
+                message += ": " + evaluated.diagnostic;
+            }
+            reportError(message, getNodeLocation(*arg));
             return;
         }
-        bounds.push_back(valOpt.value());
+        bounds.push_back(evaluated.value);
     }
 
     int64_t start = 0;
@@ -314,62 +450,82 @@ void PreAnalysisVisitor::visit(ForNode& node)
         start = bounds[0];
         stop = bounds[1];
         step = bounds[2];
-        if (step == 0) {
-            reportError("range() step cannot be zero", getNodeLocation(node));
-            return;
-        }
     }
 
-    std::vector<int64_t> iterations;
-    if (step > 0) {
-        for (int64_t v = start; v < stop; v += step) {
-            iterations.push_back(v);
-        }
-    } else {
-        for (int64_t v = start; v > stop; v += step) {
-            iterations.push_back(v);
-        }
+    auto planResult = apc::compiler::RangePlan::build(
+        start,
+        stop,
+        step,
+        apc::compiler::RangeLimits{
+            apc::compiler::kMaxStaticRangeIterations}
+    );
+    if (!planResult) {
+        reportError(planResult.error().message, getNodeLocation(node));
+        return;
     }
+    const auto& plan = planResult.value();
 
-    node.setStaticIterations(iterations);
     node.setInferredType("int");
 
-    // for 自身拥有一个词法作用域，循环体的 BlockNode 则在每次静态展开
-    // 时拥有独立作用域。PreAnalysisVisitor 的变量表目前是扁平结构，因此
-    // 在这里显式记录入口变量集合，并在每轮结束时丢弃该轮新声明的名字。
-    // 已存在的外层变量仍从本轮结果延续到下一轮。
+    // Pre-analysis uses a flat variable map, so preserve outer mutations
+    // between expanded iterations while discarding names declared only in an
+    // iteration body. The induction target itself survives a non-empty loop.
     auto preLoopState = saveVariableState();
     auto accumulatedState = preLoopState;
+    auto preLoopStaticValues = m_staticIntegerValues;
+    auto accumulatedStaticValues = preLoopStaticValues;
     const bool targetExistedBeforeLoop =
         preLoopState.find(node.target) != preLoopState.end();
 
-    if (iterations.empty()) {
+    if (plan.empty()) {
         restoreVariableState(preLoopState);
+        m_staticIntegerValues = preLoopStaticValues;
+        m_lastStatementTerminates = false;
         return;
     }
 
-    auto previousLoopValueIt = m_staticLoopValues.find(node.target);
-    bool hadPreviousLoopValue =
-        previousLoopValueIt != m_staticLoopValues.end();
-    int64_t previousLoopValue =
-        hadPreviousLoopValue ? previousLoopValueIt->second : 0;
+    VariableInfo* existingTarget = findVariable(node.target);
+    if (existingTarget) {
+        const bool isNumericScalar =
+            !existingTarget->isArrayType() &&
+            existingTarget->fieldOwnership.empty() &&
+            apc::compiler::isCompatibleLoopTargetType(existingTarget->type);
+        if (!isNumericScalar) {
+            reportError(
+                "for loop target '" + node.target +
+                    "' must be a numeric scalar",
+                getNodeLocation(node)
+            );
+            return;
+        }
+    }
+    bool loopTerminates = false;
+    for (uint64_t idx = 0; idx < plan.count(); ++idx) {
+        if (auto budgetError = m_loopExpansionBudget.consume()) {
+            reportError(budgetError->message, getNodeLocation(node));
+            return;
+        }
 
-    for (size_t idx = 0; idx < iterations.size(); ++idx) {
+        const auto iterationResult = plan.valueAt(idx);
+        const auto* iterationValue = std::get_if<int64_t>(&iterationResult);
+        if (!iterationValue) {
+            reportError(
+                std::get<apc::compiler::RangeError>(iterationResult).message,
+                getNodeLocation(node)
+            );
+            return;
+        }
+
         restoreVariableState(accumulatedState);
-        m_staticLoopValues[node.target] = iterations[idx];
-
-        const auto iterationEntryState = saveVariableState();
-
-        LiteralNode literal(
-            LiteralNode::Type::Number, std::to_string(iterations[idx])
-        );
+        m_staticIntegerValues = accumulatedStaticValues;
+        m_staticIntegerValues[node.target] = *iterationValue;
 
         if (!targetExistedBeforeLoop && idx == 0) {
             declareVariable(
                 node.target,
                 "int",
                 getNodeLocation(node),
-                &literal,
+                nullptr,
                 StorageResidency::FIXED_VALUE
             );
         } else {
@@ -380,15 +536,20 @@ void PreAnalysisVisitor::visit(ForNode& node)
             );
         }
 
+        const auto iterationEntryState = saveVariableState();
+
+        bool bodyTerminates = false;
         if (node.body) {
+            m_lastStatementTerminates = false;
             node.body->accept(*this);
+            bodyTerminates =
+                m_lastStatementTerminates ||
+                !compiler_flow::reachesContinuation(node.body.get());
         }
 
         auto iterationExitState = saveVariableState();
+        auto iterationExitStaticValues = m_staticIntegerValues;
 
-        // 循环 target 在首轮才加入 iterationEntryState，之后属于 loop
-        // scope；body 中出现的其它新名字只属于本轮 body scope，不能泄漏
-        // 到下一轮，否则相同声明会被误报为 redeclaration。
         for (auto it = iterationExitState.begin();
              it != iterationExitState.end();) {
             const bool isLoopTarget = it->first == node.target;
@@ -401,51 +562,47 @@ void PreAnalysisVisitor::visit(ForNode& node)
                 ++it;
             }
         }
+        for (auto it = iterationExitStaticValues.begin();
+             it != iterationExitStaticValues.end();) {
+            if (iterationEntryState.find(it->first) ==
+                iterationEntryState.end()) {
+                it = iterationExitStaticValues.erase(it);
+            } else {
+                ++it;
+            }
+        }
 
         accumulatedState = std::move(iterationExitState);
+        accumulatedStaticValues = std::move(iterationExitStaticValues);
 
-        if (!compiler_flow::reachesContinuation(node.body.get())) {
+        if (bodyTerminates) {
+            loopTerminates = true;
             break;
         }
     }
 
-    if (hadPreviousLoopValue) {
-        m_staticLoopValues[node.target] = previousLoopValue;
-    } else {
-        m_staticLoopValues.erase(node.target);
-    }
-
-    // 新引入的 loop target 随 for scope 一起退出；若入口已有同名变量，
-    // AST interpreter 会对该外层绑定赋值，因此保留最后一轮状态。
-    if (!targetExistedBeforeLoop) {
-        accumulatedState.erase(node.target);
-    }
-
     restoreVariableState(accumulatedState);
+    m_staticIntegerValues = std::move(accumulatedStaticValues);
+    m_lastStatementTerminates = loopTerminates;
 }
 
 std::optional<int64_t> PreAnalysisVisitor::evaluateIntegerConstant(
     ExprNode& expr
-)
+) const
 {
-    if (auto literal = dynamic_cast<LiteralNode*>(&expr)) {
-        if (literal->type == tbc::BytecodeType::Number) {
-            try {
-                return static_cast<int64_t>(std::stoll(literal->value));
-            } catch (...) {
-                return std::nullopt;
-            }
-        }
-    }
-    if (auto op = dynamic_cast<OpNode*>(&expr)) {
-        if (!op->lhs && op->op == "-" && op->rhs) {
-            auto inner = evaluateIntegerConstant(*op->rhs);
-            if (inner.has_value()) {
-                return -inner.value();
-            }
-        }
-    }
-    return std::nullopt;
+    return evaluateIntegerConstant(expr, m_staticIntegerValues);
+}
+
+std::optional<int64_t> PreAnalysisVisitor::evaluateIntegerConstant(
+    ExprNode& expr,
+    const std::map<std::string, int64_t>& staticIntegerBindings
+) const
+{
+    const auto result = compiler::StaticIntegerEvaluator::evaluate(
+        expr, staticIntegerBindings
+    );
+    return result.isKnown() ? std::optional<int64_t>(result.value)
+                            : std::nullopt;
 }
 
 void PreAnalysisVisitor::visit(DestructureAssignNode& node)
@@ -462,6 +619,7 @@ void PreAnalysisVisitor::visit(DestructureAssignNode& node)
 
     // Declare all target variables as new variables
     for (const std::string& targetName : node.targets) {
+        m_staticIntegerValues.erase(targetName);
         // Check if variable already exists
         VariableInfo* existingVar = findVariable(targetName);
         if (existingVar) {
@@ -489,7 +647,10 @@ void PreAnalysisVisitor::visit(ExprStmtNode& node)
         // Check if this is a function call with unused return value
         checkUnusedFunctionResult(*node.expr, getNodeLocation(*node.expr));
 
-        analyzeExpression(*node.expr);
+        // 表达式语句不要求根表达式产生值; 它是 Verify() 这类
+        // 零返回值内置函数的合法调用位置. 调用参数仍由 visit(CallNode)
+        // 通过 analyzeExpression 按值上下文分析.
+        node.expr->accept(*this);
     }
 }
 
@@ -503,10 +664,15 @@ void PreAnalysisVisitor::visit(ReturnNode& node)
             analyzeExpression(*node.expr);
         }
     }
+    m_lastStatementTerminates = true;
 }
 
 void PreAnalysisVisitor::visit(VarDeclNode& node)
 {
+    const std::optional<int64_t> declaredInteger =
+        node.initValue ? evaluateIntegerConstant(*node.initValue)
+                       : std::nullopt;
+
     if (auto fixedArrayType = parseFixedArrayType(node.type);
         fixedArrayType.has_value()) {
         const auto& [elementType, arraySize] = fixedArrayType.value();
@@ -528,6 +694,12 @@ void PreAnalysisVisitor::visit(VarDeclNode& node)
     if (node.initValue) {
         analyzeExpression(*node.initValue);
     }
+
+    if (declaredInteger.has_value()) {
+        m_staticIntegerValues[node.name] = declaredInteger.value();
+    } else {
+        m_staticIntegerValues.erase(node.name);
+    }
 }
 
 void PreAnalysisVisitor::visit(LiteralNode& /*node*/)
@@ -543,6 +715,14 @@ void PreAnalysisVisitor::visit(IdentifierNode& node)
 void PreAnalysisVisitor::visit(CallNode& node)
 {
     checkAltstackOperationAllowed(node.funcName, getNodeLocation(node));
+
+    // 所有调用参数都处于值上下文. 在特殊分支提前校验, 避免
+    // SetAlt/SetMain/Move 等分支因提前 return 跳过通用表达式分析.
+    for (auto& arg : node.args) {
+        if (arg) {
+            validateValueProducingExpression(*arg);
+        }
+    }
 
     if (node.isRangeCall || node.funcName == "Range") {
         validateRangeCall(node);
@@ -625,18 +805,21 @@ void PreAnalysisVisitor::visit(CallNode& node)
                     consumeWholeArray(varName, getNodeLocation(*arg));
                     continue;
                 }
-            }
-
-            if (!varName.empty()) {
-                analyzeExpression(*arg);
-                if (fieldPath.empty()) {
-                    consumeVariable(varName, getNodeLocation(*arg));
-                } else {
-                    consumeField(
-                        varName, fieldPath, getNodeLocation(*arg)
-                    );
+                if (var) {
+                    // Delete removes both runtime/fixed storage and the
+                    // compile-time integer fact. A later assignment can
+                    // rebind the name, but reads before that point must not
+                    // observe the deleted value.
+                    m_staticIntegerValues.erase(varName);
+                    const VariableState stateBeforeDelete = var->state;
+                    useVariable(varName, getNodeLocation(*arg));
+                    if (stateBeforeDelete == VariableState::DECLARED) {
+                        var->state = VariableState::CONSUMED;
+                        var->storage = StorageResidency::UNBOUND;
+                        var->lastUseLocation = getNodeLocation(*arg);
+                    }
+                    continue;
                 }
-                continue;
             }
 
             analyzeExpression(*arg);
@@ -646,6 +829,89 @@ void PreAnalysisVisitor::visit(CallNode& node)
 
     // SetAlt: 把变量移到副栈.
     if (node.funcName == "SetAlt" && node.args.size() == 1) {
+        if (auto* indexAccess =
+                dynamic_cast<IndexAccessNode*>(node.args[0].get())) {
+            std::string arrayName = indexAccess->base
+                                        ? getVariableFromExpr(
+                                              *indexAccess->base
+                                          )
+                                        : std::string();
+            VariableInfo* array = arrayName.empty()
+                                      ? nullptr
+                                      : findVariable(arrayName);
+            if (array && array->isArrayType()) {
+                if (indexAccess->index) {
+                    analyzeBorrowedExpression(*indexAccess->index);
+                }
+
+                auto index = calculateIndexValue(indexAccess->index.get());
+                if (!index.has_value()) {
+                    if (indexAccess->index) {
+                        auto constant =
+                            evaluateIntegerConstant(*indexAccess->index);
+                        if (constant.has_value()) {
+                            reportError(
+                                "Array index " +
+                                    std::to_string(constant.value()) +
+                                    " is out of bounds for '" + arrayName +
+                                    "' of length " +
+                                    std::to_string(array->getArraySize()),
+                                getNodeLocation(*indexAccess)
+                            );
+                            return;
+                        }
+                    }
+                    if (array->elementStackSize != 1) {
+                        reportError(
+                            "SetAlt() requires a compile-time index for "
+                            "multi-slot array '" +
+                                arrayName + "'; each element occupies " +
+                                std::to_string(array->elementStackSize) +
+                                " stack slots",
+                            getNodeLocation(*indexAccess)
+                        );
+                        return;
+                    }
+
+                    // Do not create a generic runtime-index path here. The
+                    // ordinary backend retains its existing fail-closed rule.
+                    borrowArrayElement(*indexAccess);
+                    return;
+                }
+
+                if (index.value() >= array->getArraySize()) {
+                    reportError(
+                        "Array index " + std::to_string(index.value()) +
+                            " is out of bounds for '" + arrayName +
+                            "' of length " +
+                            std::to_string(array->getArraySize()),
+                        getNodeLocation(*indexAccess)
+                    );
+                    return;
+                }
+                if (!array->isElementAvailable(index.value())) {
+                    reportError(
+                        "Array element '" + arrayName + "[" +
+                            std::to_string(index.value()) +
+                            "]' has been consumed and cannot be moved to "
+                            "altstack",
+                        getNodeLocation(*indexAccess)
+                    );
+                    return;
+                }
+
+                array->elementStorage[index.value()] =
+                    StorageResidency::ALT_STACK;
+                array->lastUseLocation = getNodeLocation(*indexAccess);
+                LOG_DEBUG(
+                    "Array element '" + arrayName + "[" +
+                    std::to_string(index.value()) +
+                    "]' moved to altstack"
+                );
+                return;
+            }
+        }
+
         std::string varName = getVariableFromExpr(*node.args[0]);
         if (!varName.empty()) {
             VariableInfo* var = findVariable(varName);
@@ -667,15 +933,26 @@ void PreAnalysisVisitor::visit(CallNode& node)
             // SetAlt 只搬位置不消费, 状态保持. 之前 DECLARED→USED 的升级是
             // 旧 useVariable (不查 USED) 的遗留, 在 move-once 规则下会让后续
             // `Keep(x)` / `x op ...` 等正常消费首次访问就报错, 故移除.
+            m_staticIntegerValues.erase(varName);
+            var->source = DataSource::STACK_DATA;
             var->markInAltStack();
             var->storage = StorageResidency::ALT_STACK;
             LOG_DEBUG("Variable '" + varName + "' moved to altstack");
+        } else {
+            analyzeBorrowedExpression(*node.args[0]);
         }
         return;
     }
 
     // SetMain: 把变量从副栈移回主栈.
     if (node.funcName == "SetMain" && node.args.size() == 1) {
+        if (auto* indexAccess =
+                dynamic_cast<IndexAccessNode*>(node.args[0].get())) {
+            if (restoreAltstackArrayElement(*indexAccess)) {
+                return;
+            }
+        }
+
         std::string varName = getVariableFromExpr(*node.args[0]);
         if (!varName.empty()) {
             VariableInfo* var = findVariable(varName);
@@ -714,6 +991,11 @@ void PreAnalysisVisitor::visit(CallNode& node)
             LOG_DEBUG(
                 "Variable '" + varName + "' moved from altstack to main stack"
             );
+        } else {
+            // Do not let complex expressions bypass their own validation.
+            // In particular, computed IndexAccess bases must reach their own
+            // compile-time-index validation.
+            analyzeExpression(*node.args[0]);
         }
         return;
     }
@@ -750,12 +1032,38 @@ void PreAnalysisVisitor::visit(CallNode& node)
         std::string varName = getVariableFromExpr(*arg);
         if (!varName.empty()) {
             consumeVariable(varName, getNodeLocation(*arg));
+        } else {
+            // Complex move operands still need semantic validation even when
+            // they cannot participate in the simple variable ownership path.
+            analyzeExpression(*arg);
         }
         return;
     }
 
-    // Analyze function arguments
-    for (auto& arg : node.args) {
+    // Analyze function arguments. A fixed array passed to an inline function
+    // transfers its complete backing identity; bytecode cleanup removes those
+    // slots when the callee returns, so later caller access must be rejected
+    // rather than treated as an element-wise borrow.
+    const FunctionNode* calledFunction = nullptr;
+    if (auto functionIt = m_functionDefinitions.find(node.funcName);
+        functionIt != m_functionDefinitions.end()) {
+        calledFunction = functionIt->second;
+    }
+    for (size_t i = 0; i < node.args.size(); ++i) {
+        auto& arg = node.args[i];
+        const bool expectsFixedArray =
+            calledFunction && i < calledFunction->parameters.size() &&
+            parseFixedArrayType(calledFunction->parameters[i].type).has_value();
+        if (expectsFixedArray) {
+            const std::string arrayName = getVariableFromExpr(*arg);
+            VariableInfo* array = arrayName.empty()
+                                      ? nullptr
+                                      : findVariable(arrayName);
+            if (array && array->isArrayType()) {
+                consumeWholeArray(arrayName, getNodeLocation(*arg));
+                continue;
+            }
+        }
         analyzeExpression(*arg);
     }
 
@@ -825,6 +1133,21 @@ void PreAnalysisVisitor::visit(MethodCallNode& node)
 {
     // Analyze object expression
     if (node.object) {
+        // 方法调用的对象必须产生值; 无法解析成变量/字段路径时
+        // 下方的 ownership 分支不会递归分析, 因此需先独立校验.
+        validateValueProducingExpression(*node.object);
+
+        if (node.methodName == "Clone") {
+            if (auto* indexAccess =
+                    dynamic_cast<IndexAccessNode*>(node.object.get())) {
+                borrowArrayElement(*indexAccess);
+                for (auto& arg : node.args) {
+                    analyzeExpression(*arg);
+                }
+                return;
+            }
+        }
+
         auto [objName, fieldPath] = getFieldPathFromExpr(*node.object);
         if (!objName.empty()) {
             // .Clone() 是 zero-cost rename 模型里的核心借用操作: emit OP_DUP
@@ -858,6 +1181,11 @@ void PreAnalysisVisitor::visit(MethodCallNode& node)
                     useField(objName, fieldPath, getNodeLocation(*node.object));
                 }
             }
+        } else {
+            // Computed receivers such as box.pairs[index].left do not have a
+            // simple ownership path. Visit the receiver normally so nested
+            // IndexAccess validation is never skipped by a method call.
+            analyzeExpression(*node.object);
         }
     }
 
@@ -930,15 +1258,22 @@ void PreAnalysisVisitor::visit(IndexAccessNode& node)
 
 void PreAnalysisVisitor::visit(ArrayDeclNode& node)
 {
-    SourceLocation loc("", node.pos.first, node.pos.second);
+    const SourceLocation loc = getNodeLocation(node);
 
     size_t arraySize = 0;
     if (node.initArray) {
         arraySize = node.initArray->elements.size();
     } else if (node.sizeExpr) {
-        analyzeExpression(*node.sizeExpr);
-        // TODO: 更精确的常量计算; 目前默认 10.
-        arraySize = 10;
+        auto sizeValue = evaluateIntegerConstant(*node.sizeExpr);
+        if (!sizeValue.has_value() || sizeValue.value() < 0) {
+            reportError(
+                "Array '" + node.name +
+                    "' size must be a non-negative compile-time integer",
+                getNodeLocation(*node.sizeExpr)
+            );
+            return;
+        }
+        arraySize = static_cast<size_t>(sizeValue.value());
     } else {
         reportError(
             "Array '" + node.name + "' must have size or initializer", loc
@@ -958,16 +1293,21 @@ void PreAnalysisVisitor::visit(ArrayDeclNode& node)
                        : StorageResidency::UNBOUND
     );
 
-    if (node.sizeExpr) {
-        analyzeExpression(*node.sizeExpr);
-    }
-
     if (node.initArray) {
         node.initArray->accept(*this);
     }
 }
 
 void PreAnalysisVisitor::visit(ArrayDefNode& node)
+{
+    for (const auto& element : node.elements) {
+        if (element) {
+            analyzeExpression(*element);
+        }
+    }
+}
+
+void PreAnalysisVisitor::visit(BraceExprNode& node)
 {
     for (const auto& element : node.elements) {
         if (element) {
@@ -993,8 +1333,11 @@ DataSource PreAnalysisVisitor::classifyVariable(
         return DataSource::BUILTIN_OBJECT;
     }
 
-    // 3. Check if initialized with constant value
-    if (initValue && isConstantValue(*initValue)) {
+    // 3. Match classifyStorage(): statically evaluable integer expressions
+    // are fixed values too, not move-only runtime stack data.
+    if (initValue &&
+        (isConstantValue(*initValue) ||
+         evaluateIntegerConstant(*initValue).has_value())) {
         return DataSource::CONSTANT_VALUE;
     }
 
@@ -1018,7 +1361,9 @@ void PreAnalysisVisitor::declareVariable(
     }
 
     // Classify variable data source
-    DataSource source = classifyVariable(name, initValue);
+    DataSource source = storage == StorageResidency::FIXED_VALUE
+                            ? DataSource::CONSTANT_VALUE
+                            : classifyVariable(name, initValue);
     if (storage == StorageResidency::UNBOUND && initValue) {
         storage = classifyStorage(initValue);
     }
@@ -1059,6 +1404,18 @@ void PreAnalysisVisitor::useVariable(
     VariableInfo* var = findVariable(name);
     if (!var) {
         reportError("Undeclared variable: '" + name + "'", location);
+        return;
+    }
+
+    // Delete can consume compiler-only fixed bindings as well as runtime
+    // stack values. Their source classification remains CONSTANT_VALUE, so
+    // check the terminal state before the ownership-only fast path.
+    if (var->state == VariableState::CONSUMED) {
+        reportError(
+            "Variable '" + name +
+                "' has been consumed and cannot be used again",
+            location
+        );
         return;
     }
 
@@ -1597,33 +1954,11 @@ std::optional<size_t> PreAnalysisVisitor::calculateIndexValue(
         return std::nullopt;
     }
 
-    if (auto literalNode = dynamic_cast<LiteralNode*>(indexExpr)) {
-        if (literalNode->type == tbc::BytecodeType::Number) {
-            try {
-                size_t index = static_cast<size_t>(
-                    std::stoull(literalNode->value)
-                );
-                return index;
-            } catch (const std::exception&) {
-                LOG_WARNING(
-                    "Failed to parse index literal: " + literalNode->value
-                );
-                return std::nullopt;
-            }
-        }
+    auto value = evaluateIntegerConstant(*indexExpr);
+    if (!value.has_value() || value.value() < 0) {
+        return std::nullopt;
     }
-
-    if (auto identNode = dynamic_cast<IdentifierNode*>(indexExpr)) {
-        auto loopValueIt = m_staticLoopValues.find(identNode->name);
-        if (loopValueIt != m_staticLoopValues.end() &&
-            loopValueIt->second >= 0) {
-            return static_cast<size_t>(loopValueIt->second);
-        }
-    }
-
-    // TODO: 支持非字面量索引 (变量、运算表达式等).
-    LOG_WARNING("Non-literal index expressions not yet supported");
-    return std::nullopt;
+    return static_cast<size_t>(value.value());
 }
 
 std::optional<std::pair<std::string, size_t>>
@@ -1633,6 +1968,471 @@ PreAnalysisVisitor::parseFixedArrayType(const std::string& type) const
         return std::make_pair(arrayType->elementType, arrayType->size);
     }
     return std::nullopt;
+}
+
+void PreAnalysisVisitor::collectAltstackArrayExportSchemas(
+    ContractNode& contract
+)
+{
+    for (auto& member : contract.members) {
+        auto* function = dynamic_cast<FunctionNode*>(member.get());
+        if (!function ||
+            (!isPrivateFunction(function->name) && !function->fromLibrary)) {
+            continue;
+        }
+        collectAltstackArrayExportSchemas(*function);
+    }
+}
+
+void PreAnalysisVisitor::collectAltstackArrayExportSchemas(
+    FunctionNode& function
+)
+{
+    std::map<std::string, AltstackArrayExportSchema> arrayBindings;
+    const SourceLocation functionLocation = getNodeLocation(function);
+    for (const auto& parameter : function.parameters) {
+        auto arrayType = parseFixedArrayType(parameter.type);
+        if (!arrayType.has_value()) {
+            continue;
+        }
+        const auto& [elementType, arraySize] = arrayType.value();
+        arrayBindings[parameter.name] = AltstackArrayExportSchema{
+            elementType,
+            arraySize,
+            calculateElementStackSize(elementType),
+            functionLocation
+        };
+    }
+
+    if (function.block) {
+        collectAltstackArrayExportSchemas(*function.block, arrayBindings);
+    }
+}
+
+void PreAnalysisVisitor::collectAltstackArrayExportSchemas(
+    BlockNode& block,
+    std::map<std::string, AltstackArrayExportSchema>& arrayBindings
+)
+{
+    for (auto& statement : block.statements) {
+        if (statement) {
+            collectAltstackArrayExportSchemas(*statement, arrayBindings);
+        }
+    }
+}
+
+void PreAnalysisVisitor::collectAltstackArrayExportSchemas(
+    StmtNode& statement,
+    std::map<std::string, AltstackArrayExportSchema>& arrayBindings
+)
+{
+    if (auto* block = dynamic_cast<BlockNode*>(&statement)) {
+        auto nestedBindings = arrayBindings;
+        collectAltstackArrayExportSchemas(*block, nestedBindings);
+        return;
+    }
+
+    if (auto* declaration = dynamic_cast<VarDeclNode*>(&statement)) {
+        if (auto arrayType = parseFixedArrayType(declaration->type);
+            arrayType.has_value()) {
+            const auto& [elementType, arraySize] = arrayType.value();
+            arrayBindings[declaration->name] = AltstackArrayExportSchema{
+                elementType,
+                arraySize,
+                calculateElementStackSize(elementType),
+                getNodeLocation(*declaration)
+            };
+        }
+        if (declaration->initValue) {
+            collectAltstackArrayExportSchemas(
+                *declaration->initValue, arrayBindings
+            );
+        }
+        return;
+    }
+
+    if (auto* declaration = dynamic_cast<ArrayDeclNode*>(&statement)) {
+        std::optional<size_t> arraySize;
+        if (declaration->initArray) {
+            arraySize = declaration->initArray->elements.size();
+        } else if (declaration->sizeExpr) {
+            auto value = evaluateIntegerConstant(*declaration->sizeExpr);
+            if (value.has_value() && value.value() >= 0) {
+                arraySize = static_cast<size_t>(value.value());
+            }
+        }
+        if (arraySize.has_value()) {
+            arrayBindings[declaration->name] = AltstackArrayExportSchema{
+                declaration->elementType,
+                arraySize.value(),
+                calculateElementStackSize(declaration->elementType),
+                getNodeLocation(*declaration)
+            };
+        }
+        if (declaration->sizeExpr) {
+            collectAltstackArrayExportSchemas(
+                *declaration->sizeExpr, arrayBindings
+            );
+        }
+        if (declaration->initArray) {
+            collectAltstackArrayExportSchemas(
+                *declaration->initArray, arrayBindings
+            );
+        }
+        return;
+    }
+
+    if (auto* expressionStatement = dynamic_cast<ExprStmtNode*>(&statement)) {
+        if (expressionStatement->expr) {
+            collectAltstackArrayExportSchemas(
+                *expressionStatement->expr, arrayBindings
+            );
+        }
+        return;
+    }
+
+    if (auto* assignment = dynamic_cast<AssignNode*>(&statement)) {
+        if (assignment->value) {
+            collectAltstackArrayExportSchemas(
+                *assignment->value, arrayBindings
+            );
+        }
+        if (assignment->name) {
+            collectAltstackArrayExportSchemas(
+                *assignment->name, arrayBindings
+            );
+        }
+        return;
+    }
+
+    if (auto* destructure =
+            dynamic_cast<DestructureAssignNode*>(&statement)) {
+        if (destructure->value) {
+            collectAltstackArrayExportSchemas(
+                *destructure->value, arrayBindings
+            );
+        }
+        return;
+    }
+
+    if (auto* branch = dynamic_cast<IfNode*>(&statement)) {
+        if (branch->condition) {
+            collectAltstackArrayExportSchemas(
+                *branch->condition, arrayBindings
+            );
+        }
+        if (branch->thenBranch) {
+            auto thenBindings = arrayBindings;
+            collectAltstackArrayExportSchemas(
+                *branch->thenBranch, thenBindings
+            );
+        }
+        if (branch->elseBranch) {
+            auto elseBindings = arrayBindings;
+            collectAltstackArrayExportSchemas(
+                *branch->elseBranch, elseBindings
+            );
+        }
+        return;
+    }
+
+    if (auto* loop = dynamic_cast<ForNode*>(&statement)) {
+        if (loop->iterable) {
+            collectAltstackArrayExportSchemas(
+                *loop->iterable, arrayBindings
+            );
+        }
+        if (loop->body) {
+            auto loopBindings = arrayBindings;
+            collectAltstackArrayExportSchemas(*loop->body, loopBindings);
+        }
+        return;
+    }
+
+    if (auto* returnNode = dynamic_cast<ReturnNode*>(&statement)) {
+        if (returnNode->expr) {
+            collectAltstackArrayExportSchemas(
+                *returnNode->expr, arrayBindings
+            );
+        }
+    }
+}
+
+void PreAnalysisVisitor::collectAltstackArrayExportSchemas(
+    ExprNode& expression,
+    const std::map<std::string, AltstackArrayExportSchema>& arrayBindings
+)
+{
+    if (auto* call = dynamic_cast<CallNode*>(&expression)) {
+        if (call->funcName == "SetAlt" && call->args.size() == 1) {
+            auto* index =
+                dynamic_cast<IndexAccessNode*>(call->args[0].get());
+            const std::string arrayName =
+                index && index->base
+                    ? getVariableFromExpr(*index->base)
+                    : std::string();
+            auto binding = arrayBindings.find(arrayName);
+            if (binding != arrayBindings.end()) {
+                registerAltstackArrayExportSchema(
+                    arrayName,
+                    binding->second,
+                    getNodeLocation(*call->args[0])
+                );
+            }
+        }
+        for (auto& argument : call->args) {
+            if (argument) {
+                collectAltstackArrayExportSchemas(
+                    *argument, arrayBindings
+                );
+            }
+        }
+        return;
+    }
+
+    if (auto* method = dynamic_cast<MethodCallNode*>(&expression)) {
+        if (method->object) {
+            collectAltstackArrayExportSchemas(
+                *method->object, arrayBindings
+            );
+        }
+        for (auto& argument : method->args) {
+            if (argument) {
+                collectAltstackArrayExportSchemas(
+                    *argument, arrayBindings
+                );
+            }
+        }
+        return;
+    }
+
+    if (auto* operation = dynamic_cast<OpNode*>(&expression)) {
+        if (operation->lhs) {
+            collectAltstackArrayExportSchemas(
+                *operation->lhs, arrayBindings
+            );
+        }
+        if (operation->rhs) {
+            collectAltstackArrayExportSchemas(
+                *operation->rhs, arrayBindings
+            );
+        }
+        return;
+    }
+
+    if (auto* field = dynamic_cast<FieldAccessNode*>(&expression)) {
+        if (field->base) {
+            collectAltstackArrayExportSchemas(*field->base, arrayBindings);
+        }
+        return;
+    }
+
+    if (auto* index = dynamic_cast<IndexAccessNode*>(&expression)) {
+        if (index->base) {
+            collectAltstackArrayExportSchemas(*index->base, arrayBindings);
+        }
+        if (index->index) {
+            collectAltstackArrayExportSchemas(*index->index, arrayBindings);
+        }
+        return;
+    }
+
+    if (auto* array = dynamic_cast<ArrayDefNode*>(&expression)) {
+        for (auto& element : array->elements) {
+            if (element) {
+                collectAltstackArrayExportSchemas(
+                    *element, arrayBindings
+                );
+            }
+        }
+        return;
+    }
+
+    if (auto* brace = dynamic_cast<BraceExprNode*>(&expression)) {
+        for (auto& element : brace->elements) {
+            if (element) {
+                collectAltstackArrayExportSchemas(
+                    *element, arrayBindings
+                );
+            }
+        }
+    }
+}
+
+void PreAnalysisVisitor::registerAltstackArrayExportSchema(
+    const std::string& channelName,
+    const AltstackArrayExportSchema& schema,
+    const SourceLocation& exportLocation
+)
+{
+    auto [existing, inserted] =
+        m_altstackArrayExportSchemas.emplace(channelName, schema);
+    if (inserted) {
+        existing->second.firstExportLocation = exportLocation;
+        return;
+    }
+
+    const AltstackArrayExportSchema& previous = existing->second;
+    if (previous.elementType == schema.elementType &&
+        previous.arraySize == schema.arraySize &&
+        previous.elementStackSize == schema.elementStackSize) {
+        return;
+    }
+
+    if (m_conflictingAltstackArrayExportSchemas.insert(channelName).second) {
+        LOG_DEBUG(
+            "Recorded conflicting altstack export schemas for '" +
+            channelName + "': " + formatAltstackArraySchema(previous) +
+            " vs " + formatAltstackArraySchema(schema) +
+            "; the conflict is diagnosed only if a consumer imports this "
+            "channel"
+        );
+    }
+}
+
+bool PreAnalysisVisitor::restoreAltstackArrayElement(IndexAccessNode& node)
+{
+    // Publish only named fixed-array channels. Computed bases such as
+    // box.values[index] continue through IndexAccessNode's existing checks.
+    if (!node.base ||
+        dynamic_cast<IdentifierNode*>(node.base.get()) == nullptr) {
+        return false;
+    }
+
+    const std::string arrayName = getVariableFromExpr(*node.base);
+    if (arrayName.empty()) {
+        return false;
+    }
+
+    VariableInfo* array = findVariable(arrayName);
+    bool materializedExternalView = false;
+    if (!array) {
+        if (!m_allowSubscopeAltstack) {
+            return false;
+        }
+
+        if (m_conflictingAltstackArrayExportSchemas.count(arrayName) != 0) {
+            reportError(
+                "Conflicting altstack export schemas for channel '" +
+                    arrayName + "'",
+                getNodeLocation(node)
+            );
+            return true;
+        }
+
+        auto schema = m_altstackArrayExportSchemas.find(arrayName);
+        if (schema == m_altstackArrayExportSchemas.end()) {
+            return false;
+        }
+
+        declareArrayVariable(
+            arrayName,
+            schema->second.elementType,
+            getNodeLocation(node),
+            schema->second.arraySize,
+            schema->second.elementStackSize,
+            StorageResidency::UNBOUND
+        );
+        array = findVariable(arrayName);
+        if (!array) {
+            return true;
+        }
+
+        // The schema makes the logical type visible, but no element becomes
+        // usable until its own SetMain restores the physical group.
+        std::fill(
+            array->elementOwnership.begin(),
+            array->elementOwnership.end(),
+            false
+        );
+        std::fill(
+            array->elementStorage.begin(),
+            array->elementStorage.end(),
+            StorageResidency::UNBOUND
+        );
+        array->storage = StorageResidency::UNBOUND;
+        materializedExternalView = true;
+    }
+
+    if (!array->isArrayType()) {
+        reportError(
+            "SetMain() target '" + arrayName + "' is not a fixed array",
+            getNodeLocation(node)
+        );
+        return true;
+    }
+
+    if (node.index) {
+        analyzeBorrowedExpression(*node.index);
+    }
+    auto index = calculateIndexValue(node.index.get());
+    if (!index.has_value()) {
+        if (node.index) {
+            auto constant = evaluateIntegerConstant(*node.index);
+            if (constant.has_value()) {
+                reportError(
+                    "Array index " + std::to_string(constant.value()) +
+                        " is out of bounds for '" + arrayName +
+                        "' of length " +
+                        std::to_string(array->getArraySize()),
+                    getNodeLocation(node)
+                );
+                return true;
+            }
+        }
+
+        if (array->elementStackSize != 1) {
+            reportError(
+                "SetMain() requires a compile-time index for multi-slot "
+                "array '" +
+                    arrayName + "'; each element occupies " +
+                    std::to_string(array->elementStackSize) +
+                    " stack slots",
+                getNodeLocation(node)
+            );
+            return true;
+        }
+        if (materializedExternalView) {
+            reportError(
+                "Cross-function SetMain() requires a compile-time array "
+                "index for '" +
+                    arrayName + "'",
+                getNodeLocation(node)
+            );
+            return true;
+        }
+        return false;
+    }
+
+    if (index.value() >= array->getArraySize()) {
+        reportError(
+            "Array index " + std::to_string(index.value()) +
+                " is out of bounds for '" + arrayName + "' of length " +
+                std::to_string(array->getArraySize()),
+            getNodeLocation(node)
+        );
+        return true;
+    }
+
+    array->elementOwnership[index.value()] = true;
+    array->elementStorage[index.value()] = StorageResidency::MAIN_STACK;
+    array->state = VariableState::DECLARED;
+    array->lastUseLocation = getNodeLocation(node);
+    LOG_DEBUG(
+        "Array element '" + arrayName + "[" +
+        std::to_string(index.value()) +
+        "]' restored from altstack to main stack"
+    );
+    return true;
+}
+
+std::string PreAnalysisVisitor::formatAltstackArraySchema(
+    const AltstackArrayExportSchema& schema
+) const
+{
+    return schema.elementType + "[" + std::to_string(schema.arraySize) +
+           "] (" + std::to_string(schema.elementStackSize) +
+           " stack slots per element)";
 }
 
 VariableInfo* PreAnalysisVisitor::findVariable(const std::string& name)
@@ -1666,7 +2466,87 @@ void PreAnalysisVisitor::reportWarning(
 
 void PreAnalysisVisitor::analyzeExpression(ExprNode& expr)
 {
+    validateValueProducingExpression(expr);
     expr.accept(*this);
+}
+
+void PreAnalysisVisitor::validateValueProducingExpression(ExprNode& expr)
+{
+    if (!m_validatedValueExpressions.insert(&expr).second) {
+        return;
+    }
+
+    if (auto* call = dynamic_cast<CallNode*>(&expr)) {
+        if (call->funcName == "Verify") {
+            reportError(
+                "Verify() does not return a value and cannot be used in a "
+                "value context",
+                getNodeLocation(expr)
+            );
+        }
+        for (auto& arg : call->args) {
+            if (arg) {
+                validateValueProducingExpression(*arg);
+            }
+        }
+        return;
+    }
+
+    if (auto* method = dynamic_cast<MethodCallNode*>(&expr)) {
+        if (method->object) {
+            validateValueProducingExpression(*method->object);
+        }
+        for (auto& arg : method->args) {
+            if (arg) {
+                validateValueProducingExpression(*arg);
+            }
+        }
+        return;
+    }
+
+    if (auto* op = dynamic_cast<OpNode*>(&expr)) {
+        if (op->lhs) {
+            validateValueProducingExpression(*op->lhs);
+        }
+        if (op->rhs) {
+            validateValueProducingExpression(*op->rhs);
+        }
+        return;
+    }
+
+    if (auto* field = dynamic_cast<FieldAccessNode*>(&expr)) {
+        if (field->base) {
+            validateValueProducingExpression(*field->base);
+        }
+        return;
+    }
+
+    if (auto* index = dynamic_cast<IndexAccessNode*>(&expr)) {
+        if (index->base) {
+            validateValueProducingExpression(*index->base);
+        }
+        if (index->index) {
+            validateValueProducingExpression(*index->index);
+        }
+        return;
+    }
+
+    if (auto* array = dynamic_cast<ArrayDefNode*>(&expr)) {
+        for (auto& element : array->elements) {
+            if (element) {
+                validateValueProducingExpression(*element);
+            }
+        }
+        return;
+    }
+
+    if (auto* brace = dynamic_cast<BraceExprNode*>(&expr)) {
+        for (auto& element : brace->elements) {
+            if (element) {
+                validateValueProducingExpression(*element);
+            }
+        }
+    }
 }
 
 void PreAnalysisVisitor::analyzeBorrowedExpression(ExprNode& expr)
@@ -1704,7 +2584,12 @@ StorageResidency PreAnalysisVisitor::classifyStorage(ExprNode* value)
     if (!value) {
         return StorageResidency::UNBOUND;
     }
-    if (isConstantValue(*value)) {
+    // Keep the ownership model aligned with integer propagation and backend
+    // folding. An expression such as `j + 1` has no runtime stack effect when
+    // all of its operands are statically known, even though its AST root is an
+    // OpNode rather than a LiteralNode.
+    if (isConstantValue(*value) ||
+        evaluateIntegerConstant(*value).has_value()) {
         return StorageResidency::FIXED_VALUE;
     }
 
@@ -1785,6 +2670,27 @@ void PreAnalysisVisitor::bindAssignmentTarget(
         if (existing) {
             reassignVariable(identifier->name, location, storage);
         } else {
+            // `target = source` is a zero-cost whole-array identity transfer
+            // in bytecode generation. Mirror that shape here instead of
+            // accidentally auto-declaring a scalar target.
+            auto* sourceIdentifier =
+                value ? dynamic_cast<IdentifierNode*>(value) : nullptr;
+            VariableInfo* source = sourceIdentifier
+                                       ? findVariable(sourceIdentifier->name)
+                                       : nullptr;
+            if (source && source->isArrayType()) {
+                VariableInfo transferred = *source;
+                transferred.name = identifier->name;
+                transferred.state = VariableState::DECLARED;
+                transferred.declLocation = location;
+                transferred.lastUseLocation = location;
+                m_variables.emplace(identifier->name, std::move(transferred));
+                LOG_DEBUG(
+                    "Transferred array analysis identity from " +
+                    sourceIdentifier->name + " to " + identifier->name
+                );
+                return;
+            }
             declareVariable(
                 identifier->name, "auto", location, value, storage
             );
@@ -1855,6 +2761,8 @@ void PreAnalysisVisitor::bindAssignmentTarget(
 // 小写 return 专用: 表达式中变量只使用不消耗.
 void PreAnalysisVisitor::analyzeExpressionForValueReturn(ExprNode& expr)
 {
+    validateValueProducingExpression(expr);
+
     if (auto* identNode = dynamic_cast<IdentifierNode*>(&expr)) {
         borrowVariable(identNode->name, getNodeLocation(*identNode));
         return;

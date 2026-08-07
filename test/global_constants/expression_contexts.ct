@@ -1,0 +1,11 @@
+Contract GlobalExpressionContextsContract:
+    global LeftValue = 2
+    global RightValue = 3
+    global ExpectedValue = 5
+
+    def main():
+        actual = LeftValue + RightValue
+        if actual == ExpectedValue:
+            Return RightValue
+        else:
+            Return LeftValue

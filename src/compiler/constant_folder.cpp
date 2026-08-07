@@ -7,6 +7,8 @@
 
 #include "../error/error_manager.h"
 #include "../log/logger.h"
+#include "range_plan.h"
+#include "static_integer_evaluator.h"
 
 ConstantFolder::Result ConstantFolder::fold(ContractNode& contract)
 {
@@ -113,39 +115,25 @@ void ConstantFolder::foldStmt(std::unique_ptr<StmtNode>& stmt)
         );
     } else if (auto* f = dynamic_cast<ForNode*>(stmt.get())) {
         foldExpr(f->iterable);
-        // 死循环消除: Range(...) 全部参数是数值字面量 (含一元负号) 时,
-        // 重算迭代次数, 为 0 直接删除整条 ForNode.
+        // 死循环消除复用 lowering 的有界整数求值和 Range 算法，避免
+        // 在这里维护另一套可能溢出的 int64 步进逻辑。
         if (auto* call = dynamic_cast<CallNode*>(f->iterable.get());
             call && call->funcName == "Range" && !call->args.empty() &&
             call->args.size() <= 3) {
             std::vector<int64_t> bounds;
             bounds.reserve(call->args.size());
-            bool allLit = true;
+            bool allKnown = true;
             for (auto& arg : call->args) {
-                if (auto* lit = dynamic_cast<LiteralNode*>(arg.get());
-                    lit && lit->type == LiteralNode::Type::Number) {
-                    auto v = literalAsInt(*lit);
-                    if (v.has_value()) {
-                        bounds.push_back(*v);
-                        continue;
-                    }
+                const auto value =
+                    compiler::StaticIntegerEvaluator::evaluate(*arg);
+                if (value.isKnown()) {
+                    bounds.push_back(value.value);
+                    continue;
                 }
-                if (auto* op = dynamic_cast<OpNode*>(arg.get());
-                    op && !op->lhs && op->op == "-" && op->rhs) {
-                    if (auto* lit =
-                            dynamic_cast<LiteralNode*>(op->rhs.get());
-                        lit && lit->type == LiteralNode::Type::Number) {
-                        auto v = literalAsInt(*lit);
-                        if (v.has_value()) {
-                            bounds.push_back(-*v);
-                            continue;
-                        }
-                    }
-                }
-                allLit = false;
+                allKnown = false;
                 break;
             }
-            if (allLit) {
+            if (allKnown) {
                 int64_t start = 0, stop = 0, step = 1;
                 if (bounds.size() == 1) {
                     stop = bounds[0];
@@ -157,9 +145,10 @@ void ConstantFolder::foldStmt(std::unique_ptr<StmtNode>& stmt)
                     stop = bounds[1];
                     step = bounds[2];
                 }
-                bool isEmpty = (step > 0 && start >= stop) ||
-                               (step < 0 && start <= stop);
-                if (isEmpty) {
+                auto plan = apc::compiler::RangePlan::build(
+                    start, stop, step
+                );
+                if (plan && plan.value().empty()) {
                     LOG_DEBUG(
                         "Dead loop elimination: for " + f->target +
                         " in Range(empty) -> ∅"
@@ -568,35 +557,22 @@ std::unique_ptr<LiteralNode> ConstantFolder::tryFoldOp(OpNode& op)
 std::unique_ptr<LiteralNode>
 ConstantFolder::tryFoldUnary(OpNode& op, const LiteralNode& rhs)
 {
-    if (rhs.type != LiteralNode::Type::Number) {
+    const auto result = compiler::StaticIntegerEvaluator::evaluate(op);
+    if (result.isError()) {
+        reportError(op, result.diagnostic);
         return nullptr;
     }
-
-    int64_t rv = 0;
-    try {
-        rv = std::stoll(rhs.value);
-    } catch (const std::exception&) {
-        return nullptr; // 超界等留给下游数值检查.
-    }
-
-    std::optional<int64_t> r;
-    if (op.op == "-") {
-        r = -rv;
-    } else if (op.op == "!") {
-        r = (rv == 0) ? 1 : 0;
-    }
-
-    if (!r.has_value()) {
+    if (!result.isKnown()) {
         return nullptr;
     }
 
     LOG_DEBUG(
         "Constant folding unary: " + op.op + rhs.value + " = " +
-        std::to_string(*r)
+        std::to_string(result.value)
     );
     return std::make_unique<LiteralNode>(
         LiteralNode::Type::Number,
-        std::to_string(*r),
+        std::to_string(result.value),
         op.pos.first,
         op.pos.second
     );
@@ -606,70 +582,24 @@ std::unique_ptr<LiteralNode> ConstantFolder::tryFoldBinary(
     OpNode& op, const LiteralNode& lhs, const LiteralNode& rhs
 )
 {
-    if (lhs.type != LiteralNode::Type::Number ||
-        rhs.type != LiteralNode::Type::Number) {
+    const auto result = compiler::StaticIntegerEvaluator::evaluate(op);
+    if (result.isError()) {
+        reportError(op, result.diagnostic);
         return nullptr;
     }
-
-    int64_t lv = 0;
-    int64_t rv = 0;
-    try {
-        lv = std::stoll(lhs.value);
-        rv = std::stoll(rhs.value);
-    } catch (const std::exception&) {
-        return nullptr;
-    }
-
-    std::optional<int64_t> r;
-    if (op.op == "+") {
-        r = lv + rv;
-    } else if (op.op == "-") {
-        r = lv - rv;
-    } else if (op.op == "*") {
-        r = lv * rv;
-    } else if (op.op == "/") {
-        if (rv == 0) {
-            reportError(op, "Division by zero in constant expression");
-            return nullptr;
-        }
-        r = lv / rv;
-    } else if (op.op == "%") {
-        if (rv == 0) {
-            reportError(op, "Modulo by zero in constant expression");
-            return nullptr;
-        }
-        r = lv % rv;
-    } else if (op.op == "==") {
-        r = (lv == rv) ? 1 : 0;
-    } else if (op.op == "!=") {
-        r = (lv != rv) ? 1 : 0;
-    } else if (op.op == "<") {
-        r = (lv < rv) ? 1 : 0;
-    } else if (op.op == ">") {
-        r = (lv > rv) ? 1 : 0;
-    } else if (op.op == "<=") {
-        r = (lv <= rv) ? 1 : 0;
-    } else if (op.op == ">=") {
-        r = (lv >= rv) ? 1 : 0;
-    } else if (op.op == "&&") {
-        r = (lv && rv) ? 1 : 0;
-    } else if (op.op == "||") {
-        r = (lv || rv) ? 1 : 0;
-    }
-
-    if (!r.has_value()) {
+    if (!result.isKnown()) {
         return nullptr;
     }
 
     LOG_DEBUG(
         "Constant folding binary: " + lhs.value + " " + op.op + " " + rhs.value +
-        " = " + std::to_string(*r)
+        " = " + std::to_string(result.value)
     );
     // 比较 / 逻辑结果统一按 Number(0|1) 输出, 避开 Boolean 字面量在
     // visitLiteral 里的 true/false -> 0x00/0x51 特殊映射.
     return std::make_unique<LiteralNode>(
         LiteralNode::Type::Number,
-        std::to_string(*r),
+        std::to_string(result.value),
         op.pos.first,
         op.pos.second
     );
@@ -701,6 +631,11 @@ void ConstantFolder::countAssignmentsInStmt(StmtNode* stmt)
         countAssignmentsInStmt(i->thenBranch.get());
         countAssignmentsInStmt(i->elseBranch.get());
     } else if (auto* f = dynamic_cast<ForNode*>(stmt)) {
+        // 循环目标在每轮入口都会被重新赋值，即使源码没有显式 AssignNode。
+        // 把它视为多写，防止循环前常量被传播进循环体。
+        if (!f->target.empty()) {
+            m_assignCounts[f->target] += 2;
+        }
         // 循环体内的赋值会执行多次: body 内出现的名字额外 +1, 使
         // 计数 > 1 以禁用常量传播.
         if (!f->body) {

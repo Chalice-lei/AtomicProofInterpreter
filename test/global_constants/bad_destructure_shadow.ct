@@ -1,0 +1,7 @@
+Contract GlobalDestructureShadowContract:
+    global TapeFlag = "TBC20TAPE"
+
+    def main(data: hex):
+        { TapeFlag, rest } = Split(data, 1)
+        Delete(rest)
+        Return TapeFlag

@@ -17,6 +17,8 @@ public:
     void checkUniqueness(ContractNode& node);
 
     void visit(ContractNode& node) override;
+    void visit(GlobalConstNode& /*node*/) override
+    {}
     void visit(FunctionNode& node) override;
     void visit(ConstructorNode& node) override;
     void visit(StructDefNode& node) override;

@@ -1,0 +1,7 @@
+Contract DebugControlFlowLocation:
+    def main(flag: bool, left: int, right: int):
+        if flag:
+            Verify(1)
+        if left != right:
+            Verify(1)
+        Return 1

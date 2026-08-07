@@ -1,0 +1,5 @@
+Contract GlobalUnusedInvalidHexContract:
+    global BadHex = 0x0
+
+    def main():
+        Return 1

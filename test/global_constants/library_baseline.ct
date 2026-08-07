@@ -1,0 +1,3 @@
+Contract GlobalLibraryBaselineContract:
+    def main():
+        Return "TBC20TAPE"

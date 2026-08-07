@@ -1,0 +1,5 @@
+Contract GlobalNonLiteralContract:
+    global TapeFlagSize = Size(0x01)
+
+    def main():
+        Return 1

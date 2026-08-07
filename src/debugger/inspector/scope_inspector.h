@@ -19,20 +19,45 @@ public:
     ~ScopeInspector() = default;
 
     std::shared_ptr<ScopeDebugInfo> getCurrentScope(size_t currentPC);
+    std::shared_ptr<ScopeDebugInfo> getCurrentScope(
+        size_t currentPC,
+        const BranchTrace& branchTrace
+    );
     const FunctionDebugInfo* getCurrentFunction(size_t currentPC);
 
     // 父作用域链（从内到外）
     std::vector<std::shared_ptr<ScopeDebugInfo>> getScopeChain(size_t currentPC);
+    std::vector<std::shared_ptr<ScopeDebugInfo>> getScopeChain(
+        size_t currentPC,
+        const BranchTrace& branchTrace
+    );
 
     // 所有可见变量
     std::vector<VariableDebugInfo> getVisibleVariables(size_t currentPC);
+    std::vector<VariableDebugInfo> getVisibleVariables(
+        size_t currentPC,
+        const BranchTrace& branchTrace
+    );
 
     // 仅当前作用域的局部变量
     std::vector<VariableDebugInfo> getLocalVariables(size_t currentPC);
+    std::vector<VariableDebugInfo> getLocalVariables(
+        size_t currentPC,
+        const BranchTrace& branchTrace
+    );
 
     bool isVariableVisible(const std::string& varName, size_t currentPC);
+    bool isVariableVisible(
+        const std::string& varName,
+        size_t currentPC,
+        const BranchTrace& branchTrace
+    );
 
     std::string getScopeDescription(size_t currentPC);
+    std::string getScopeDescription(
+        size_t currentPC,
+        const BranchTrace& branchTrace
+    );
 
     std::shared_ptr<DebugInfo> getDebugInfo() const { return m_debugInfo; }
 
@@ -40,6 +65,10 @@ private:
     std::shared_ptr<DebugInfo> m_debugInfo;
 
     std::shared_ptr<ScopeDebugInfo> findScopeAtPC(size_t pc);
+    std::shared_ptr<ScopeDebugInfo> findScopeAtPC(
+        size_t pc,
+        const BranchTrace& branchTrace
+    );
     const FunctionDebugInfo* findFunctionAtPC(size_t pc);
 
     void collectVariablesFromScope(
@@ -51,6 +80,3 @@ private:
 } // namespace apc_debug
 
 #endif // SCOPE_INSPECTOR_H
-
-
-

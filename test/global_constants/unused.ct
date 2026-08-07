@@ -1,0 +1,6 @@
+Contract GlobalUnusedContract:
+    global UnusedText = "this must not be emitted"
+    global UnusedNumber = 999
+
+    def main():
+        Return 1

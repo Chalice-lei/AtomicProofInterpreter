@@ -14,7 +14,14 @@ bool LineBreakpoint::shouldBreak(const BVMSimulator& vm) const {
     }
 
     size_t currentPC = vm.getPC();
-    return m_resolvedPCs.find(currentPC) != m_resolvedPCs.end();
+    if (m_resolvedPCs.find(currentPC) == m_resolvedPCs.end()) {
+        return false;
+    }
+
+    // A structured rewrite may map the then and else source lines onto one
+    // hoisted instruction.  PC membership is therefore only the fast first
+    // stage; the runtime branch trace selects the active source origin.
+    return vm.isSourceOriginActive(m_filename, m_line);
 }
 
 bool FunctionBreakpoint::shouldBreak(const BVMSimulator& vm) const {
@@ -94,4 +101,3 @@ std::string breakpointStateToString(BreakpointState state) {
 }
 
 } // namespace apc_debug
-

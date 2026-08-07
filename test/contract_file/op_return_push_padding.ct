@@ -1,0 +1,7 @@
+# Regression fixture for OP_RETURN padding finalization.
+#
+# The returned payload length is chosen so the compiler must insert
+# 30 bytes of post-OP_RETURN padding: 1 length byte + 29 bytes of 0xff data.
+Contract OpReturnPushPadding:
+    def main():
+        Return 0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa

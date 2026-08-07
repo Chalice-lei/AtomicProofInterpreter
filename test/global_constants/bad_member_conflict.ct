@@ -1,0 +1,5 @@
+Contract GlobalMemberConflictContract:
+    global main = 9
+
+    def main():
+        Return 1

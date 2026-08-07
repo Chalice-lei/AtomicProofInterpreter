@@ -70,8 +70,10 @@ with open(sys.argv[1], "r", encoding="utf-8") as f:
 with open(sys.argv[2], "r", encoding="utf-8") as f:
     bytecode_json = json.load(f)
 
-asm = bytecode_json["lock"]["asm"].split()
-first_padding_pc = asm.index("OP_INVALIDOPCODE")
+# The exported ASM intentionally contains only executable instructions; padding
+# is represented in hex but is not emitted as OP_INVALIDOPCODE tokens.  DebugInfo
+# instruction entries therefore define the executable half-open PC boundary.
+first_padding_pc = len(debug_info["instructions"])
 hex_bytes = bytecode_json["lock"]["hex"]
 hex_ops = [hex_bytes[i:i + 2].lower() for i in range(0, len(hex_bytes), 2)]
 
@@ -211,6 +213,99 @@ if awk '/Bytecode list/,/\(apc-debug\)/' "$SESSION_LOG" | grep -q 'OP_INVALIDOPC
     exit 1
 fi
 
+run_if_without_else_session() {
+    local name=$1
+    local flag=$2
+    local log="$TMP_DIR/$name.log"
+
+    printf 'en\n1\n%s\nrun\nquit\n' "$flag" | (
+        cd "$TMP_DIR"
+        "$COMPILER" debug \
+            "$REPO_ROOT/test/debugger_public_regression/debug_if_without_else.ct" \
+            >"$log" 2>&1
+    )
+
+    grep -q "Program execution finished." "$log"
+    if grep -q "Current location: :0:0" "$log"; then
+        echo "$name left the VM paused at an invalid source location" >&2
+        sed -n '1,220p' "$log" >&2
+        exit 1
+    fi
+
+    local finished_count
+    finished_count=$(grep -c "Program execution finished." "$log")
+    if [[ "$finished_count" -ne 1 ]]; then
+        echo "$name emitted $finished_count terminal events; expected 1" >&2
+        sed -n '1,220p' "$log" >&2
+        exit 1
+    fi
+}
+
+# True executes Verify(1), while false skips it. Both paths must leave the
+# simulator's condition stack balanced.
+run_if_without_else_session if_without_else_true 1
+run_if_without_else_session if_without_else_false 0
+
+VERIFY_FIXTURE="$SCRIPT_DIR/debug_verify_runtime.ct"
+VERIFY_TRUE_LOG="$TMP_DIR/verify_true.run.log"
+VERIFY_FALSE_LOG="$TMP_DIR/verify_false.run.log"
+
+"$COMPILER" -l error run "$VERIFY_FIXTURE" main 1 11 12 13 \
+    >"$VERIFY_TRUE_LOG" 2>&1
+grep -q "status: finished" "$VERIFY_TRUE_LOG"
+if grep -q "OP_VERIFY failed" "$VERIFY_TRUE_LOG"; then
+    echo "Verify(1) unexpectedly failed" >&2
+    sed -n '1,160p' "$VERIFY_TRUE_LOG" >&2
+    exit 1
+fi
+
+set +e
+"$COMPILER" -l error run "$VERIFY_FIXTURE" main 0 11 12 13 \
+    >"$VERIFY_FALSE_LOG" 2>&1
+verify_false_rc=$?
+set -e
+if [[ $verify_false_rc -eq 0 ]]; then
+    echo "Verify(0) unexpectedly completed" >&2
+    sed -n '1,160p' "$VERIFY_FALSE_LOG" >&2
+    exit 1
+fi
+grep -q "status: error" "$VERIFY_FALSE_LOG"
+grep -q "Execution error: OP_VERIFY failed: value is false or zero" \
+    "$VERIFY_FALSE_LOG"
+
+# OP_VERIFY consumes only its condition. Both the success and failure paths
+# must retain all unrelated parameters in their original order.
+for log in "$VERIFY_TRUE_LOG" "$VERIFY_FALSE_LOG"; do
+    grep -q "Main stack (3, bottom -> top)" "$log"
+    grep -q "\[0\] 0x0b (int=11)" "$log"
+    grep -q "\[1\] 0x0c (int=12)" "$log"
+    grep -q "\[2\] 0x0d (int=13)" "$log"
+done
+
+CONTROL_FLOW_DEBUG="$TMP_DIR/control_flow_location.debug"
+"$COMPILER" compile "$SCRIPT_DIR/debug_control_flow_location.ct" \
+    --debug-output "$CONTROL_FLOW_DEBUG" \
+    >"$TMP_DIR/control_flow_location.log" 2>&1
+[[ -s "$CONTROL_FLOW_DEBUG" ]]
+
+python3 - "$CONTROL_FLOW_DEBUG" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], "r", encoding="utf-8") as f:
+    debug_info = json.load(f)
+
+controls = {
+    instruction["opcode"].lower(): instruction["location"]
+    for instruction in debug_info["instructions"]
+    if instruction["opcode"].lower() in {"63", "64"}
+}
+assert controls["63"]["line"] == 3, controls
+assert controls["63"]["column"] == 9, controls
+assert controls["64"]["line"] == 5, controls
+assert controls["64"]["column"] == 9, controls
+PY
+
 ARITH_TRACE="$TMP_DIR/arith_stack_trace.json"
 "$COMPILER" run "$SCRIPT_DIR/debug_line_mapping_basic.ct" test_line_mapping 1 2 3 \
     --stack-trace-output "$ARITH_TRACE" >"$TMP_DIR/arith_trace.log" 2>&1
@@ -325,10 +420,11 @@ line_response = read_message()
 assert line_response["type"] == "response" and line_response["success"]
 line_snapshot = line_response["body"]["snapshot"]
 assert line_snapshot["pc"] == 2, line_snapshot
-assert [item["pc"] for item in line_snapshot["lineInstructions"]] == [2, 3, 4], line_snapshot
+# V2 source positions keep PC 4 on the following source line, so the current
+# line contains only the clone/add instructions at PCs 2 and 3.
+assert [item["pc"] for item in line_snapshot["lineInstructions"]] == [2, 3], line_snapshot
 assert "pc 2*:" in line_snapshot["lineInstructionSummary"], line_snapshot
 assert "pc 3:" in line_snapshot["lineInstructionSummary"], line_snapshot
-assert "pc 4:" in line_snapshot["lineInstructionSummary"], line_snapshot
 read_message()
 
 send(4, "variables", scope="instruction")

@@ -4,13 +4,54 @@
 #include <any>
 #include <memory>
 #include <stack>
+#include <string>
 #include <unordered_map>
+#include <vector>
 
 #include "../util/op_stack.h"
 #include "byt_defs.h"
 #include "symtab.h"
 
 SPACE_TBC_START
+
+enum class ControlFlowMismatch {
+    NONE,
+    MAIN_STACK_DEPTH,
+    MAIN_STACK_LAYOUT,
+    ALT_STACK_DEPTH,
+    ALT_STACK_LAYOUT,
+    FIXED_STORAGE,
+    SYMBOL_METADATA,
+    LEXICAL_SCOPE
+};
+
+enum class ControlFlowJoinPolicy {
+    RUNTIME_LAYOUT,
+    IMPLICIT_EMPTY_BRANCH
+};
+
+struct ControlFlowJoinResult
+{
+    ControlFlowMismatch mismatch{ControlFlowMismatch::NONE};
+    std::string detail;
+
+    bool compatible() const
+    {
+        return mismatch == ControlFlowMismatch::NONE;
+    }
+};
+
+// SymbolTable deep-copies the main and fixed stacks, while snapshots inside
+// one Scope share its alternative stack. Keep an explicit altstack copy so a
+// later branch or rollback cannot overwrite the captured state.
+struct ControlFlowStateSnapshot
+{
+    SymbolTable symbolTable;
+    std::vector<StackElement> altStack;
+    size_t mainCombinedSize{0};
+    size_t altCombinedSize{0};
+    size_t lexicalDepth{0};
+};
 
 class Scope
 {
@@ -94,6 +135,21 @@ public:
     // 弹出作用域栈顶, 不恢复符号表; 非空返回 true
     bool popScopeStack();
 
+    ControlFlowStateSnapshot captureControlFlowState() const;
+
+    // Capture the current block result and then leave that lexical block. The
+    // returned depth is the continuation depth after exitScope().
+    ControlFlowStateSnapshot captureControlFlowStateAndExitScope();
+
+    // Restore compiler-visible state without changing the lexical-scope stack.
+    void restoreControlFlowState(const ControlFlowStateSnapshot& snapshot);
+
+    ControlFlowJoinResult compareControlFlowStates(
+        const ControlFlowStateSnapshot& entry,
+        const ControlFlowStateSnapshot& branch,
+        ControlFlowJoinPolicy policy
+    ) const;
+
     bool defineSymbol(
         std::string name,
         std::string type = "",
@@ -103,6 +159,12 @@ public:
 
     // 数组管理 (委托给 SymbolTable)
     bool defineArray(
+        const std::string& name,
+        const std::string& elementType,
+        size_t size,
+        bool isFixedSize = true
+    );
+    bool importExternalArrayView(
         const std::string& name,
         const std::string& elementType,
         size_t size,

@@ -28,6 +28,10 @@ public:
     {
         return m_abiJson;
     };
+    nlohmann::ordered_json getUnlockJson() const
+    {
+        return m_unlockJson;
+    };
     nlohmann::ordered_json getStructJson() const
     {
         return m_structJson;
@@ -38,6 +42,7 @@ public:
     };
 
     void visit(ContractNode& node) override;
+    void visit(GlobalConstNode& /*node*/) override {};
 
     void visit(FunctionNode& node) override;
 
@@ -65,6 +70,13 @@ public:
     void visit(DestructureAssignNode& /*node*/) override {};
 
 private:
+    static nlohmann::ordered_json makeParamsJson(
+        const std::vector<ParameterInfo>& parameters,
+        const std::string& logPrefix
+    );
+    static std::string makeUnlockScriptTemplate(
+        const std::vector<ParameterInfo>& parameters
+    );
     void generateAllFunctionInfo(FunctionNode& node, bool isPrivate);
     void generateFunction(FunctionNode& node);
     void generateConstructor(ConstructorNode& node);
@@ -73,6 +85,7 @@ private:
 private:
     nlohmann::ordered_json m_constructorParamsJson;
     nlohmann::ordered_json m_abiJson;
+    nlohmann::ordered_json m_unlockJson;
     nlohmann::ordered_json m_structJson;
     nlohmann::ordered_json m_allFunctionsJson;
     int m_functionIndex;

@@ -80,23 +80,17 @@ inline ControlFlowOutcomes controlFlowOutcomes(const StmtNode* statement)
     }
 
     if (const auto* forNode = dynamic_cast<const ForNode*>(statement)) {
-        if (forNode->getStaticIterations().empty()) {
-            return {.fallsThrough = true};
-        }
-
-        ControlFlowOutcomes result{.fallsThrough = true};
+        // Range cardinality can depend on outer-loop fixed bindings and is no
+        // longer cached on the shared AST. Context-free analysis must retain
+        // the zero-iteration path while recording outcomes the body may
+        // produce when the loop executes.
         const ControlFlowOutcomes body =
             controlFlowOutcomes(forNode->body.get());
-        for (size_t i = 0; i < forNode->getStaticIterations().size(); ++i) {
-            if (!result.fallsThrough) {
-                break;
-            }
-            result.fallsThrough = body.fallsThrough;
-            result.inlineReturns = result.inlineReturns || body.inlineReturns;
-            result.scriptTerminates =
-                result.scriptTerminates || body.scriptTerminates;
-        }
-        return result;
+        return {
+            .fallsThrough = true,
+            .inlineReturns = body.inlineReturns,
+            .scriptTerminates = body.scriptTerminates,
+        };
     }
 
     return {.fallsThrough = true};
@@ -105,6 +99,14 @@ inline ControlFlowOutcomes controlFlowOutcomes(const StmtNode* statement)
 inline bool reachesContinuation(const StmtNode* statement)
 {
     return controlFlowOutcomes(statement).fallsThrough;
+}
+
+// Compatibility predicate used by post-statement cleanup planning. In the
+// Interpreter lowering model both uppercase script termination and lowercase
+// inline-function return prevent a following statement from executing.
+inline bool statementAlwaysTerminates(const StmtNode* statement)
+{
+    return !controlFlowOutcomes(statement).fallsThrough;
 }
 
 } // namespace compiler_flow

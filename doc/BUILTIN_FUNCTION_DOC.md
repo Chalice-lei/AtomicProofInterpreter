@@ -997,6 +997,23 @@
   result = Or(a, b)  # 结果：1
   ```
 
+### 3. Verify
+- **函数名（Function Name）**：Verify
+- **描述（Short Description）**：消费一个布尔条件并生成 `OP_VERIFY`。编译器不判断条件真假；调试执行时，真值继续执行，假值终止执行。
+- **参数（Parameters）**：
+  - `condition`
+    - 类型（Type）：BOOLEAN
+    - 是否可选（Optional/Required）：Required
+    - 用途：需要在执行时验证的条件
+    - 默认值：无
+- **返回值（Returns）**：无
+- **使用示例（Example）**：
+  ```python
+  condition = Equal(actual, expected)
+  Verify(condition)
+  ```
+- **字节码（Bytecode）**：参数会先移动到栈顶，随后生成 `OP_VERIFY`。参数已经在栈顶时不会生成额外的栈移动指令。
+
 ## 十三、其它内置函数
 
 ### 1. SetAlt
