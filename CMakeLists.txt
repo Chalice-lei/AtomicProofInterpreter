@@ -397,6 +397,7 @@ set(CORE_SOURCES
         src/debug/printvisit.cpp
         src/bytecode/bytecode_opcodes.cpp
         src/bytecode/bytecode_generator.cpp
+        src/bytecode/bytecode_materializer.cpp
         src/bytecode/symtab.cpp
         src/bytecode/type_validator.cpp
         src/bytecode/scope.cpp
@@ -407,6 +408,8 @@ set(CORE_SOURCES
         src/compiler/collect_symbols_visitor.cpp
         src/compiler/pre_analysis_visitor.cpp
         src/compiler/constant_folder.cpp
+        src/compiler/range_plan.cpp
+        src/compiler/static_integer_evaluator.cpp
         src/compiler/library_merger.cpp
         src/compiler/bytecode_pipeline.cpp
         src/compiler/compiler_driver.cpp
@@ -480,6 +483,46 @@ target_compile_definitions(apc_core PUBLIC
 
 if(BUILD_TESTING)
     enable_testing()
+    add_executable(
+        script_codec_ir_test
+        test/bytecode/script_codec_ir_test.cpp
+    )
+    target_link_libraries(script_codec_ir_test PRIVATE apc_core)
+    add_test(
+        NAME script-codec-ir
+        COMMAND $<TARGET_FILE:script_codec_ir_test>
+    )
+
+    add_executable(
+        bytecode_materializer_test
+        test/bytecode/bytecode_materializer_test.cpp
+    )
+    target_link_libraries(bytecode_materializer_test PRIVATE apc_core)
+    add_test(
+        NAME bytecode-materializer
+        COMMAND $<TARGET_FILE:bytecode_materializer_test>
+    )
+
+    add_executable(
+        range_plan_test
+        test/compiler_regression/range_plan_test.cpp
+    )
+    target_link_libraries(range_plan_test PRIVATE apc_core)
+    add_test(
+        NAME range-plan
+        COMMAND $<TARGET_FILE:range_plan_test>
+    )
+
+    add_executable(
+        static_integer_evaluator_test
+        test/compiler_regression/static_integer_evaluator_test.cpp
+    )
+    target_link_libraries(static_integer_evaluator_test PRIVATE apc_core)
+    add_test(
+        NAME static-integer-evaluator
+        COMMAND $<TARGET_FILE:static_integer_evaluator_test>
+    )
+
     add_executable(
         symbol_table_state_test
         test/compiler_regression/symbol_table_state_test.cpp
