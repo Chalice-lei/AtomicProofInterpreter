@@ -6541,9 +6541,10 @@ void ASTToBytecodeVisitor::visitArrayDecl(ArrayDeclNode& node)
                     break;
                 }
 
-                // 数组元素标签 (逆序赋值).
+                // visitArrayDef 逆序遍历后，源码中的首元素位于栈顶，
+                // 因此连续 pop 可直接按 i 绑定到对应数组元素。
                 std::string elementLabel = m_scopePtr->getArrayElementLabel(
-                    node.name, arraySize - 1 - i
+                    node.name, i
                 );
 
                 const auto& value = valueOpt.value();
