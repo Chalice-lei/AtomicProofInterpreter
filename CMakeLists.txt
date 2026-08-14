@@ -489,6 +489,26 @@ target_compile_definitions(apc_core PUBLIC
 if(BUILD_TESTING)
     enable_testing()
     add_executable(
+        parser_index_location_test
+        test/parser/parser_index_location_test.cpp
+    )
+    target_link_libraries(parser_index_location_test PRIVATE apc_core)
+    add_test(
+        NAME parser-index-location
+        COMMAND $<TARGET_FILE:parser_index_location_test>
+    )
+
+    add_executable(
+        parser_compound_type_test
+        test/parser/parser_compound_type_test.cpp
+    )
+    target_link_libraries(parser_compound_type_test PRIVATE apc_core)
+    add_test(
+        NAME parser-compound-type
+        COMMAND $<TARGET_FILE:parser_compound_type_test>
+    )
+
+    add_executable(
         script_codec_ir_test
         test/bytecode/script_codec_ir_test.cpp
     )

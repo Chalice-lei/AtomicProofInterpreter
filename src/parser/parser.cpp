@@ -1133,15 +1133,15 @@ Parser::parsePostfixExpression(std::unique_ptr<ExprNode> expr)
                 );
             }
         } else if (match(TOKEN_LBRACKET)) {
-            const auto basePos = expr ? expr->pos : std::pair<int32_t, int32_t>{0, 0};
+            const auto leftBracket = previous();
             auto indexExpr = parseExpression();
             consume(TOKEN_RBRACKET, "Expected ']' after array index");
 
             expr = std::make_unique<IndexAccessNode>(
                 std::move(expr),
                 std::move(indexExpr),
-                basePos.first,
-                basePos.second
+                leftBracket.position.line,
+                leftBracket.position.column
             );
         } else {
             break;
